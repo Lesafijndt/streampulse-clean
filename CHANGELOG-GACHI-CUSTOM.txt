@@ -1,0 +1,8 @@
+Yedi Hub Gachi customization
+================================
+- Channel and profile now use neutral defaults; no streamer identity is hard-coded.
+- Channel now starts blank unless supplied with ?channel=TWITCH_LOGIN or saved after selection.
+- Updated browser-local storage namespace to avoid restoring the old hard-coded room/profile.
+- Prevents Firebase room listeners/settings writes until a valid channel is selected.
+- Added a darkened, blurred custom gachi background with Billy Herrington/Van Darkholme-inspired visual collage and ♂ accents.
+- Kept the existing player, hidden Twitch command bridge, Firebase queue, metadata and TikTok resolver.

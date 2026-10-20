@@ -69,7 +69,7 @@ import {
 
 // Persistent local fallback and optional Firebase configuration.
 // Local storage is always enabled; Firebase adds cross-browser real-time sync when configured.
-const STORAGE_PREFIX = 'streampulse-live-hub:v1';
+const STORAGE_PREFIX = 'streampulse-gachi-arena:v2';
 const DEFAULT_STREAM_SETTINGS = {
   streamMode: 'all',
   queueOpen: true,
@@ -105,7 +105,7 @@ function writeStoredValue(key, value) {
 }
 
 function normalizeRoomName(value) {
-  return String(value || 'aetherlive').trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9_]/g, '').slice(0, 25) || 'aetherlive';
+  return String(value || '').trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9_]/g, '').slice(0, 25);
 }
 
 function roomStorageKey(room, suffix) {
@@ -118,7 +118,10 @@ function getSavedRoom() {
     const queryRoom = new URLSearchParams(window.location.search).get('channel');
     if (queryRoom) return normalizeRoomName(queryRoom);
   }
-  return normalizeRoomName(readStoredValue(`${STORAGE_PREFIX}:active-room`, 'aetherlive'));
+  const savedRoom = normalizeRoomName(readStoredValue(`${STORAGE_PREFIX}:active-room`, ''));
+  if (savedRoom) return savedRoom;
+  // Optional per-deployment default; leave unset for a neutral blank channel selector.
+  return normalizeRoomName((import.meta.env || {}).VITE_DEFAULT_TWITCH_CHANNEL || '');
 }
 
 function getFirebaseConfig() {
@@ -419,7 +422,7 @@ function parseMediaUrl(rawUrl = '') {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
-export default function StreamPulseApp() {
+export default function YediHubApp() {
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -442,11 +445,11 @@ export default function StreamPulseApp() {
 
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState(() => ({
-    username: 'AetherLive_TV',
-    displayName: 'AetherLive',
+    username: 'streamer',
+    displayName: 'Streamer',
     role: 'streamer', // UI simulation only; not Twitch authentication
     color: '#a970ff',
-    avatarLetter: 'A',
+    avatarLetter: 'S',
     ...(readStoredValue(`${STORAGE_PREFIX}:profile`, {}) || {})
   }));
 
@@ -523,19 +526,23 @@ export default function StreamPulseApp() {
 
   // Browser persistence is the reliable fallback when Firebase is not configured.
   useEffect(() => {
+    if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'videos'), videos);
   }, [videos, channelRoom]);
 
   useEffect(() => {
+    if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'settings'), streamSettings);
   }, [streamSettings, channelRoom]);
 
   useEffect(() => {
+    if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'votes'), votedIds);
   }, [votedIds, channelRoom]);
 
   useEffect(() => {
-    writeStoredValue(`${STORAGE_PREFIX}:active-room`, channelRoom);
+    if (normalizeRoomName(channelRoom)) writeStoredValue(`${STORAGE_PREFIX}:active-room`, normalizeRoomName(channelRoom));
+    else if (typeof window !== 'undefined') window.localStorage.removeItem(`${STORAGE_PREFIX}:active-room`);
   }, [channelRoom]);
 
   useEffect(() => {
@@ -619,7 +626,7 @@ export default function StreamPulseApp() {
   const initializedCloudRoomsRef = useRef(new Set());
 
   useEffect(() => {
-    if (!db || !firebaseUser) return;
+    if (!db || !firebaseUser || !normalizeRoomName(channelRoom)) return;
 
     let active = true;
     try {
@@ -704,7 +711,7 @@ export default function StreamPulseApp() {
   // across browsers/devices. The room name itself is also carried in the ?channel= URL.
   useEffect(() => {
     const normalizedRoom = normalizeRoomName(channelRoom);
-    if (!db || !firebaseUser) {
+    if (!normalizedRoom || !db || !firebaseUser) {
       // Do not mark cloud settings as loaded until a Firestore snapshot arrives.
       // This prevents local defaults from overwriting an existing room configuration.
       setRoomConfigLoadedFor('');
@@ -750,7 +757,7 @@ export default function StreamPulseApp() {
 
   useEffect(() => {
     const normalizedRoom = normalizeRoomName(channelRoom);
-    if (!db || !firebaseUser || roomConfigLoadedFor !== normalizedRoom) return;
+    if (!normalizedRoom || !db || !firebaseUser || roomConfigLoadedFor !== normalizedRoom) return;
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizedRoom);
     setDoc(configRef, { channelRoom: normalizedRoom, streamSettings, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
       .catch((error) => {
@@ -1033,8 +1040,13 @@ export default function StreamPulseApp() {
   // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
   useEffect(() => {
     const target = normalizeRoomName(channelRoom);
-    shouldReconnectIrcRef.current = true;
+    shouldReconnectIrcRef.current = Boolean(target);
     ircTargetRef.current = target;
+    if (!target) {
+      disconnectTwitchIrc(false);
+      setSyncStatusText('Choose a Twitch channel to connect');
+      return undefined;
+    }
     const startTimer = window.setTimeout(() => connectTwitchIrc(target, { silent: true }), 150);
     return () => {
       window.clearTimeout(startTimer);
@@ -1074,6 +1086,10 @@ export default function StreamPulseApp() {
     userRole = 'viewer',
     manualCategory = null
   }) => {
+    if (!normalizeRoomName(channelRoom)) {
+      addToast('Set a Twitch channel in the header before adding requests.', 'warning');
+      return false;
+    }
     const requesterIsStaff = userRole === 'streamer' || userRole === 'moderator';
     if (!streamSettings.queueOpen && !requesterIsStaff) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
@@ -1437,7 +1453,10 @@ export default function StreamPulseApp() {
   const handleSwitchRoom = (e) => {
     e.preventDefault();
     const clean = normalizeRoomName(roomInput);
-    if (!clean) return;
+    if (!clean) {
+      addToast('Enter your Twitch channel name first.', 'warning');
+      return;
+    }
     if (clean === normalizeRoomName(channelRoom)) {
       setRoomInput(clean);
       connectTwitchIrc(clean);
@@ -1451,7 +1470,7 @@ export default function StreamPulseApp() {
     setRoomConfigLoadedFor('');
     setChannelRoom(clean);
     setRoomInput(clean);
-    setVideos(Array.isArray(savedVideos) ? savedVideos.filter((video) => !String(video?.id || '').startsWith('demo-')) : INITIAL_DEMO_VIDEOS);
+    setVideos(Array.isArray(savedVideos) ? savedVideos.filter((video) => !String(video?.id || '').startsWith('demo-')) : []);
     setStreamSettings({ ...DEFAULT_STREAM_SETTINGS, ...(savedSettings && typeof savedSettings === 'object' ? savedSettings : {}) });
     setVotedIds(savedVotes && typeof savedVotes === 'object' ? savedVotes : {});
     writeStoredValue(`${STORAGE_PREFIX}:active-room`, clean);
@@ -1468,7 +1487,7 @@ export default function StreamPulseApp() {
           <div className="flex items-center gap-2 bg-[#18181b]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 shadow-lg">
             <Radio className="w-4 h-4 text-purple-400 animate-pulse" />
             <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
-              GACHI ARENA • OBS DECK • twitch.tv/{channelRoom}
+              ♂ GACHI ARENA • OBS DECK • {channelRoom ? `twitch.tv/${channelRoom}` : 'CHANNEL NOT SET'} ♂
             </span>
           </div>
           <button
@@ -1543,16 +1562,19 @@ export default function StreamPulseApp() {
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-purple-600/30">
-              <Tv className="w-5 h-5 text-white" />
+            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
+              <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-base tracking-tight bg-gradient-to-r from-white via-purple-100 to-cyan-200 bg-clip-text text-transparent">
-                  StreamPulse
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
+                  Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  GACHI MODE
+                  ♂ GACHI MODE ♂
+                </span>
+                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
+                  🇸🇪 SWEDISH SOAP CLUB 🧼
                 </span>
               </div>
 
@@ -1562,6 +1584,7 @@ export default function StreamPulseApp() {
                 <input
                   type="text"
                   value={roomInput}
+                  placeholder="your_channel"
                   onChange={(e) => setRoomInput(e.target.value)}
                   className="bg-transparent text-[11px] font-bold text-purple-300 hover:text-purple-200 border-b border-dashed border-purple-500/50 focus:border-purple-400 focus:outline-none w-24 sm:w-28 transition-colors"
                   title="Press enter to switch Broadcaster Room"
@@ -1683,8 +1706,12 @@ export default function StreamPulseApp() {
             </button>
             <button
               onClick={() => {
+                if (!normalizeRoomName(channelRoom)) {
+                  addToast('Set a Twitch channel before copying a room link.', 'warning');
+                  return;
+                }
                 const shareUrl = new URL(window.location.href);
-                shareUrl.searchParams.set('channel', channelRoom);
+                shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
                 navigator.clipboard.writeText(shareUrl.toString())
                   .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
                   .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
@@ -1766,7 +1793,7 @@ export default function StreamPulseApp() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so StreamPulse can extract the post ID.</p>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
                       <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
                         Open TikTok <ExternalLink className="h-4 w-4" />
                       </a>
@@ -2045,7 +2072,7 @@ export default function StreamPulseApp() {
                             src={video.thumbnail}
                             alt=""
                             onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=StreamPulse';
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
                             }}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -2260,7 +2287,7 @@ export default function StreamPulseApp() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
-                  <p className="text-xs text-slate-400">Broadcaster Room: twitch.tv/{channelRoom}</p>
+                  <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
                 </div>
               </div>
               <button

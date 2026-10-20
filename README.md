@@ -1,6 +1,6 @@
-# StreamPulse Gachi Arena — Live Hub
+# Yedi Hub Gachi Arena — Live Hub
 
-React + Vite + Tailwind CSS frontend for the StreamPulse Gachi Arena Twitch media request hub, with a crimson-neon gym/retro-meme aesthetic.
+React + Vite + Tailwind CSS frontend for the Yedi Hub Gachi Arena Twitch media request hub, with a crimson-neon gachi aesthetic with Swedish blue/yellow and bath-soap accents.
 
 ## Features retained from the modified source
 
@@ -79,3 +79,18 @@ The supplied Firestore rules are deliberately a basic public-demo setup. Anonymo
 Vercel keeps the deployed website available, but it does not keep a client-side WebSocket running when every browser/OBS source is closed. Queue/settings data remain stored in Firestore when cloud sync is configured. The Twitch IRC bridge auto-connects and reconnects whenever the page is open; an actual always-on Twitch listener while all browsers are closed requires a separately hosted worker or Twitch EventSub-based server integration.
 
 Security note: the included Firestore rules are permissive demo rules for signed-in anonymous clients, so anyone who can reach the public app can potentially edit public room settings or queue documents. Do not treat this as production-secure multi-tenant storage without verified Twitch identity and server-side authorization.
+
+
+## Custom Gachi background and channel defaults
+
+The app now uses `public/gachi-arena-bg.webp` as a darkened, softened background with visible crimson/purple gachi artwork and ♂ accents. The default channel is intentionally blank: enter the intended Twitch login in the header and press Enter, or share a URL using `?channel=TWITCH_LOGIN`. A new local-storage namespace prevents the prior hard-coded room/profile from being silently restored.
+
+
+### Optional default Twitch channel
+
+Set `VITE_DEFAULT_TWITCH_CHANNEL` in Vercel if this deployment is dedicated to one broadcaster. Leave it blank for a neutral site that asks the operator to choose a channel, or use the `?channel=TWITCH_LOGIN` room link for each channel. A selected room is saved in the current browser; the shareable channel URL is the portable way to open the same room on another device.
+
+
+## Yedi Hub branding
+
+The visible product name is **Yedi Hub**. The interface keeps its crimson-neon gachi arena styling and adds Swedish blue/yellow flag details plus a 🧼 bath-soap logo/badge. Existing local-storage and Firebase namespace keys are intentionally retained to avoid orphaning a previously saved queue.
