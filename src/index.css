@@ -198,3 +198,157 @@ body { min-width: 320px; background: #090308; }
 @media (max-width: 640px) {
   .gachi-theme { background-attachment: scroll, scroll, scroll, scroll, scroll, scroll; }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   YEDI HUB / AFTER-HOURS EDITION — premium glass, arena lighting, crisp UX
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --yh-ink: #08060b;
+  --yh-glass: rgba(15, 13, 22, .84);
+  --yh-line: rgba(255, 255, 255, .085);
+  --yh-pink: #ff315f;
+  --yh-gold: #ffd56a;
+  --yh-blue: #3b9fd3;
+}
+
+html { scroll-behavior: smooth; scrollbar-color: rgba(255,49,95,.58) #0b0810; scrollbar-width: thin; }
+body { overflow-x: hidden; }
+::selection { color: #fff; background: rgba(255,49,95,.65); }
+.gachi-theme {
+  background-image:
+    radial-gradient(ellipse at 50% -15%, rgba(255, 39, 92, .23), transparent 44%),
+    linear-gradient(180deg, rgba(7, 4, 10, .50) 0%, rgba(7, 4, 10, .72) 45%, rgba(7, 4, 10, .91) 100%),
+    url('/gachi-arena-bg.webp'),
+    radial-gradient(ellipse at 8% 75%, rgba(0,106,167,.18), transparent 34%),
+    radial-gradient(ellipse at 94% 20%, rgba(254,204,0,.09), transparent 25%) !important;
+  background-size: auto, cover, cover, auto, auto !important;
+  background-position: center, center, center top, 8% 75%, 94% 20% !important;
+}
+.gachi-theme::before { opacity: .23; mix-blend-mode: screen; }
+.gachi-theme::after {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 25%, rgba(0,0,0,.43) 100%);
+}
+.gachi-theme header {
+  padding-top: .85rem !important; padding-bottom: .85rem !important;
+  background: linear-gradient(105deg, rgba(9,7,14,.94), rgba(25,8,18,.90) 52%, rgba(7,12,18,.94)) !important;
+  border-bottom: 1px solid rgba(255,76,112,.26) !important;
+  box-shadow: 0 12px 40px rgba(0,0,0,.34), 0 1px 0 rgba(255,255,255,.035) inset, 0 0 32px rgba(255,35,91,.07) !important;
+  backdrop-filter: blur(24px) saturate(140%);
+}
+.gachi-theme header::after { height: 2px; opacity: .92; }
+.yedi-soap-logo {
+  position: relative; overflow: hidden; border-radius: 13px !important;
+  background: linear-gradient(140deg, #0b7cb0 0%, #07517d 46%, #f4c900 47%, #ffe36d 54%, #07517d 55%, #087eb1 100%) !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 5px 20px rgba(0,106,167,.22), 0 0 22px rgba(255,49,95,.18), inset 0 1px 0 rgba(255,255,255,.25) !important;
+}
+.yedi-soap-logo::after { content:""; position:absolute; inset:-60% 45% -60% -30%; transform:rotate(28deg); background:rgba(255,255,255,.17); pointer-events:none; }
+.yedi-soap-mark { filter: drop-shadow(0 2px 2px rgba(0,0,0,.75)); }
+.yedi-hub-wordmark { letter-spacing: -.045em; text-shadow: 0 0 24px rgba(255,40,88,.32) !important; }
+.swedish-soap-badge { border-radius: 999px !important; backdrop-filter: blur(12px); }
+
+/* The React workspace is a flex container rather than a semantic <main>. */
+.gachi-theme > div.flex-1 { position: relative; animation: yh-rise-in .48s cubic-bezier(.2,.7,.2,1) both; }
+.gachi-theme > div.flex-1 > div { min-width: 0; }
+.gachi-theme > div.flex-1 section { animation: yh-rise-in .52s cubic-bezier(.2,.7,.2,1) both; }
+.gachi-theme > div.flex-1 section:nth-child(2) { animation-delay: 65ms; }
+.gachi-theme > div.flex-1 section:nth-child(3) { animation-delay: 115ms; }
+.gachi-theme section,
+.gachi-theme aside {
+  position: relative; overflow: hidden;
+  background: linear-gradient(145deg, rgba(24,17,29,.91), rgba(11,10,17,.88) 72%) !important;
+  border: 1px solid rgba(255,255,255,.09) !important;
+  border-radius: 19px !important;
+  box-shadow: 0 18px 55px rgba(0,0,0,.28), 0 1px 0 rgba(255,255,255,.035) inset, 0 0 0 1px rgba(255,49,95,.025) !important;
+  backdrop-filter: blur(18px) saturate(130%);
+  transition: border-color .22s ease, box-shadow .22s ease, transform .22s ease;
+}
+.gachi-theme section::before,
+.gachi-theme aside::before {
+  content:""; position:absolute; top:0; left:8%; right:8%; height:1px;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.17), transparent); pointer-events:none;
+}
+.gachi-theme section:hover,
+.gachi-theme aside:hover { border-color: rgba(255,70,110,.24) !important; box-shadow: 0 20px 58px rgba(0,0,0,.34), 0 0 25px rgba(255,49,95,.045) !important; }
+.gachi-theme section > div:first-child,
+.gachi-theme aside > div:first-child { border-color: rgba(255,255,255,.075) !important; }
+.gachi-theme h1 { line-height: 1.04; }
+.gachi-theme h2 { line-height: 1.18; }
+.gachi-theme h2::before { font-size: .78em; opacity: .88; }
+.gachi-theme p { text-wrap: pretty; }
+
+/* Buttons: deliberate weight, soft glow, and visible keyboard focus. */
+.gachi-theme button {
+  border-radius: 10px;
+  font-weight: 650;
+  letter-spacing: .005em;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease, border-color .18s ease !important;
+}
+.gachi-theme button:not(:disabled):hover { transform: translateY(-1px); }
+.gachi-theme button:not(:disabled):active { transform: translateY(0) scale(.985); }
+.gachi-theme button:disabled { opacity: .43; cursor: not-allowed; }
+.gachi-theme button[class*="bg-purple-600"],
+.gachi-theme button[class*="bg-pink-"],
+.gachi-theme button[class*="bg-rose-"],
+.gachi-theme button[class*="bg-red-"] {
+  box-shadow: 0 6px 20px rgba(255,35,86,.15), inset 0 1px 0 rgba(255,255,255,.13);
+}
+.gachi-theme button[class*="border-slate-"],
+.gachi-theme button[class*="border-gray-"] { border-color: rgba(255,255,255,.105) !important; }
+.gachi-theme input, .gachi-theme select, .gachi-theme textarea {
+  border-radius: 10px !important; color: #fff5f7 !important;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,.18);
+}
+.gachi-theme input::placeholder, .gachi-theme textarea::placeholder { color: rgba(218,205,220,.43) !important; }
+.gachi-theme input:focus, .gachi-theme select:focus, .gachi-theme textarea:focus {
+  border-color: rgba(255,68,107,.72) !important;
+  box-shadow: 0 0 0 3px rgba(255,49,95,.13), 0 0 22px rgba(255,49,95,.07) !important;
+}
+.gachi-theme a { text-underline-offset: 3px; }
+.gachi-theme [class*="rounded-full"] { -webkit-tap-highlight-color: transparent; }
+
+/* Player stage feels like a private broadcast control room. */
+.gachi-theme video, .gachi-theme iframe { max-width: 100%; }
+.gachi-theme video { background: #030204; }
+.gachi-theme .gachi-tiktok-player {
+  border-radius: 15px !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.13), 0 15px 45px rgba(0,0,0,.5), 0 0 28px rgba(255,35,86,.12) !important;
+}
+.gachi-overlay { backdrop-filter: blur(18px); }
+
+/* Premium compact status pills and tidy scrollbars in queue/list regions. */
+.gachi-theme [class*="overflow-y-auto"], .gachi-theme [class*="overflow-auto"] { scrollbar-width: thin; scrollbar-color: rgba(255,49,95,.5) rgba(255,255,255,.035); }
+.gachi-theme [class*="overflow-y-auto"]::-webkit-scrollbar, .gachi-theme [class*="overflow-auto"]::-webkit-scrollbar { width: 7px; height: 7px; }
+.gachi-theme [class*="overflow-y-auto"]::-webkit-scrollbar-thumb, .gachi-theme [class*="overflow-auto"]::-webkit-scrollbar-thumb { background: rgba(255,49,95,.48); border: 2px solid rgba(10,7,13,.8); border-radius: 99px; }
+.gachi-theme [class*="text-green-"] { color: #8cf0ba !important; }
+.gachi-theme [class*="bg-green-"] { background-color: rgba(34,197,94,.15) !important; }
+.gachi-theme [class*="text-yellow-"] { color: #ffe18b !important; }
+.gachi-theme [class*="text-red-"] { color: #ff829d !important; }
+
+@keyframes yh-rise-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes yh-ambient-pulse { 0%,100% { opacity: .48; } 50% { opacity: .78; } }
+.gachi-theme .yedi-soap-logo { animation: yh-ambient-pulse 5.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
+@media (min-width: 1024px) {
+  .gachi-theme > div.flex-1 { padding-bottom: 3rem; }
+}
+@media (max-width: 640px) {
+  .gachi-theme header { padding-left: .85rem !important; padding-right: .85rem !important; }
+  .gachi-theme section, .gachi-theme aside { border-radius: 15px !important; }
+  .gachi-theme > div.flex-1 { padding-left: .8rem !important; padding-right: .8rem !important; }
+  .gachi-theme .gachi-tiktok-player { border-radius: 12px !important; }
+}
+
+/* Request-deck-specific framing: the fixed channel remains obvious at every size. */
+.gachi-theme header .yedi-hub-wordmark { font-size: 1.1rem; }
+.gachi-theme header .swedish-soap-badge { letter-spacing: .11em; }
+.gachi-theme .gachi-mode-badge { white-space: nowrap; }
+.gachi-theme section h2 { text-wrap: balance; }
+.gachi-theme section button { min-height: 34px; }
+.gachi-theme .gachi-overlay { background-image: radial-gradient(ellipse at top left, rgba(255,49,95,.10), transparent 40%); }
+@media (max-width: 640px) {
+  .gachi-theme header .swedish-soap-badge { display: none; }
+  .gachi-theme header .gachi-mode-badge { font-size: 9px; }
+}

@@ -11,7 +11,12 @@ service cloud.firestore {
     // Only sessions minted by the server after a successful allowlisted Twitch OAuth login.
     // Anonymous Firebase Authentication is intentionally not accepted.
     match /artifacts/{appId}/public/data/queue_videos/{videoId} {
-      allow read, create, update, delete: if isApprovedYediUser();
+      allow read: if isApprovedYediUser();
+      allow create: if isApprovedYediUser() && request.resource.data.channelRoom == '2o3a';
+      allow update: if isApprovedYediUser()
+        && resource.data.channelRoom == '2o3a'
+        && request.resource.data.channelRoom == '2o3a';
+      allow delete: if isApprovedYediUser() && resource.data.channelRoom == '2o3a';
     }
     match /artifacts/{appId}/public/data/room_settings/{channelRoom} {
       allow read, create, update: if isApprovedYediUser() && channelRoom == '2o3a';

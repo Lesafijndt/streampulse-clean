@@ -13,7 +13,6 @@ import {
   Scissors,
   Sparkles,
   Search,
-  Plus,
   Trash2,
   ArrowUp,
   ArrowDown,
@@ -42,7 +41,6 @@ import {
   Unlock,
   Layers,
   HelpCircle,
-  Copy,
   FolderSync
 } from 'lucide-react';
 
@@ -113,11 +111,6 @@ function normalizeRoomName(value) {
 
 function roomStorageKey(room, suffix) {
   return `${STORAGE_PREFIX}:room:${encodeURIComponent(normalizeRoomName(room))}:${suffix}`;
-}
-
-function getSavedRoom() {
-  // This private dashboard is dedicated to 2o3a; URL parameters cannot switch rooms.
-  return PRIVATE_CHANNEL;
 }
 
 function getFirebaseConfig() {
@@ -436,8 +429,7 @@ export default function YediHubApp() {
   // CHANNEL ROOM & AUTHENTICATION STATE
   // ==========================================
   // Streamers and mods share the room based on the Broadcaster's Twitch username
-  const [channelRoom, setChannelRoom] = useState(() => getSavedRoom());
-  const [roomInput, setRoomInput] = useState(() => getSavedRoom());
+  const channelRoom = PRIVATE_CHANNEL; // This installation is exclusively for twitch.tv/2o3a.
 
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
@@ -448,7 +440,6 @@ export default function YediHubApp() {
   // UI Modals
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [showRequestModal, setShowRequestModal] = useState(false);
   const [showObsOverlay, setShowObsOverlay] = useState(false);
 
   // Queue Moderation Settings
@@ -489,11 +480,6 @@ export default function YediHubApp() {
   });
 
   // Manual Request Form State
-  const [reqUrl, setReqUrl] = useState('');
-  const [reqTitle, setReqTitle] = useState('');
-  const [reqCategory, setReqCategory] = useState('Auto');
-  const [reqNote, setReqNote] = useState('');
-  const [reqUsername, setReqUsername] = useState('');
 
   // Twitch IRC bridge only: no chat transcript or message UI is rendered.
   const [ircConnected, setIrcConnected] = useState(false);
@@ -1130,7 +1116,7 @@ export default function YediHubApp() {
     manualCategory = null
   }) => {
     if (!normalizeRoomName(channelRoom)) {
-      addToast('Set a Twitch channel in the header before adding requests.', 'warning');
+      addToast('This deck is locked to twitch.tv/2o3a.', 'warning');
       return false;
     }
     const requesterIsStaff = userRole === 'streamer' || userRole === 'moderator';
@@ -1492,8 +1478,6 @@ export default function YediHubApp() {
     syncUpdateVideo(itemB.id, { timestamp: itemA.timestamp });
   };
 
-  // Room switching is disabled: this site is dedicated to Twitch channel 2o3a.
-  const handleSwitchRoom = (e) => { e?.preventDefault?.(); setChannelRoom(PRIVATE_CHANNEL); setRoomInput(PRIVATE_CHANNEL); };
 
   // ==========================================
   // PRIVATE SIGN-IN GATE
@@ -1616,7 +1600,7 @@ export default function YediHubApp() {
           ========================================== */}
       <header className="sticky top-0 z-40 bg-[#0e121a]/95 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-2.5">
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
-          {/* Logo & Channel Room Selector */}
+          {/* Logo & Private Channel Identity */}
           <div className="flex items-center gap-3">
             <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
               <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
@@ -1703,24 +1687,6 @@ export default function YediHubApp() {
               title="Restart Twitch command bridge"
             >
               Restart Bridge
-            </button>
-            <button
-              onClick={() => {
-                if (!normalizeRoomName(channelRoom)) {
-                  addToast('Set a Twitch channel before copying a room link.', 'warning');
-                  return;
-                }
-                const shareUrl = new URL(window.location.href);
-                shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
-                navigator.clipboard.writeText(shareUrl.toString())
-                  .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
-                  .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
-              }}
-              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-              title="Copy link for this broadcaster room"
-            >
-              <Copy className="w-3 h-3" />
-              Room Link
             </button>
           </div>
         </div>
@@ -1916,7 +1882,7 @@ export default function YediHubApp() {
                 <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
                 <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
+                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in <strong className="text-slate-300">2o3a’s Twitch chat</strong> to add media.
                 </p>
               </div>
             )}
@@ -2275,145 +2241,7 @@ export default function YediHubApp() {
       </div>
 
       {/* ==========================================
-          MODAL 1: SUBMIT VIDEO REQUEST (WEB)
-          ========================================== */}
-      {showRequestModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-300">
-                  <Plus className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
-                  <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowRequestModal(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!reqUrl.trim()) return;
-                const ok = await processAndQueueRequest({
-                  url: reqUrl,
-                  title: reqTitle,
-                  note: reqNote,
-                  requestedBy: reqUsername || twitchAuth.username,
-                  userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
-                  manualCategory: reqCategory
-                });
-                if (ok) {
-                  setReqUrl('');
-                  setReqTitle('');
-                  setReqNote('');
-                  setShowRequestModal(false);
-                }
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Video or Clip URL *
-                </label>
-                <input
-                  type="url"
-                  required
-                  value={reqUrl}
-                  onChange={(e) => setReqUrl(e.target.value)}
-                  placeholder="YouTube, Twitch Clip, or TikTok share/video URL…"
-                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    Custom Title (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={reqTitle}
-                    onChange={(e) => setReqTitle(e.target.value)}
-                    placeholder="Auto-detected if left blank"
-                    className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    Category Tag
-                  </label>
-                  <select
-                    value={reqCategory}
-                    onChange={(e) => setReqCategory(e.target.value)}
-                    className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
-                  >
-                    <option value="Auto">✨ Auto-Detect via Engine</option>
-                    <option value="Music">🎵 Music / Beats</option>
-                    <option value="Gaming">🎮 Gaming / Highlights</option>
-                    <option value="Memes">😂 Memes / Comedy</option>
-                    <option value="Clips">🎬 Twitch Clips</option>
-                    <option value="IRL">🎙️ IRL / Podcast</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Requester Twitch Name
-                </label>
-                <input
-                  type="text"
-                  value={reqUsername}
-                  onChange={(e) => setReqUsername(e.target.value)}
-                  placeholder={twitchAuth.username}
-                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Timestamp / Note for Streamer
-                </label>
-                <input
-                  type="text"
-                  value={reqNote}
-                  onChange={(e) => setReqNote(e.target.value)}
-                  placeholder="e.g. Watch the drop at 01:20!"
-                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowRequestModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30"
-                >
-                  LET HIM COOK
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ==========================================
-          MODAL 2: TWITCH AUTH & BROADCASTER LOGIN
+          MODAL 1: PRIVATE TWITCH AUTHENTICATION
           ========================================== */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2442,7 +2270,7 @@ export default function YediHubApp() {
       )}
 
       {/* ==========================================
-          MODAL 3: STREAMER QUEUE RULES & SAFETY
+          MODAL 2: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2463,11 +2291,11 @@ export default function YediHubApp() {
             <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
                 <div className="font-bold text-emerald-300">Unfiltered media requests</div>
-                <p className="text-[11px] text-slate-400">All platforms and categories are accepted while the queue is open. Categories are labels only; subscriber-only, platform, and stream-mode filters are disabled.</p>
+                <p className="text-[11px] text-slate-400">Chat requests from 2o3a are accepted while the queue is open. All supported platforms are allowed; categories are labels only.</p>
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr requests from 2o3a’s Twitch chat' },
                 { key: 'requireApproval', label: 'Require Moderator Approval', desc: 'Accepted requests go to Pending Approval until approved' },
                 { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically skip to next item when finished where the player exposes an ended event' }
               ].map((item) => (

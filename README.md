@@ -1,6 +1,6 @@
 # Yedi Hub — Private Twitch Request Deck
 
-A private Vite/React dashboard dedicated to `twitch.tv/2o3a`. Its job is to connect to 2o3a’s Twitch chat in the background and play the links requested with `!assr <URL>`. The public chat transcript is hidden. The app keeps the existing Gachi Arena / Swedish soap visual theme.
+A private Vite/React dashboard dedicated to `twitch.tv/2o3a`. Its job is to connect to 2o3a’s Twitch chat in the background and play the links requested with `!assr <URL>`. The public chat transcript is hidden. There is no web-submission form: links enter through `!assr <URL>` in Twitch chat. The app keeps the Gachi Arena / Swedish soap visual theme, with the queue, player, moderation and OBS overlay preserved.
 
 ## Access control
 
@@ -11,7 +11,7 @@ Only these Twitch accounts are permitted to sign in:
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced in Vercel API routes after Twitch OAuth; it is not a client-side role selector. Other Twitch accounts receive an access-denied page. The channel is fixed to `2o3a`; URL parameters cannot switch it. The IRC command bridge starts only after an approved account is authenticated.
+The allowlist is enforced in Vercel API routes after Twitch OAuth; it is not a client-side role selector. Other Twitch accounts receive an access-denied page. The channel is fixed in code to `2o3a`; there is no channel switcher or share-room control, and URL parameters cannot switch it. The IRC command bridge starts only after an approved account is authenticated.
 
 For cloud sync, the server mints a Firebase custom token with `yediAuthorized`, `twitchLogin`, and `role` claims. The supplied `firestore.rules` rejects anonymous users and all sessions lacking these server-issued claims. Keep the Firebase service-account key in Vercel server-only environment variables; never expose it in the browser or commit it to GitHub.
 
