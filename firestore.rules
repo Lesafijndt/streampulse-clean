@@ -1,20 +1,25 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Public-demo rules for the StreamPulse queue only.
-    // Anonymous authentication prevents unauthenticated REST access, but does NOT
-    // distinguish trusted streamers/moderators from anonymous viewers.
-    // Use verified Twitch auth/backend checks before using this for a production queue.
-    match /artifacts/{appId}/public/data/queue_videos/{videoId} {
-      allow read, create, update, delete: if request.auth != null;
+    function isApprovedYediUser() {
+      return request.auth != null
+        && request.auth.token.yediAuthorized == true
+        && request.auth.token.twitchLogin in ['2o3a', 'paim_beach_pete']
+        && request.auth.token.role in ['streamer', 'moderator'];
     }
 
-    // Per-channel settings persist between browsers through Firestore.
-    // These demo rules permit all anonymous-authenticated clients to edit settings;
-    // add verified Twitch OAuth/server-side role checks before production use.
+    // Only sessions minted by the server after a successful allowlisted Twitch OAuth login.
+    // Anonymous Firebase Authentication is intentionally not accepted.
+    match /artifacts/{appId}/public/data/queue_videos/{videoId} {
+      allow read, create, update, delete: if isApprovedYediUser();
+    }
     match /artifacts/{appId}/public/data/room_settings/{channelRoom} {
-      allow read, create, update: if request.auth != null;
+      allow read, create, update: if isApprovedYediUser() && channelRoom == '2o3a';
       allow delete: if false;
+    }
+    // No other collections are accessible from web clients.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

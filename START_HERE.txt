@@ -1,62 +1,79 @@
-STREAMPULSE GACHI ARENA — START HERE
-========================
+YEDI HUB — PRIVATE TWITCH REQUEST DECK
+======================================
 
-This archive is the COMPLETE project. The repository root must be the folder
-that contains BOTH index.html and the src folder.
+This bundle is dedicated to channel twitch.tv/2o3a. The only allowed website
+accounts are:
+  • 2o3a — streamer permissions
+  • paim_beach_pete — moderator permissions
+Every other Twitch account is denied by the server. Roles cannot be chosen in
+the browser. Firestore rules also reject anonymous/public Firebase sessions.
 
-REQUIRED STRUCTURE
-------------------
-index.html
-package.json
-vite.config.ts
-vercel.json
-src/App.tsx
-src/main.tsx
-src/index.css
-src/vite-env.d.ts
-api/resolve-tiktok.js
-api/media-metadata.js
-
-IMPORTANT: Do not upload the ZIP itself. Do not put the files inside an extra
-nested folder in GitHub. In particular, the final path must be:
+PROJECT STRUCTURE
+-----------------
+Keep this exact project-root layout when copying into GitHub:
+  index.html
+  package.json
+  src/App.tsx
   src/main.tsx
-NOT:
-  StreamPulse/src/main.tsx
-  src/src/main.tsx
+  src/index.css
+  api/twitch/login.js
+  api/twitch/callback.js
+  api/twitch/session.js
+  api/twitch/logout.js
+  firestore.rules
 
-The api/ folder is needed to resolve TikTok short share links after deployment.
+SET UP TWITCH OAUTH
+-------------------
+1. Visit https://dev.twitch.tv/console/apps and register an application.
+2. OAuth Redirect URL must be exactly:
+   https://streampulse-clean.vercel.app/api/twitch/callback
+   If the Vercel project uses another domain, replace this URL with that domain.
+3. In Vercel → Project → Settings → Environment Variables, add (Production and
+   Preview as appropriate):
+   TWITCH_CLIENT_ID       = the Twitch app Client ID
+   TWITCH_CLIENT_SECRET   = the Twitch app Client Secret
+   TWITCH_APP_URL         = https://streampulse-clean.vercel.app
+   TWITCH_REDIRECT_URI    = https://streampulse-clean.vercel.app/api/twitch/callback
+4. Redeploy after adding them.
 
-CREATE A CLEAN GITHUB REPOSITORY
---------------------------------
-1. On GitHub.com, create a NEW empty repository (for example,
-   streampulse-clean). Leave “Add a README”, .gitignore, and license unchecked.
-2. In GitHub Desktop, choose File > Clone Repository, select the new repository,
-   and clone it to your computer.
-3. In GitHub Desktop choose Repository > Show in Explorer.
-4. Copy EVERYTHING from the extracted StreamPulse Gachi Arena project folder into the
-   cloned repository folder. Copy the contents, including the src folder—not
-   the outer project folder and not the ZIP. Keep the hidden .git folder in the
-   cloned repository.
-5. In GitHub Desktop, open Changes. You should see index.html, package.json,
-   src/App.tsx, src/main.tsx and the other files.
-6. Commit to main, then click Push origin.
-7. Open the new GitHub repository on the website. The src folder must appear
-   at the top level. Open src/main.tsx to make sure it is visible (not 404).
+SECURE FIREBASE SYNC (RECOMMENDED FOR CROSS-DEVICE QUEUE)
+--------------------------------------------------------
+The site works with browser-local storage if Firebase is not configured, but
+that queue will not sync across browsers. For private cloud sync:
 
-DEPLOY ON VERCEL
-----------------
-1. In Vercel, choose Add New > Project and import the NEW GitHub repository.
-2. Framework preset: Vite
-3. Root directory: leave at repository root (usually shown as .).
-4. Build command: npm run build
-5. Output directory: dist
-6. Click Deploy.
+1. Configure the six VITE_FIREBASE_* browser config values in Vercel as before.
+2. In Firebase Console → Project settings → Service accounts, generate a private
+   key for the Firebase Admin SDK. Keep that downloaded JSON private.
+3. Add this Vercel server-only environment variable:
+   FIREBASE_SERVICE_ACCOUNT_JSON = the FULL contents of the service-account JSON
+   Do not prefix it with VITE_, do not put it in GitHub, and do not share it.
+4. In Firebase Console → Authentication → Sign-in method, enable Custom auth if
+   your project asks for it, and in Firestore → Rules publish the supplied
+   firestore.rules. Do not keep the old permissive anonymous-access rules.
+5. Redeploy Vercel.
 
-The chat transcript is intentionally removed; the Twitch IRC bridge connects automatically on page load, retries disconnections, and only handles commands. Channel settings sync per room when Firebase is configured.
+The server uses Firebase Admin only to mint short-lived custom sign-in tokens for
+the two allowlisted Twitch identities. The browser never receives the service
+account private key. Firestore reads/writes require the yediAuthorized custom
+claim plus an approved Twitch login and role.
 
-If you use Firebase cloud sync, follow the optional instructions in README.md and publish firestore.rules, including the room_settings match.
-The app can run in browser-local mode without Firebase environment variables.
+DEPLOY WITH GITHUB DESKTOP
+--------------------------
+1. Extract this ZIP.
+2. Open the existing repository in GitHub Desktop → Repository → Show in Explorer.
+3. Copy the extracted project CONTENTS (including the src and api folders) into
+   that repository folder, overwriting files when prompted. Do not remove .git.
+4. In GitHub Desktop, commit to main, then click Push origin.
+5. In Vercel, redeploy the project and check Build Logs.
+6. Set Framework preset Vite, Build command npm run build, Output directory dist.
 
-CHANNEL LINKS
--------------
-A room can be opened on any device by adding ?channel=TWITCH_LOGIN to the deployed URL, e.g. https://your-site.vercel.app/?channel=example. It will load cloud queue/settings and auto-connect its bridge while the page is open.
+BEHAVIOR / LIMITS
+-----------------
+• The room is permanently fixed to twitch.tv/2o3a; URL parameters cannot switch it.
+• The hidden Twitch IRC bridge joins only after one of the approved Twitch users
+  has logged in. It reads new chat requests while this page/OBS browser source is
+  open; the Vercel website does not run a 24/7 IRC connection after all browsers close.
+• `!assr <URL>` is the chat request command. The site does not display a chat transcript.
+• Audible autoplay can still be blocked by a browser until Play is clicked once.
+• OAuth cookies are HttpOnly, Secure in production, and SameSite=Lax. Logging out
+  clears the Twitch cookies and Firebase client session.

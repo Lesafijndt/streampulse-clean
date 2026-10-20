@@ -51,8 +51,9 @@ import { getApps, initializeApp } from 'firebase/app';
 import {
   getAuth,
   signInWithCustomToken,
-  signInAnonymously,
-  onAuthStateChanged
+  onAuthStateChanged,
+  getIdTokenResult,
+  signOut
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -70,6 +71,8 @@ import {
 // Persistent local fallback and optional Firebase configuration.
 // Local storage is always enabled; Firebase adds cross-browser real-time sync when configured.
 const STORAGE_PREFIX = 'streampulse-gachi-arena:v2';
+const PRIVATE_CHANNEL = '2o3a';
+const ALLOWED_TWITCH_USERS = new Set(['2o3a', 'paim_beach_pete']);
 const DEFAULT_STREAM_SETTINGS = {
   streamMode: 'all',
   queueOpen: true,
@@ -113,15 +116,8 @@ function roomStorageKey(room, suffix) {
 }
 
 function getSavedRoom() {
-  // A channel link such as /?channel=mychannel selects the same cloud room on any device.
-  if (typeof window !== 'undefined') {
-    const queryRoom = new URLSearchParams(window.location.search).get('channel');
-    if (queryRoom) return normalizeRoomName(queryRoom);
-  }
-  const savedRoom = normalizeRoomName(readStoredValue(`${STORAGE_PREFIX}:active-room`, ''));
-  if (savedRoom) return savedRoom;
-  // Optional per-deployment default; leave unset for a neutral blank channel selector.
-  return normalizeRoomName((import.meta.env || {}).VITE_DEFAULT_TWITCH_CHANNEL || '');
+  // This private dashboard is dedicated to 2o3a; URL parameters cannot switch rooms.
+  return PRIVATE_CHANNEL;
 }
 
 function getFirebaseConfig() {
@@ -422,7 +418,7 @@ function parseMediaUrl(rawUrl = '') {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
-export default function StreamPulseApp() {
+export default function YediHubApp() {
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -444,14 +440,10 @@ export default function StreamPulseApp() {
   const [roomInput, setRoomInput] = useState(() => getSavedRoom());
 
   // Local simulated Twitch user session
-  const [twitchAuth, setTwitchAuth] = useState(() => ({
-    username: 'streamer',
-    displayName: 'Streamer',
-    role: 'streamer', // UI simulation only; not Twitch authentication
-    color: '#a970ff',
-    avatarLetter: 'S',
-    ...(readStoredValue(`${STORAGE_PREFIX}:profile`, {}) || {})
-  }));
+  const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
+  const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
+  const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
+  const authorizedLoginRef = useRef('');
 
   // UI Modals
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -545,13 +537,41 @@ export default function StreamPulseApp() {
     else if (typeof window !== 'undefined') window.localStorage.removeItem(`${STORAGE_PREFIX}:active-room`);
   }, [channelRoom]);
 
+  // The server allows only the two named Twitch accounts and returns their fixed role.
+  // URL query parameters and browser storage cannot grant access or change rooms.
   useEffect(() => {
-    writeStoredValue(`${STORAGE_PREFIX}:profile`, twitchAuth);
-  }, [twitchAuth]);
+    let cancelled = false;
+    setTwitchAuthLoading(true);
+    fetch('/api/twitch/session', { credentials: 'same-origin', cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Twitch session unavailable')))
+      .then((session) => {
+        if (cancelled) return;
+        const login = String(session.user?.login || '').toLowerCase();
+        const allowed = Boolean(session.authenticated && ALLOWED_TWITCH_USERS.has(login));
+        authorizedLoginRef.current = allowed ? login : '';
+        setFirebaseLoginToken(allowed ? String(session.firebaseCustomToken || '') : '');
+        setTwitchAuth({
+          username: allowed ? login : '',
+          displayName: allowed ? (session.user?.display_name || login) : 'Access restricted',
+          role: allowed ? (session.role || (login === '2o3a' ? 'streamer' : 'moderator')) : 'viewer',
+          color: '#a970ff',
+          avatarLetter: allowed ? (session.user?.display_name || login).charAt(0).toUpperCase() : 'Y',
+          authenticated: allowed,
+          userId: allowed ? (session.user?.id || '') : ''
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        authorizedLoginRef.current = '';
+        setFirebaseLoginToken('');
+        setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
+      })
+      .finally(() => { if (!cancelled) setTwitchAuthLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
-  // ==========================================
-  // FIREBASE INITIALIZATION & AUTH
-  // ==========================================
+  // Firebase is initialized without anonymous sign-in. Only the server-issued custom token
+  // for the currently authenticated allowlisted Twitch account can open the cloud queue.
   useEffect(() => {
     let active = true;
     let unsubscribeAuth = null;
@@ -562,47 +582,57 @@ export default function StreamPulseApp() {
       setAuth(null);
       setFirebaseUser(null);
       setCloudSynced(false);
-      setSyncStatusText('Saved in this browser (local storage)');
+      setSyncStatusText('Saved in this browser (cloud sync not configured)');
       return () => { active = false; };
     }
 
     try {
-      // Reuse the named app. This avoids duplicate-app errors in React StrictMode.
-      const appName = 'streampulse-live-hub';
+      const appName = 'yedi-hub-private';
       const existingApp = getApps().find((item) => item.name === appName);
       const app = existingApp || initializeApp(config, appName);
       const authInstance = getAuth(app);
       const dbInstance = getFirestore(app);
-
       setDb(dbInstance);
       setAuth(authInstance);
-      setSyncStatusText('Connecting to Firebase…');
+      setSyncStatusText('Waiting for approved Twitch login…');
 
-      const initAuth = async () => {
+      unsubscribeAuth = onAuthStateChanged(authInstance, async (user) => {
+        if (!active) return;
+        if (!user) {
+          setFirebaseUser(null);
+          setCloudSynced(false);
+          setSyncStatusText('Cloud login required');
+          return;
+        }
         try {
-          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(authInstance, __initial_auth_token);
-          } else if (!authInstance.currentUser) {
-            await signInAnonymously(authInstance);
+          const tokenResult = await getIdTokenResult(user);
+          const claims = tokenResult.claims || {};
+          const claimLogin = String(claims.twitchLogin || '').toLowerCase();
+          const claimsValid = claims.yediAuthorized === true &&
+            ['streamer', 'moderator'].includes(String(claims.role || '')) &&
+            ALLOWED_TWITCH_USERS.has(claimLogin) &&
+            claimLogin === authorizedLoginRef.current;
+          if (!claimsValid) {
+            await signOut(authInstance);
+            if (active) {
+              setFirebaseUser(null);
+              setCloudSynced(false);
+              setSyncStatusText('Waiting for approved Twitch login…');
+            }
+            return;
+          }
+          if (active) {
+            setFirebaseUser(user);
+            setSyncStatusText('Verified private cloud session');
           }
         } catch (error) {
-          console.warn('Firebase sign-in failed; browser storage remains available.', error);
+          console.warn('Could not verify Firebase custom claims.', error);
+          try { await signOut(authInstance); } catch { /* no active session */ }
           if (active) {
+            setFirebaseUser(null);
             setCloudSynced(false);
-            setSyncStatusText('Cloud sign-in failed — local save is active');
+            setSyncStatusText('Cloud verification failed — local save is active');
           }
-        }
-      };
-      initAuth();
-
-      unsubscribeAuth = onAuthStateChanged(authInstance, (user) => {
-        if (!active) return;
-        setFirebaseUser(user);
-        if (user) {
-          setSyncStatusText('Signed in — connecting to cloud queue…');
-        } else {
-          setCloudSynced(false);
-          setSyncStatusText('Not signed in — local save is active');
         }
       });
     } catch (error) {
@@ -619,6 +649,20 @@ export default function StreamPulseApp() {
       if (unsubscribeAuth) unsubscribeAuth();
     };
   }, []);
+
+  // Exchange the server-minted custom token only after the API verifies an allowlisted Twitch login.
+  useEffect(() => {
+    if (!auth || !firebaseLoginToken || !twitchAuth.authenticated) return;
+    let active = true;
+    signInWithCustomToken(auth, firebaseLoginToken).catch((error) => {
+      console.warn('Secure Firebase sign-in failed; browser-local queue remains available.', error);
+      if (active) {
+        setCloudSynced(false);
+        setSyncStatusText('Secure cloud sign-in unavailable — local save is active');
+      }
+    });
+    return () => { active = false; };
+  }, [auth, firebaseLoginToken, twitchAuth.authenticated]);
 
   // ==========================================
   // REAL-TIME FIRESTORE LISTENER FOR ROOM
@@ -900,7 +944,7 @@ export default function StreamPulseApp() {
       });
   }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
 
-  const isStaff = twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator';
+  const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
 
   // The visual progress bar mirrors real YouTube playback. TikTok sends its own time events below.
   useEffect(() => {
@@ -1039,12 +1083,11 @@ export default function StreamPulseApp() {
   // Persisted channel room => the browser/OBS source automatically reconnects the bridge.
   // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
   useEffect(() => {
-    const target = normalizeRoomName(channelRoom);
-    shouldReconnectIrcRef.current = Boolean(target);
+    const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    if (!target) {
+    shouldReconnectIrcRef.current = Boolean(twitchAuth.authenticated);
+    if (!twitchAuth.authenticated) {
       disconnectTwitchIrc(false);
-      setSyncStatusText('Choose a Twitch channel to connect');
       return undefined;
     }
     const startTimer = window.setTimeout(() => connectTwitchIrc(target, { silent: true }), 150);
@@ -1052,9 +1095,9 @@ export default function StreamPulseApp() {
       window.clearTimeout(startTimer);
       disconnectTwitchIrc(false);
     };
-    // Deliberately reconnect only when the selected broadcaster room changes.
+    // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelRoom]);
+  }, [twitchAuth.authenticated]);
 
     // ==========================================
   // REQUEST CREATION & DISPATCH
@@ -1163,8 +1206,8 @@ export default function StreamPulseApp() {
       mediaType,
       duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? '00:45' : '03:45',
       durationSec: 225,
-      requestedBy: requestedBy || twitchAuth.username,
-      userRole,
+      requestedBy: requestedBy || twitchAuth.username || 'Viewer',
+      userRole: 'viewer',
       status: targetStatus,
       upvotes: 1,
       pinned: false,
@@ -1449,33 +1492,46 @@ export default function StreamPulseApp() {
     syncUpdateVideo(itemB.id, { timestamp: itemA.timestamp });
   };
 
-  // Switch Broadcaster Room
-  const handleSwitchRoom = (e) => {
-    e.preventDefault();
-    const clean = normalizeRoomName(roomInput);
-    if (!clean) {
-      addToast('Enter your Twitch channel name first.', 'warning');
-      return;
-    }
-    if (clean === normalizeRoomName(channelRoom)) {
-      setRoomInput(clean);
-      connectTwitchIrc(clean);
-      return;
-    }
+  // Room switching is disabled: this site is dedicated to Twitch channel 2o3a.
+  const handleSwitchRoom = (e) => { e?.preventDefault?.(); setChannelRoom(PRIVATE_CHANNEL); setRoomInput(PRIVATE_CHANNEL); };
 
-    const savedVideos = readStoredValue(roomStorageKey(clean, 'videos'), null);
-    const savedSettings = readStoredValue(roomStorageKey(clean, 'settings'), {});
-    const savedVotes = readStoredValue(roomStorageKey(clean, 'votes'), {});
+  // ==========================================
+  // PRIVATE SIGN-IN GATE
+  // ==========================================
+  const loginError = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('twitch_error') : '';
+  if (twitchAuthLoading) {
+    return (
+      <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 text-center shadow-2xl">
+          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <p className="mt-3 text-sm text-slate-300">Verifying your private Twitch session…</p>
+          <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-purple-500 to-cyan-400" /></div>
+        </div>
+      </div>
+    );
+  }
+  if (!twitchAuth.authenticated || !ALLOWED_TWITCH_USERS.has(String(twitchAuth.username || '').toLowerCase())) {
+    return (
+      <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 sm:p-10 text-center shadow-2xl">
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-4xl">🧼</div>
+          <div className="text-[10px] font-black uppercase tracking-[0.35em] text-amber-200">Private streamer deck</div>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-300">A private request player for <strong className="text-purple-200">twitch.tv/2o3a</strong>. Sign in using one of the two approved Twitch accounts.</p>
+          {loginError === 'unauthorized' ? <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">This Twitch account is not on the access list. No site access was granted.</div> : null}
+          {loginError && loginError !== 'unauthorized' ? <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-xs text-amber-100">Twitch login returned an error. Please try again.</div> : null}
+          <a href="/api/twitch/login" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-5 py-3.5 text-sm font-black text-white transition hover:bg-purple-500"><LogIn className="h-4 w-4" /> Sign in with Twitch</a>
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-[#0b0e15] p-4 text-left">
+            <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Approved accounts</div>
+            <div className="mt-3 flex items-center justify-between text-sm"><span className="font-bold text-white">2o3a</span><span className="rounded-lg border border-purple-400/20 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-200">STREAMER</span></div>
+            <div className="mt-3 flex items-center justify-between text-sm"><span className="font-bold text-white">paim_beach_pete</span><span className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold text-cyan-200">MODERATOR</span></div>
+          </div>
+          <p className="mt-5 text-[10px] leading-5 text-slate-500">Other accounts are denied server-side. Twitch OAuth and the Firebase server credential must be configured before deployment.</p>
+        </div>
+      </div>
+    );
+  }
 
-    setRoomConfigLoadedFor('');
-    setChannelRoom(clean);
-    setRoomInput(clean);
-    setVideos(Array.isArray(savedVideos) ? savedVideos.filter((video) => !String(video?.id || '').startsWith('demo-')) : []);
-    setStreamSettings({ ...DEFAULT_STREAM_SETTINGS, ...(savedSettings && typeof savedSettings === 'object' ? savedSettings : {}) });
-    setVotedIds(savedVotes && typeof savedVotes === 'object' ? savedVotes : {});
-    writeStoredValue(`${STORAGE_PREFIX}:active-room`, clean);
-    addToast(`Switched Gachi Arena room to twitch.tv/${clean}. The bridge will reconnect automatically.`, 'info');
-  };
 
   // ==========================================
   // RENDER OBS OVERLAY HUD (POP-OUT MODE)
@@ -1562,31 +1618,27 @@ export default function StreamPulseApp() {
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-purple-600/30">
-              <Tv className="w-5 h-5 text-white" />
+            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
+              <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-base tracking-tight bg-gradient-to-r from-white via-purple-100 to-cyan-200 bg-clip-text text-transparent">
-                  StreamPulse
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
+                  Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
                 </span>
+                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
+                  🇸🇪 SWEDISH SOAP CLUB 🧼
+                </span>
               </div>
 
-              {/* Channel Room Form */}
-              <form onSubmit={handleSwitchRoom} className="flex items-center gap-1 mt-0.5">
+              <div className="flex items-center gap-2 mt-0.5">
                 <span className="text-[11px] text-slate-400 font-medium">twitch.tv/</span>
-                <input
-                  type="text"
-                  value={roomInput}
-                  placeholder="your_channel"
-                  onChange={(e) => setRoomInput(e.target.value)}
-                  className="bg-transparent text-[11px] font-bold text-purple-300 hover:text-purple-200 border-b border-dashed border-purple-500/50 focus:border-purple-400 focus:outline-none w-24 sm:w-28 transition-colors"
-                  title="Press enter to switch Broadcaster Room"
-                />
-              </form>
+                <span className="text-[11px] font-black text-purple-300">2o3a</span>
+                <span className="px-1.5 py-0.5 rounded bg-amber-400/10 border border-amber-300/20 text-[8px] font-black tracking-wider text-amber-200">PRIVATE</span>
+              </div>
             </div>
           </div>
 
@@ -1626,55 +1678,6 @@ export default function StreamPulseApp() {
               <span>OBS Deck</span>
             </button>
 
-            {/* Request Video Modal Trigger */}
-            <button
-              onClick={() => setShowRequestModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-purple-600/30 active:scale-95 transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Request</span>
-            </button>
-
-            {/* Quick Role Switcher (For live testing Broadcaster vs Mod vs Viewer) */}
-            <div className="hidden md:flex items-center bg-[#141926] p-1 rounded-xl border border-slate-800">
-              {[
-                { id: 'streamer', label: 'Broadcaster', icon: Shield },
-                { id: 'moderator', label: 'Mod', icon: UserCheck },
-                { id: 'viewer', label: 'Viewer', icon: Users }
-              ].map((r) => {
-                const Icon = r.icon;
-                const active = twitchAuth.role === r.id;
-                return (
-                  <button
-                    key={r.id}
-                    onClick={() => {
-                      setTwitchAuth((prev) => ({ ...prev, role: r.id }));
-                      addToast(`Switched active view role to: ${r.label}`, 'info');
-                    }}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                      active
-                        ? 'bg-purple-600/30 text-purple-200 border border-purple-500/40 shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    <span>{r.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Streamer Settings Gear */}
-            {isStaff && (
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="p-2 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors"
-                title="Queue Rules & Streamer Safety"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-            )}
-
             {/* User Profile / Login Modal Trigger */}
             <button
               onClick={() => setShowAuthModal(true)}
@@ -1684,8 +1687,8 @@ export default function StreamPulseApp() {
                 {twitchAuth.avatarLetter}
               </div>
               <div className="text-left hidden sm:block">
-                <div className="text-xs font-bold text-slate-200 leading-none">{twitchAuth.displayName}</div>
-                <div className="text-[10px] text-purple-400 capitalize">{twitchAuth.role}</div>
+                <div className="text-xs font-bold text-slate-200 leading-none">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</div>
+                <div className="text-[10px] text-purple-400 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</div>
               </div>
             </button>
 
@@ -1790,7 +1793,7 @@ export default function StreamPulseApp() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so StreamPulse can extract the post ID.</p>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
                       <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
                         Open TikTok <ExternalLink className="h-4 w-4" />
                       </a>
@@ -2069,7 +2072,7 @@ export default function StreamPulseApp() {
                             src={video.thumbnail}
                             alt=""
                             onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=StreamPulse';
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
                             }}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -2304,7 +2307,7 @@ export default function StreamPulseApp() {
                   title: reqTitle,
                   note: reqNote,
                   requestedBy: reqUsername || twitchAuth.username,
-                  userRole: twitchAuth.role,
+                  userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
                   manualCategory: reqCategory
                 });
                 if (ok) {
@@ -2417,85 +2420,23 @@ export default function StreamPulseApp() {
           <div className="bg-[#121622] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-300">
-                  <Shield className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Twitch Account & Roles</h3>
-                  <p className="text-xs text-slate-400">Broadcaster & Moderator Credentials</p>
-                </div>
+                <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-300"><Shield className="w-5 h-5" /></div>
+                <div><h3 className="text-base font-bold text-white">Twitch authentication</h3><p className="text-xs text-slate-400">Only 2o3a and paim_beach_pete may log in.</p></div>
               </div>
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <button onClick={() => setShowAuthModal(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
-
-            <div className="space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Twitch Channel Username</label>
-                <input
-                  type="text"
-                  value={twitchAuth.username}
-                  onChange={(e) =>
-                    setTwitchAuth({
-                      ...twitchAuth,
-                      username: e.target.value,
-                      displayName: e.target.value,
-                      avatarLetter: (e.target.value[0] || 'T').toUpperCase()
-                    })
-                  }
-                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Access Role Permission</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { id: 'streamer', label: 'Broadcaster', desc: 'Full Deck Control' },
-                    { id: 'moderator', label: 'Moderator', desc: 'Approve & Reorder' },
-                    { id: 'viewer', label: 'Viewer', desc: 'Request & Vote' }
-                  ].map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => setTwitchAuth({ ...twitchAuth, role: r.id })}
-                      className={`p-2.5 rounded-xl border text-left transition-all ${
-                        twitchAuth.role === r.id
-                          ? 'bg-purple-600/30 border-purple-500 text-white'
-                          : 'bg-[#0d1017] border-slate-800 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <div className="font-bold text-xs">{r.label}</div>
-                      <div className="text-[10px] text-slate-500">{r.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Complete User ID Display (MANDATORY REQUIREMENT) */}
-              <div className="p-3 bg-[#0d1017] border border-slate-800 rounded-xl space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-500">Firebase User Session ID:</span>
-                <div className="font-mono text-[11px] text-purple-300 break-all select-all">
-                  {firebaseUser?.uid || 'offline-simulated-session-user'}
-                </div>
-              </div>
+            <div className="rounded-xl bg-[#0d1017] border border-slate-800 p-4 space-y-2 text-sm">
+              <div className="text-slate-400 text-xs uppercase font-bold">Current session</div>
+              <div className="text-white font-bold">{twitchAuth.displayName}</div>
+              <div className="text-purple-300 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · Twitch verified' : ' · public viewer'}</div>
+              <p className="text-xs text-slate-400">Private room: twitch.tv/2o3a. Roles are assigned to the two allowlisted accounts on the server.</p>
             </div>
-
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  setShowAuthModal(false);
-                  addToast(`Logged in as @${twitchAuth.displayName} (${twitchAuth.role})`, 'success');
-                }}
-                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
-              >
-                Save & Continue
-              </button>
-            </div>
+            {!twitchAuth.authenticated ? (
+              <button disabled={twitchAuthLoading} onClick={() => { window.location.href = '/api/twitch/login'; }} className="w-full px-5 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white text-sm font-bold"><LogIn className="inline w-4 h-4 mr-2" />Continue with Twitch</button>
+            ) : (
+              <button onClick={async () => { authorizedLoginRef.current = ''; setFirebaseLoginToken(''); if (auth) { try { await signOut(auth); } catch { /* already signed out */ } } await fetch('/api/twitch/logout', { method: 'POST', credentials: 'same-origin' }); setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false }); setShowAuthModal(false); }} className="w-full px-5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold"><LogOut className="inline w-4 h-4 mr-2" />Log out of Twitch</button>
+            )}
+            <p className="text-[11px] text-amber-200/80">Allowlist: <strong>2o3a</strong> (streamer) and <strong>paim_beach_pete</strong> (moderator). All other Twitch accounts are denied on the server. Twitch OAuth and server secrets must be configured.</p>
           </div>
         </div>
       )}

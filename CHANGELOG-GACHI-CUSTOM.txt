@@ -1,4 +1,4 @@
-StreamPulse Gachi customization
+Yedi Hub Gachi customization
 ================================
 - Channel and profile now use neutral defaults; no streamer identity is hard-coded.
 - Channel now starts blank unless supplied with ?channel=TWITCH_LOGIN or saved after selection.
