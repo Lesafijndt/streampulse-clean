@@ -3,7 +3,7 @@
 :root {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #0b0e14;
+  background: #090308;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,11 +15,120 @@ html, body, #root {
   margin: 0;
 }
 
-body { min-width: 320px; }
+body { min-width: 320px; background: #090308; }
+
+/* Gachimuchi-inspired meme-arena look: steel-black panels, crimson neon and warm amber. */
+.gachi-theme {
+  --gachi-hot: #ff2858;
+  --gachi-hot-soft: rgba(255, 40, 88, .18);
+  --gachi-amber: #ffbd70;
+  --gachi-panel: rgba(22, 5, 13, .94);
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(194, 21, 70, .24), transparent 38%),
+    radial-gradient(ellipse at 86% 28%, rgba(255, 103, 32, .10), transparent 34%),
+    linear-gradient(145deg, #070408 0%, #1a0710 52%, #09060b 100%) !important;
+  color: #fff2f4 !important;
+}
+
+.gachi-theme::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: .16;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 5px, rgba(255,255,255,.025) 5px 6px),
+    repeating-linear-gradient(118deg, transparent 0 52px, rgba(255, 40, 88, .08) 52px 53px, transparent 53px 104px);
+}
+
+.gachi-theme header {
+  background: linear-gradient(100deg, rgba(33, 5, 16, .97), rgba(15, 8, 13, .96) 58%, rgba(35, 8, 12, .96)) !important;
+  border-color: rgba(255, 40, 88, .4) !important;
+  box-shadow: 0 5px 24px rgba(255, 20, 65, .12);
+}
+
+.gachi-theme section,
+.gachi-theme aside {
+  background-color: var(--gachi-panel) !important;
+  border-color: rgba(255, 61, 96, .28) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .32), 0 0 0 1px rgba(255, 42, 88, .025);
+}
+
+.gachi-theme section > div:first-child,
+.gachi-theme aside > div:first-child {
+  border-color: rgba(255, 66, 103, .25) !important;
+}
+
+.gachi-theme h1,
+.gachi-theme h2,
+.gachi-theme h3,
+.gachi-theme .gachi-mode-badge {
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  letter-spacing: .035em;
+}
+
+.gachi-theme .gachi-mode-badge {
+  color: #fff0f3 !important;
+  background: linear-gradient(100deg, rgba(255, 33, 82, .3), rgba(255, 137, 64, .17)) !important;
+  border-color: rgba(255, 87, 110, .6) !important;
+  box-shadow: 0 0 18px rgba(255, 33, 82, .12);
+}
+
+.gachi-theme [class*="bg-gradient-to-r"],
+.gachi-theme [class*="bg-gradient-to-tr"] {
+  background-image: linear-gradient(105deg, #dc1645 0%, #fa3f44 48%, #ff813b 100%) !important;
+}
+
+.gachi-theme [class*="bg-purple-"] { background-color: rgba(255, 40, 88, .16) !important; }
+.gachi-theme .bg-purple-600,
+.gachi-theme .hover\:bg-purple-500:hover { background-color: #dc1645 !important; }
+.gachi-theme [class*="text-purple-"],
+.gachi-theme [class*="text-indigo-"] { color: #ff829e !important; }
+.gachi-theme [class*="border-purple-"],
+.gachi-theme [class*="border-indigo-"] { border-color: rgba(255, 70, 105, .42) !important; }
+.gachi-theme [class*="text-cyan-"] { color: #ffc27b !important; }
+.gachi-theme [class*="border-cyan-"] { border-color: rgba(255, 177, 93, .4) !important; }
+.gachi-theme input,
+.gachi-theme select,
+.gachi-theme textarea {
+  background-color: rgba(8, 4, 8, .92) !important;
+  border-color: rgba(255, 71, 104, .32) !important;
+}
+.gachi-theme input:focus,
+.gachi-theme select:focus,
+.gachi-theme textarea:focus {
+  border-color: var(--gachi-hot) !important;
+  box-shadow: 0 0 0 2px rgba(255, 40, 88, .13);
+  outline: none;
+}
+.gachi-theme button:not(:disabled) { transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
+.gachi-theme button:not(:disabled):hover { filter: brightness(1.12) saturate(1.1); }
+.gachi-theme button:focus-visible,
+.gachi-theme a:focus-visible { outline: 2px solid var(--gachi-amber); outline-offset: 3px; }
+
+/* TikTok's official player is portrait; keep it portrait and centered in the same deck. */
+.gachi-tiktok-player {
+  width: auto;
+  height: 100%;
+  max-width: 100%;
+  aspect-ratio: 9 / 16;
+  flex: 0 1 auto;
+  border-radius: 12px;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 44, 89, .42), 0 0 26px rgba(255, 22, 75, .14);
+}
+
+.gachi-overlay { border-color: rgba(255, 40, 88, .8) !important; }
 
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
 .animate-fade-in { animation: fade-in 180ms ease-out; }
+
+@media (max-width: 640px) {
+  .gachi-tiktok-player { height: 100%; max-width: 100%; }
+}

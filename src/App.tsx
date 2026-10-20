@@ -19,7 +19,6 @@ import {
   ArrowDown,
   Pin,
   ExternalLink,
-  MessageSquare,
   Settings,
   LogIn,
   LogOut,
@@ -106,7 +105,7 @@ function writeStoredValue(key, value) {
 }
 
 function normalizeRoomName(value) {
-  return String(value || 'aetherlive').trim().toLowerCase().replace(/^#/, '') || 'aetherlive';
+  return String(value || 'aetherlive').trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9_]/g, '').slice(0, 25) || 'aetherlive';
 }
 
 function roomStorageKey(room, suffix) {
@@ -114,6 +113,11 @@ function roomStorageKey(room, suffix) {
 }
 
 function getSavedRoom() {
+  // A channel link such as /?channel=mychannel selects the same cloud room on any device.
+  if (typeof window !== 'undefined') {
+    const queryRoom = new URLSearchParams(window.location.search).get('channel');
+    if (queryRoom) return normalizeRoomName(queryRoom);
+  }
   return normalizeRoomName(readStoredValue(`${STORAGE_PREFIX}:active-room`, 'aetherlive'));
 }
 
@@ -142,7 +146,7 @@ function getFirebaseConfig() {
   return config.apiKey && config.projectId && config.appId ? config : null;
 }
 
-// Hide well-known automated chat accounts. Twitch IRC is still the source of all displayed messages.
+// Common automated accounts are ignored by the hidden Twitch IRC command bridge.
 const KNOWN_CHAT_BOTS = new Set([
   'nightbot', 'streamelements', 'streamlabs', 'moobot', 'fossabot', 'wizebot',
   'botrix', 'deepbot', 'sery_bot', 'serybot', 'mixitup', 'soundalerts',
@@ -330,6 +334,33 @@ function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all'
   return bestCategory;
 }
 
+// Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
+// The request pipeline enriches URL-only submissions with public oEmbed titles when available.
+function detectMusicType(url = '', title = '', note = '') {
+  const parsed = (() => { try { return new URL(String(url || '')); } catch { return null; } })();
+  const host = (parsed?.hostname || '').toLowerCase();
+  const blob = `${String(url || '')} ${String(title || '')} ${String(note || '')}`.toLowerCase();
+  if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') || host.endsWith('.soundcloud.com')) return 'Music';
+  if (/(?:^|[\s#])(?:#music|#song|#songrequest)(?:\b|$)/i.test(blob)) return 'Music';
+  const musicSignals = [
+    'official music video', 'official audio', 'music video', 'lyric video', 'lyrics',
+    'soundtrack', 'original soundtrack', 'ost', 'instrumental', 'music', 'song', 'songs',
+    'remix', 'album', 'single', 'lofi', 'synthwave', 'hip hop', 'hip-hop', 'rap', 'beat',
+    'bass boosted', 'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'piano cover',
+    'guitar cover', 'visualizer', 'edm', 'techno', 'house music', 'metal song', 'jazz',
+    'classical music', 'bgm', 'karaoke', 'live performance', 'music mix', 'dj set'
+  ];
+  const nonMusicSignals = [
+    'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
+    'tutorial', 'how to', 'review', 'podcast', 'interview', 'documentary', 'vlog',
+    'reaction', 'reacts', 'try not to laugh', 'meme', 'shitpost', 'comedy', 'prank',
+    'fails', 'highlights', 'twitch clip', 'stream highlight', 'news', 'explained'
+  ];
+  const musicScore = musicSignals.reduce((n, word) => n + (blob.includes(word) ? (['official audio', 'official music video', 'music video', 'soundtrack', 'lyric video'].includes(word) ? 3 : 1) : 0), 0);
+  const nonMusicScore = nonMusicSignals.reduce((n, word) => n + (blob.includes(word) ? 1 : 0), 0);
+  return musicScore > 0 && musicScore >= nonMusicScore ? 'Music' : 'Non-Music';
+}
+
 /**
  * Standardize media platform parsing
  */
@@ -348,10 +379,15 @@ function parseMediaUrl(rawUrl = '') {
     };
   }
 
+  let parsedUrl = null;
+  try { parsedUrl = new URL(url); } catch { /* Invalid URLs are treated as external links below. */ }
+  const hostname = parsedUrl?.hostname?.toLowerCase() || '';
+
   // Twitch Clips
-  if (url.includes('twitch.tv') && (url.includes('/clip/') || url.includes('clips.twitch.tv'))) {
-    const parts = url.split('/').filter(Boolean);
-    const clipSlug = parts[parts.length - 1]?.split('?')[0] || 'TwitchClip';
+  if ((hostname === 'twitch.tv' || hostname.endsWith('.twitch.tv')) && (url.includes('/clip/') || hostname === 'clips.twitch.tv')) {
+    const parts = parsedUrl.pathname.split('/').filter(Boolean);
+    const clipIndex = parts.indexOf('clip');
+    const clipSlug = (clipIndex >= 0 ? parts[clipIndex + 1] : parts[0]) || 'TwitchClip';
     return {
       platform: 'twitch',
       videoId: clipSlug,
@@ -359,14 +395,17 @@ function parseMediaUrl(rawUrl = '') {
     };
   }
 
-  // TikTok official player needs the numeric post ID, not the short-link slug.
-  if (url.includes('tiktok.com')) {
-    const idMatch = url.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/i) || url.match(/[?&](?:item_id|video_id)=(\d{10,25})/i);
+  // TikTok's official embedded player needs the numeric post ID. Short share URLs
+  // are resolved by /api/resolve-tiktok on Vercel before the request is saved.
+  const isTikTokHost = hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com');
+  if (isTikTokHost) {
+    const idMatch = url.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/i)
+      || url.match(/[?&](?:item_id|video_id)=(\d{10,25})/i);
     const vid = idMatch?.[1] || null;
     return {
       platform: 'tiktok',
       videoId: vid,
-      thumbnail: 'https://placehold.co/640x360/09090b/22d3ee?text=TikTok+Video'
+      thumbnail: 'https://placehold.co/640x360/09090b/ff315f?text=TikTok+Video'
     };
   }
 
@@ -389,6 +428,7 @@ export default function StreamPulseApp() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
   const [syncStatusText, setSyncStatusText] = useState('Initializing cloud sync...');
+  const [roomConfigLoadedFor, setRoomConfigLoadedFor] = useState('');
 
   // Safe global environment references
   const appId = typeof __app_id !== 'undefined' ? __app_id : (import.meta.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck');
@@ -460,15 +500,13 @@ export default function StreamPulseApp() {
   const [reqNote, setReqNote] = useState('');
   const [reqUsername, setReqUsername] = useState('');
 
-  // Twitch Chat & IRC State
-  const [chatOpen, setChatOpen] = useState(true);
+  // Twitch IRC bridge only: no chat transcript or message UI is rendered.
   const [ircConnected, setIrcConnected] = useState(false);
-  const [ircChannel, setIrcChannel] = useState('');
   const ircSocketRef = useRef(null);
-  const chatBottomRef = useRef(null);
-
-  // The chat panel only renders actual messages received from Twitch IRC.
-  const [chatMessages, setChatMessages] = useState([]);
+  const reconnectTimerRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const shouldReconnectIrcRef = useRef(true);
+  const ircTargetRef = useRef(channelRoom);
 
 
   // Notifications
@@ -594,7 +632,10 @@ export default function StreamPulseApp() {
           setSyncStatusText('Cloud Synced');
 
           // Place the Firestore document ID last so it is always the ID used for updates/deletes.
-          const list = snapshot.docs.map((d) => ({ ...d.data(), id: d.id }));
+          const list = snapshot.docs.map((d) => {
+            const data = d.data();
+            return { ...data, id: d.id, mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note) };
+          });
           const roomList = list.filter(
             (v) => normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
@@ -658,6 +699,65 @@ export default function StreamPulseApp() {
       setSyncStatusText('Cloud unavailable — local save is active');
     }
   }, [db, firebaseUser, channelRoom, appId]);
+
+  // Persist the channel's moderation settings in Firestore so they follow the broadcaster
+  // across browsers/devices. The room name itself is also carried in the ?channel= URL.
+  useEffect(() => {
+    const normalizedRoom = normalizeRoomName(channelRoom);
+    if (!db || !firebaseUser) {
+      // Do not mark cloud settings as loaded until a Firestore snapshot arrives.
+      // This prevents local defaults from overwriting an existing room configuration.
+      setRoomConfigLoadedFor('');
+      return undefined;
+    }
+
+    let active = true;
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizedRoom);
+    const unsubscribe = onSnapshot(configRef, (snapshot) => {
+      if (!active) return;
+      if (snapshot.exists()) {
+        const cloudConfig = snapshot.data() || {};
+        if (cloudConfig.streamSettings && typeof cloudConfig.streamSettings === 'object') {
+          const merged = { ...DEFAULT_STREAM_SETTINGS, ...cloudConfig.streamSettings };
+          setStreamSettings((current) => JSON.stringify(current) === JSON.stringify(merged) ? current : merged);
+        }
+        setRoomConfigLoadedFor(normalizedRoom);
+        return;
+      }
+
+      // First setup of a room: seed its cloud configuration from local settings/defaults.
+      const local = readStoredValue(roomStorageKey(normalizedRoom, 'settings'), {});
+      const seed = { ...DEFAULT_STREAM_SETTINGS, ...(local && typeof local === 'object' ? local : {}) };
+      setDoc(configRef, { channelRoom: normalizedRoom, streamSettings: seed, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
+        .then(() => { if (active) setRoomConfigLoadedFor(normalizedRoom); })
+        .catch((error) => {
+          console.warn('Could not initialize cloud room settings.', error);
+          if (active) {
+            setRoomConfigLoadedFor(normalizedRoom);
+            setSyncStatusText('Queue cloud connected; room settings could not be saved');
+          }
+        });
+    }, (error) => {
+      console.error('Room settings listener error.', error);
+      if (active) {
+        setRoomConfigLoadedFor(normalizedRoom);
+        setSyncStatusText('Room settings unavailable — local settings active');
+      }
+    });
+
+    return () => { active = false; unsubscribe(); };
+  }, [db, firebaseUser, channelRoom, appId]);
+
+  useEffect(() => {
+    const normalizedRoom = normalizeRoomName(channelRoom);
+    if (!db || !firebaseUser || roomConfigLoadedFor !== normalizedRoom) return;
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizedRoom);
+    setDoc(configRef, { channelRoom: normalizedRoom, streamSettings, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
+      .catch((error) => {
+        console.warn('Could not save cloud room settings.', error);
+        setSyncStatusText('Room settings save failed — local settings remain saved');
+      });
+  }, [db, firebaseUser, appId, channelRoom, streamSettings, roomConfigLoadedFor]);
 
   // Sync Video Changes Helper (updates Firestore if online, updates state locally)
   const syncUpdateVideo = async (videoId, updates) => {
@@ -810,17 +910,27 @@ export default function StreamPulseApp() {
 
   // ==========================================
   // REAL TWITCH IRC WEBSOCKET BRIDGE
-  // Connects anonymously to Twitch chat IRC
+  // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
-  const connectTwitchIrc = (targetChan) => {
-    const cleanChan = (targetChan || channelRoom).trim().toLowerCase().replace(/^#/, '');
+  const connectTwitchIrc = (targetChan, options = {}) => {
+    const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
     if (!cleanChan) {
       addToast('Please enter a valid Twitch channel name.', 'warning');
       return;
     }
 
-    if (ircSocketRef.current) {
-      ircSocketRef.current.close();
+    shouldReconnectIrcRef.current = true;
+    ircTargetRef.current = cleanChan;
+    writeStoredValue(`${STORAGE_PREFIX}:active-room`, cleanChan);
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    const previousSocket = ircSocketRef.current;
+    if (previousSocket) {
+      ircSocketRef.current = null;
+      try { previousSocket.close(); } catch { /* Socket may already be closed. */ }
     }
 
     try {
@@ -828,113 +938,116 @@ export default function StreamPulseApp() {
       ircSocketRef.current = ws;
 
       ws.onopen = () => {
-        // Standard Anonymous Twitch IRC handshake
+        if (ircSocketRef.current !== ws) return;
         ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
         ws.send(`NICK justinfan${Math.floor(10000 + Math.random() * 89999)}`);
         ws.send(`JOIN #${cleanChan}`);
+        reconnectAttemptsRef.current = 0;
         setIrcConnected(true);
-        addToast(`Connected live to Twitch Chat: #${cleanChan}`, 'success');
+        if (!options.silent) addToast(`Twitch command bridge connected to #${cleanChan}.`, 'success');
       };
 
       ws.onmessage = (event) => {
-        const raw = event.data;
+        if (ircSocketRef.current !== ws) return;
+        const raw = String(event.data || '');
         if (raw.startsWith('PING')) {
           ws.send('PONG :tmi.twitch.tv');
           return;
         }
 
-        if (raw.includes('PRIVMSG')) {
-          const userMatch = raw.match(/display-name=([^;]+)/);
-          const msgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
-          const badgesMatch = raw.match(/badges=([^;]*)/);
-          const moderatorMatch = raw.match(/(?:^|;)mod=([01])/);
-          const colorMatch = raw.match(/color=([^;]*)/);
-          const tagsMatch = raw.match(/^@([^ ]+) /);
-          const tagMap = Object.fromEntries((tagsMatch?.[1] || '').split(';').filter(Boolean).map((tag) => {
-            const separator = tag.indexOf('=');
-            return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
-          }));
-          const username = userMatch ? userMatch[1].replace(/\s/g, ' ') : 'Chatter';
-          const text = msgMatch ? msgMatch[1].trim() : '';
-          const usernameKey = username.trim().toLowerCase().replace(/^@/, '');
-          const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
-          if (taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
-          const badges = (badgesMatch?.[1] || '').split(',').map((badge) => badge.split('/')[0]);
-          const role = badges.includes('broadcaster')
-            ? 'streamer'
-            : (moderatorMatch?.[1] === '1' || badges.includes('moderator'))
-            ? 'moderator'
-            : badges.includes('vip')
-            ? 'vip'
-            : badges.includes('subscriber')
-            ? 'subscriber'
-            : 'viewer';
-          const messageColor = colorMatch?.[1] || '#38bdf8';
+        if (!raw.includes('PRIVMSG')) return;
+        const msgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
+        const badgesMatch = raw.match(/badges=([^;]*)/);
+        const moderatorMatch = raw.match(/(?:^|;)mod=([01])/);
+        const tagsMatch = raw.match(/^@([^ ]+) /);
+        const tagMap = Object.fromEntries((tagsMatch?.[1] || '').split(';').filter(Boolean).map((tag) => {
+          const separator = tag.indexOf('=');
+          return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
+        }));
+        const username = String(tagMap['display-name'] || 'Viewer');
+        const text = msgMatch ? msgMatch[1].trim() : '';
+        const usernameKey = username.trim().toLowerCase().replace(/^@/, '');
+        const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
+        if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
 
-          if (text) {
-            const lowerText = text.toLowerCase();
-            const isRequestCommand = lowerText.startsWith('!assr ');
-            const volumeCommand = parseModVolumeCommand(lowerText);
-            const isCmd = isRequestCommand || lowerText === '!hype' || lowerText === '!skip' || Boolean(volumeCommand);
-
-            const newMsg = {
-              id: 'irc-' + Date.now() + Math.random(),
-              username,
-              role,
-              color: messageColor,
-              text,
-              isCommand: isCmd,
-              time: 'Live IRC'
-            };
-
-            setChatMessages((prev) => [...prev.slice(-35), newMsg]);
-
-            if (isRequestCommand) {
-              handleIncomingChatCommandRef.current?.(username, role, text);
-            } else if (lowerText === '!hype' && currentVideoRef.current) {
-              handleUpvoteRef.current?.(currentVideoRef.current.id);
-            } else if (lowerText === '!skip' && isStaffRole(role)) {
-              handleSkipNextRef.current?.();
-            } else if (volumeCommand && isStaffRole(role)) {
-              handleVolumeCommandRef.current?.(volumeCommand, role);
-            }
-          }
+        const badges = (badgesMatch?.[1] || '').split(',').map((badge) => badge.split('/')[0]);
+        const role = badges.includes('broadcaster')
+          ? 'streamer'
+          : (moderatorMatch?.[1] === '1' || badges.includes('moderator'))
+          ? 'moderator'
+          : badges.includes('vip')
+          ? 'vip'
+          : badges.includes('subscriber')
+          ? 'subscriber'
+          : 'viewer';
+        const lowerText = text.toLowerCase();
+        const isRequestCommand = lowerText.startsWith('!assr ');
+        const volumeCommand = parseModVolumeCommand(lowerText);
+        if (isRequestCommand) {
+          handleIncomingChatCommandRef.current?.(username, role, text);
+        } else if (lowerText === '!hype' && currentVideoRef.current) {
+          handleUpvoteRef.current?.(currentVideoRef.current.id);
+        } else if (lowerText === '!skip' && isStaffRole(role)) {
+          handleSkipNextRef.current?.();
+        } else if (volumeCommand && isStaffRole(role)) {
+          handleVolumeCommandRef.current?.(volumeCommand, role);
         }
       };
 
       ws.onerror = () => {
-        setIrcConnected(false);
-        addToast('Could not connect to Twitch IRC. Check the channel name and connection, then retry.', 'warning');
+        if (ircSocketRef.current === ws) setIrcConnected(false);
       };
 
       ws.onclose = () => {
+        if (ircSocketRef.current !== ws) return;
+        ircSocketRef.current = null;
         setIrcConnected(false);
+        if (shouldReconnectIrcRef.current) {
+          reconnectAttemptsRef.current += 1;
+          const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
+          if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = window.setTimeout(() => {
+            connectTwitchIrc(ircTargetRef.current, { silent: true });
+          }, delay);
+        }
       };
-    } catch (e) {
-      console.warn('IRC WebSocket failed:', e);
+    } catch (error) {
+      setIrcConnected(false);
+      if (!options.silent) addToast('Could not start the Twitch bridge. It will retry automatically.', 'warning');
     }
   };
 
-  const disconnectTwitchIrc = () => {
-    if (ircSocketRef.current) {
-      ircSocketRef.current.close();
-      ircSocketRef.current = null;
+  const disconnectTwitchIrc = (manual = true) => {
+    if (manual) shouldReconnectIrcRef.current = false;
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
+    const ws = ircSocketRef.current;
+    ircSocketRef.current = null;
+    if (ws) { try { ws.close(); } catch { /* Already closed. */ } }
     setIrcConnected(false);
-    addToast('Disconnected from Twitch IRC.', 'info');
   };
 
-  // Auto-scroll chat
+  // Persisted channel room => the browser/OBS source automatically reconnects the bridge.
+  // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
   useEffect(() => {
-    if (chatBottomRef.current) {
-      chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [chatMessages]);
+    const target = normalizeRoomName(channelRoom);
+    shouldReconnectIrcRef.current = true;
+    ircTargetRef.current = target;
+    const startTimer = window.setTimeout(() => connectTwitchIrc(target, { silent: true }), 150);
+    return () => {
+      window.clearTimeout(startTimer);
+      disconnectTwitchIrc(false);
+    };
+    // Deliberately reconnect only when the selected broadcaster room changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelRoom]);
 
-  // ==========================================
+    // ==========================================
   // REQUEST CREATION & DISPATCH
   // ==========================================
-  const handleIncomingChatCommand = (username, role, rawText) => {
+  const handleIncomingChatCommand = async (username, role, rawText) => {
     // Syntax: !assr <url> [optional title/note]
     const tokens = rawText.trim().split(/\s+/);
     if (tokens.length < 2) return;
@@ -942,18 +1055,18 @@ export default function StreamPulseApp() {
     const url = tokens[1];
     let candidateNote = tokens.slice(2).join(' ');
 
-    processAndQueueRequest({
+    await processAndQueueRequest({
       url,
       requestedBy: username,
       userRole: role,
-      note: candidateNote || 'Requested via Twitch Chat command',
+      note: candidateNote || 'Requested via Twitch command bridge',
       manualCategory: null
     });
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
 
-  const processAndQueueRequest = ({
+  const processAndQueueRequest = async ({
     url,
     title = '',
     note = '',
@@ -968,15 +1081,46 @@ export default function StreamPulseApp() {
     }
 
     // All platforms and categories are accepted without filtering. Category detection is metadata only.
-    const parsed = parseMediaUrl(url);
-    const finalCategory =
-      manualCategory && manualCategory !== 'Auto'
-        ? manualCategory
-        : detectVideoCategory(url, title, note, 'all');
+    let normalizedUrl = String(url || '').trim();
+    let parsed = parseMediaUrl(normalizedUrl);
 
-    const targetStatus = streamSettings.requireApproval && !requesterIsStaff ? 'pending' : 'queue';
-    const cleanTitle =
-      title.trim() ||
+    // TikTok short share links (vm.tiktok.com / vt.tiktok.com / tiktok.com/t/...) do not
+    // contain the numeric post ID needed by the embed. Resolve them through a small,
+    // domain-restricted Vercel function. Full TikTok video URLs skip this request.
+    if (parsed.platform === 'tiktok' && !parsed.videoId) {
+      try {
+        const response = await fetch(`/api/resolve-tiktok?url=${encodeURIComponent(normalizedUrl)}`);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.videoId || !result.url) {
+          addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
+          return false;
+        }
+        normalizedUrl = result.url;
+        parsed = parseMediaUrl(normalizedUrl);
+        if (!parsed.videoId) parsed.videoId = result.videoId;
+      } catch (error) {
+        console.warn('TikTok short-link resolution failed.', error);
+        addToast('Could not resolve this TikTok share link here. Try copying the full TikTok URL with /video/ followed by its ID.', 'warning');
+        return false;
+      }
+    }
+
+    // Fetch public oEmbed titles for URL-only submissions so Music/Non-Music classification
+    // has real title text rather than only a video ID. Failure is non-fatal.
+    let resolvedTitle = String(title || '').trim();
+    if (!resolvedTitle) {
+      try {
+        const metadataResponse = await fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`);
+        if (metadataResponse.ok) {
+          const metadata = await metadataResponse.json().catch(() => ({}));
+          if (typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+        }
+      } catch (error) {
+        console.warn('Media metadata lookup failed; using URL-based category detection.', error);
+      }
+    }
+
+    const cleanTitle = resolvedTitle ||
       (parsed.platform === 'youtube'
         ? `YouTube Media (${parsed.videoId})`
         : parsed.platform === 'twitch'
@@ -984,15 +1128,23 @@ export default function StreamPulseApp() {
         : parsed.platform === 'tiktok'
         ? `TikTok Short Clip`
         : 'Community Requested Media');
+    const finalCategory =
+      manualCategory && manualCategory !== 'Auto'
+        ? manualCategory
+        : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
+    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
+
+    const targetStatus = streamSettings.requireApproval && !requesterIsStaff ? 'pending' : 'queue';
 
     const newVideo = {
       id: 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
       channelRoom,
       title: cleanTitle,
-      url: url.trim(),
+      url: normalizedUrl,
       platform: parsed.platform,
       videoId: parsed.videoId,
       category: finalCategory,
+      mediaType,
       duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? '00:45' : '03:45',
       durationSec: 225,
       requestedBy: requestedBy || twitchAuth.username,
@@ -1103,12 +1255,12 @@ export default function StreamPulseApp() {
     addToast('Remote volume control is not supported for this media type.', 'info');
   };
 
-  // Player/chat callbacks always use current handlers and queue state.
+  // Player and bridge callbacks always use current handlers and queue state.
   handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
     if (!currentVideo || currentVideo.id !== videoId) return;
-    if (streamSettings.autoPlayNext && isStaff) {
+    if (streamSettings.autoPlayNext) {
       handleSkipNextRef.current?.();
     }
   };
@@ -1286,19 +1438,24 @@ export default function StreamPulseApp() {
     e.preventDefault();
     const clean = normalizeRoomName(roomInput);
     if (!clean) return;
+    if (clean === normalizeRoomName(channelRoom)) {
+      setRoomInput(clean);
+      connectTwitchIrc(clean);
+      return;
+    }
 
     const savedVideos = readStoredValue(roomStorageKey(clean, 'videos'), null);
     const savedSettings = readStoredValue(roomStorageKey(clean, 'settings'), {});
     const savedVotes = readStoredValue(roomStorageKey(clean, 'votes'), {});
 
+    setRoomConfigLoadedFor('');
     setChannelRoom(clean);
     setRoomInput(clean);
     setVideos(Array.isArray(savedVideos) ? savedVideos.filter((video) => !String(video?.id || '').startsWith('demo-')) : INITIAL_DEMO_VIDEOS);
     setStreamSettings({ ...DEFAULT_STREAM_SETTINGS, ...(savedSettings && typeof savedSettings === 'object' ? savedSettings : {}) });
     setVotedIds(savedVotes && typeof savedVotes === 'object' ? savedVotes : {});
     writeStoredValue(`${STORAGE_PREFIX}:active-room`, clean);
-    addToast(`Switched Live Hub to broadcaster room: twitch.tv/${clean}`, 'info');
-    if (ircConnected) connectTwitchIrc(clean);
+    addToast(`Switched Gachi Arena room to twitch.tv/${clean}. The bridge will reconnect automatically.`, 'info');
   };
 
   // ==========================================
@@ -1306,12 +1463,12 @@ export default function StreamPulseApp() {
   // ==========================================
   if (showObsOverlay) {
     return (
-      <div className="fixed inset-0 bg-[#090a0f] text-white p-6 flex flex-col justify-between font-sans select-none overflow-hidden border-4 border-purple-500/30">
+      <div className="gachi-theme gachi-overlay fixed inset-0 bg-[#090a0f] text-white p-6 flex flex-col justify-between font-sans select-none overflow-hidden border-4 border-purple-500/30">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 bg-[#18181b]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 shadow-lg">
             <Radio className="w-4 h-4 text-purple-400 animate-pulse" />
             <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
-              OBS Stream Deck Capture • twitch.tv/{channelRoom}
+              GACHI ARENA • OBS DECK • twitch.tv/{channelRoom}
             </span>
           </div>
           <button
@@ -1337,6 +1494,9 @@ export default function StreamPulseApp() {
                 </span>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                   {currentVideo.category}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                  {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
                 </span>
               </div>
               <h2 className="text-lg font-black text-white truncate">{currentVideo.title}</h2>
@@ -1364,7 +1524,7 @@ export default function StreamPulseApp() {
               {videos.filter((v) => v.status === 'queue')[0]?.title || 'Loading next item...'}
             </span>
           ) : (
-            <span className="text-xs text-slate-400">Queue is empty. Type !assr &lt;url&gt; in Twitch chat!</span>
+            <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
           )}
         </div>
       </div>
@@ -1375,7 +1535,7 @@ export default function StreamPulseApp() {
   // MAIN APP INTERFACE
   // ==========================================
   return (
-    <div className="min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
+    <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
       {/* ==========================================
           HEADER: BROADCASTER IDENTITY & SYNC STATUS
           ========================================== */}
@@ -1391,8 +1551,8 @@ export default function StreamPulseApp() {
                 <span className="font-extrabold text-base tracking-tight bg-gradient-to-r from-white via-purple-100 to-cyan-200 bg-clip-text text-transparent">
                   StreamPulse
                 </span>
-                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  LIVE HUB
+                <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  GACHI MODE
                 </span>
               </div>
 
@@ -1460,7 +1620,7 @@ export default function StreamPulseApp() {
               {[
                 { id: 'streamer', label: 'Broadcaster', icon: Shield },
                 { id: 'moderator', label: 'Mod', icon: UserCheck },
-                { id: 'viewer', label: 'Chatter', icon: Users }
+                { id: 'viewer', label: 'Viewer', icon: Users }
               ].map((r) => {
                 const Icon = r.icon;
                 const active = twitchAuth.role === r.id;
@@ -1509,24 +1669,38 @@ export default function StreamPulseApp() {
               </div>
             </button>
 
-            {/* Toggle Twitch Chat Sidebar */}
+            {/* Twitch IRC bridge controls only — no chat transcript is shown on the site. */}
+            <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${ircConnected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              {ircConnected ? 'Bridge Live' : 'Bridge Reconnecting'}
+            </div>
             <button
-              onClick={() => setChatOpen(!chatOpen)}
-              className={`p-2 rounded-xl border transition-colors ${
-                chatOpen
-                  ? 'bg-purple-600/20 border-purple-500/40 text-purple-300'
-                  : 'bg-[#141926] border-slate-800 text-slate-400 hover:text-slate-200'
-              }`}
-              title="Toggle Twitch Chat Panel"
+              onClick={() => connectTwitchIrc(channelRoom)}
+              className="px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
+              title="Restart Twitch command bridge"
             >
-              <MessageSquare className="w-4 h-4" />
+              Restart Bridge
+            </button>
+            <button
+              onClick={() => {
+                const shareUrl = new URL(window.location.href);
+                shareUrl.searchParams.set('channel', channelRoom);
+                navigator.clipboard.writeText(shareUrl.toString())
+                  .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
+                  .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
+              }}
+              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
+              title="Copy link for this broadcaster room"
+            >
+              <Copy className="w-3 h-3" />
+              Room Link
             </button>
           </div>
         </div>
       </header>
 
       {/* ==========================================
-          MAIN WORKSPACE: PLAYER + QUEUE + CHAT
+          MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
       <div className="flex-1 max-w-[1680px] w-full mx-auto flex flex-col lg:flex-row gap-5 p-4 lg:p-6">
         {/* LEFT COLUMN: ACTIVE MEDIA PLAYER & QUEUE LISTS */}
@@ -1540,7 +1714,7 @@ export default function StreamPulseApp() {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-wider text-[11px]">
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  LIVE NOW PLAYING
+                  MAIN EVENT
                 </span>
 
                 {currentVideo && (
@@ -1548,7 +1722,10 @@ export default function StreamPulseApp() {
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                       {currentVideo.category}
                     </span>
-                    <span className="px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize">
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                      {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
                     </span>
                   </>
@@ -1580,8 +1757,8 @@ export default function StreamPulseApp() {
                     <iframe
                       key={`tiktok-${currentVideo.videoId}`}
                       ref={tiktokIframeRef}
-                      className="w-full h-full border-0"
-                      src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
+                      className="gachi-tiktok-player border-0"
+                      src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
                       title={currentVideo.title}
                       allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
                       allowFullScreen
@@ -1712,7 +1889,7 @@ export default function StreamPulseApp() {
                 <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
                 <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Type <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
+                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
                 </p>
               </div>
             )}
@@ -1829,7 +2006,7 @@ export default function StreamPulseApp() {
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />
                   <p className="text-sm font-bold text-slate-300">No media found in this view</p>
                   <p className="text-xs text-slate-500">
-                    Switch tabs or submit a new YouTube, Twitch Clip, or TikTok link!
+                    The arena awaits its next main event. Submit a YouTube, Twitch Clip, or TikTok link.
                   </p>
                 </div>
               ) : (
@@ -1905,6 +2082,9 @@ export default function StreamPulseApp() {
                               </span>
                             )}
 
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                              {video.mediaType || detectMusicType(video.url, video.title, video.note)}
+                            </span>
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
                               {video.platform}
                             </span>
@@ -2064,119 +2244,7 @@ export default function StreamPulseApp() {
           </section>
         </div>
 
-        {/* ==========================================
-            RIGHT COLUMN: REAL TWITCH IRC CHAT & !SR FEED
-            ========================================== */}
-        {chatOpen && (
-          <aside className="w-full lg:w-[380px] xl:w-[410px] shrink-0 flex flex-col bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl h-[620px] lg:h-[calc(100vh-100px)] lg:sticky lg:top-20">
-            {/* Chat top header */}
-            <div className="p-3 bg-[#141926] border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-purple-400" />
-                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-200">
-                  Twitch Chat & !assr Bridge
-                </span>
-              </div>
-
-              <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-300">Twitch messages only</span>
-            </div>
-
-            {/* Twitch IRC WebSocket Connection Pill */}
-            <div className="px-3 py-2 bg-[#0d1017] border-b border-slate-800/80 space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Direct Twitch WebSocket IRC:</span>
-                {ircConnected ? (
-                  <span className="text-emerald-400 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    Connected
-                  </span>
-                ) : (
-                  <span className="text-slate-500">Idle</span>
-                )}
-              </div>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={ircChannel || channelRoom}
-                  onChange={(e) => setIrcChannel(e.target.value)}
-                  placeholder="channel (e.g. pokimane)"
-                  className="flex-1 bg-[#141926] border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-purple-500"
-                />
-                {ircConnected ? (
-                  <button
-                    onClick={disconnectTwitchIrc}
-                    className="px-2.5 py-1 rounded-lg bg-rose-600/20 text-rose-300 border border-rose-500/30 text-xs font-bold"
-                  >
-                    Disconnect
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => connectTwitchIrc(ircChannel || channelRoom)}
-                    className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors"
-                  >
-                    Connect IRC
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Chat Message Scroll Box */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
-              {chatMessages.length === 0 ? (
-                <div className="h-full min-h-32 flex flex-col items-center justify-center gap-2 text-center text-slate-500 px-5">
-                  <MessageSquare className="h-7 w-7 opacity-50" />
-                  <p className="font-semibold text-slate-300">No live chat messages yet</p>
-                  <p>{ircConnected ? 'Waiting for messages from real Twitch accounts…' : 'Connect to Twitch IRC to display actual channel messages. Simulated messages are disabled.'}</p>
-                </div>
-              ) : chatMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-2 rounded-xl leading-relaxed break-words ${
-                    msg.isSystem
-                      ? 'bg-purple-950/30 border border-purple-500/30 text-purple-200'
-                      : msg.isCommand
-                      ? 'bg-emerald-950/20 border border-emerald-500/30 text-slate-100'
-                      : 'hover:bg-white/[0.02]'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    {msg.role === 'streamer' && (
-                      <span className="px-1.5 py-0.2 rounded bg-red-500/20 text-red-400 text-[9px] font-extrabold uppercase">
-                        BROADCASTER
-                      </span>
-                    )}
-                    {msg.role === 'moderator' && (
-                      <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-[9px] font-extrabold uppercase">
-                        MOD
-                      </span>
-                    )}
-                    {msg.role === 'vip' && (
-                      <span className="px-1.5 py-0.2 rounded bg-pink-500/20 text-pink-400 text-[9px] font-extrabold uppercase">
-                        VIP
-                      </span>
-                    )}
-                    {msg.role === 'subscriber' && (
-                      <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 text-[9px] font-extrabold uppercase">
-                        SUB
-                      </span>
-                    )}
-                    <span className="font-extrabold" style={{ color: msg.color || '#c084fc' }}>
-                      {msg.username}:
-                    </span>
-                    <span className="text-[10px] text-slate-500 ml-auto">{msg.time}</span>
-                  </div>
-                  <p className="text-slate-200">{msg.text}</p>
-                </div>
-              ))}
-              <div ref={chatBottomRef} />
-            </div>
-
-            <div className="p-3 bg-[#141926] border-t border-slate-800 text-[11px] leading-relaxed text-slate-400">
-              <p>Read-only live chat. To send a message or a request command, use Twitch chat itself. Messages shown here come from the connected Twitch channel; common bot accounts are filtered.</p>
-              <p className="mt-1 text-slate-500">Commands: !assr &lt;url&gt;, !hype, !skip (staff), !volup/!voldown, !volume up/down or !volume 0-100, !mute/!unmute (staff; platform support varies)</p>
-            </div>
-          </aside>
-        )}
+        {/* Twitch IRC runs invisibly as a command bridge; incoming chat is not rendered. */}
       </div>
 
       {/* ==========================================
@@ -2191,7 +2259,7 @@ export default function StreamPulseApp() {
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Submit Media Request</h3>
+                  <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
                   <p className="text-xs text-slate-400">Broadcaster Room: twitch.tv/{channelRoom}</p>
                 </div>
               </div>
@@ -2204,10 +2272,10 @@ export default function StreamPulseApp() {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (!reqUrl.trim()) return;
-                const ok = processAndQueueRequest({
+                const ok = await processAndQueueRequest({
                   url: reqUrl,
                   title: reqTitle,
                   note: reqNote,
@@ -2233,7 +2301,7 @@ export default function StreamPulseApp() {
                   required
                   value={reqUrl}
                   onChange={(e) => setReqUrl(e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=... or clips.twitch.tv/..."
+                  placeholder="YouTube, Twitch Clip, or TikTok share/video URL…"
                   className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
                 />
               </div>
@@ -2309,7 +2377,7 @@ export default function StreamPulseApp() {
                   type="submit"
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30"
                 >
-                  Add Request to Hub
+                  LET HIM COOK
                 </button>
               </div>
             </form>
@@ -2365,7 +2433,7 @@ export default function StreamPulseApp() {
                   {[
                     { id: 'streamer', label: 'Broadcaster', desc: 'Full Deck Control' },
                     { id: 'moderator', label: 'Moderator', desc: 'Approve & Reorder' },
-                    { id: 'viewer', label: 'Chat Viewer', desc: 'Request & Vote' }
+                    { id: 'viewer', label: 'Viewer', desc: 'Request & Vote' }
                   ].map((r) => (
                     <button
                       key={r.id}
@@ -2434,7 +2502,7 @@ export default function StreamPulseApp() {
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr chat requests and web submissions' },
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
                 { key: 'requireApproval', label: 'Require Moderator Approval', desc: 'Accepted requests go to Pending Approval until approved' },
                 { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically skip to next item when finished where the player exposes an ended event' }
               ].map((item) => (

@@ -1,4 +1,4 @@
-STREAMPULSE — START HERE
+STREAMPULSE GACHI ARENA — START HERE
 ========================
 
 This archive is the COMPLETE project. The repository root must be the folder
@@ -14,6 +14,8 @@ src/App.tsx
 src/main.tsx
 src/index.css
 src/vite-env.d.ts
+api/resolve-tiktok.js
+api/media-metadata.js
 
 IMPORTANT: Do not upload the ZIP itself. Do not put the files inside an extra
 nested folder in GitHub. In particular, the final path must be:
@@ -22,6 +24,8 @@ NOT:
   StreamPulse/src/main.tsx
   src/src/main.tsx
 
+The api/ folder is needed to resolve TikTok short share links after deployment.
+
 CREATE A CLEAN GITHUB REPOSITORY
 --------------------------------
 1. On GitHub.com, create a NEW empty repository (for example,
@@ -29,7 +33,7 @@ CREATE A CLEAN GITHUB REPOSITORY
 2. In GitHub Desktop, choose File > Clone Repository, select the new repository,
    and clone it to your computer.
 3. In GitHub Desktop choose Repository > Show in Explorer.
-4. Copy EVERYTHING from the extracted StreamPulse project folder into the
+4. Copy EVERYTHING from the extracted StreamPulse Gachi Arena project folder into the
    cloned repository folder. Copy the contents, including the src folder—not
    the outer project folder and not the ZIP. Keep the hidden .git folder in the
    cloned repository.
@@ -48,5 +52,11 @@ DEPLOY ON VERCEL
 5. Output directory: dist
 6. Click Deploy.
 
-If you use Firebase cloud sync, follow the optional instructions in README.md.
+The chat transcript is intentionally removed; the Twitch IRC bridge connects automatically on page load, retries disconnections, and only handles commands. Channel settings sync per room when Firebase is configured.
+
+If you use Firebase cloud sync, follow the optional instructions in README.md and publish firestore.rules, including the room_settings match.
 The app can run in browser-local mode without Firebase environment variables.
+
+CHANNEL LINKS
+-------------
+A room can be opened on any device by adding ?channel=TWITCH_LOGIN to the deployed URL, e.g. https://your-site.vercel.app/?channel=example. It will load cloud queue/settings and auto-connect its bridge while the page is open.
