@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Public-demo rules for the Yedi Hub queue only.
+    // Public-demo rules for the StreamPulse queue only.
     // Anonymous authentication prevents unauthenticated REST access, but does NOT
     // distinguish trusted streamers/moderators from anonymous viewers.
     // Use verified Twitch auth/backend checks before using this for a production queue.

@@ -49,7 +49,7 @@ export default async function handler(req, res) {
 
   try {
     const upstream = await fetch(endpoint, {
-      headers: { Accept: 'application/json', 'User-Agent': 'Yedi-Hub-GachiArena/1.0' },
+      headers: { Accept: 'application/json', 'User-Agent': 'StreamPulse-GachiArena/1.0' },
       signal: AbortSignal.timeout(5000),
     });
     if (!upstream.ok) return res.status(200).json({ title: '', metadataAvailable: false });

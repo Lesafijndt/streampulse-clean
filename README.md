@@ -1,6 +1,6 @@
-# Yedi Hub Gachi Arena — Live Hub
+# StreamPulse Gachi Arena — Live Hub
 
-React + Vite + Tailwind CSS frontend for the Yedi Hub Gachi Arena Twitch media request hub, with a crimson-neon gachi aesthetic with Swedish blue/yellow and bath-soap accents.
+React + Vite + Tailwind CSS frontend for the StreamPulse Gachi Arena Twitch media request hub, with a crimson-neon gym/retro-meme aesthetic.
 
 ## Features retained from the modified source
 
@@ -89,8 +89,3 @@ The app now uses `public/gachi-arena-bg.webp` as a darkened, softened background
 ### Optional default Twitch channel
 
 Set `VITE_DEFAULT_TWITCH_CHANNEL` in Vercel if this deployment is dedicated to one broadcaster. Leave it blank for a neutral site that asks the operator to choose a channel, or use the `?channel=TWITCH_LOGIN` room link for each channel. A selected room is saved in the current browser; the shareable channel URL is the portable way to open the same room on another device.
-
-
-## Yedi Hub branding
-
-The visible product name is **Yedi Hub**. The interface keeps its crimson-neon gachi arena styling and adds Swedish blue/yellow flag details plus a 🧼 bath-soap logo/badge. Existing local-storage and Firebase namespace keys are intentionally retained to avoid orphaning a previously saved queue.

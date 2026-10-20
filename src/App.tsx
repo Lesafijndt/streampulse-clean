@@ -422,7 +422,7 @@ function parseMediaUrl(rawUrl = '') {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
-export default function YediHubApp() {
+export default function StreamPulseApp() {
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -1562,19 +1562,16 @@ export default function YediHubApp() {
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
-            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
-              <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-purple-600/30">
+              <Tv className="w-5 h-5 text-white" />
             </div>
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
-                  Yedi Hub
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-base tracking-tight bg-gradient-to-r from-white via-purple-100 to-cyan-200 bg-clip-text text-transparent">
+                  StreamPulse
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
-                </span>
-                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 SWEDISH SOAP CLUB 🧼
                 </span>
               </div>
 
@@ -1793,7 +1790,7 @@ export default function YediHubApp() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so StreamPulse can extract the post ID.</p>
                       <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
                         Open TikTok <ExternalLink className="h-4 w-4" />
                       </a>
@@ -2072,7 +2069,7 @@ export default function YediHubApp() {
                             src={video.thumbnail}
                             alt=""
                             onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=StreamPulse';
                             }}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
