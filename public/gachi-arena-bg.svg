@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 440" width="1920" height="440">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08070a"/><stop offset=".42" stop-color="#18070d"/><stop offset=".75" stop-color="#07131b"/><stop offset="1" stop-color="#050608"/></linearGradient>
+  <linearGradient id="skin" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#f6c9a3"/><stop offset=".42" stop-color="#bd775d"/><stop offset=".72" stop-color="#8d4d42"/><stop offset="1" stop-color="#4e2e32"/></linearGradient>
+  <linearGradient id="skin2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f3be91"/><stop offset=".48" stop-color="#a85c4c"/><stop offset="1" stop-color="#4c2b30"/></linearGradient>
+  <linearGradient id="trunks" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#252832"/><stop offset="1" stop-color="#08090d"/></linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#b37e00"/><stop offset=".5" stop-color="#ffe66b"/><stop offset="1" stop-color="#9a6c00"/></linearGradient>
+  <radialGradient id="spot"><stop stop-color="#e92a51" stop-opacity=".42"/><stop offset="1" stop-color="#e92a51" stop-opacity="0"/></radialGradient>
+  <radialGradient id="spot2"><stop stop-color="#087eb9" stop-opacity=".48"/><stop offset="1" stop-color="#087eb9" stop-opacity="0"/></radialGradient>
+  <pattern id="scan" width="4" height="5" patternUnits="userSpaceOnUse"><path d="M0 0H4" stroke="#fff" stroke-opacity=".04"/></pattern>
+  <filter id="glow"><feGaussianBlur stdDeviation="9"/></filter>
+</defs>
+<rect width="1920" height="440" fill="url(#bg)"/>
+<ellipse cx="330" cy="210" rx="410" ry="310" fill="url(#spot)"/>
+<ellipse cx="1600" cy="180" rx="480" ry="330" fill="url(#spot2)"/>
+<path d="M0 0H440L260 440H0ZM1920 0H1480L1660 440H1920Z" fill="#000" opacity=".22"/>
+<g opacity=".4" stroke="#fecc00" stroke-width="3"><path d="M0 34H1920"/><path d="M0 404H1920"/></g>
+<g opacity=".38" stroke="#006aa7" stroke-width="3"><path d="M0 42H1920"/><path d="M0 396H1920"/></g>
+<!-- steel cage / ring ropes -->
+<g fill="none" stroke-linecap="round">
+  <path d="M0 235L1920 170" stroke="#006aa7" stroke-width="11" opacity=".7"/>
+  <path d="M0 240L1920 175" stroke="#f4f3ed" stroke-width="2" opacity=".5"/>
+  <path d="M0 316L1920 255" stroke="#b51f3c" stroke-width="10" opacity=".8"/>
+  <path d="M0 320L1920 259" stroke="#ffc85b" stroke-width="2" opacity=".8"/>
+</g>
+<!-- Left ANIKI: illustrated, fully clothed wrestling trunks -->
+<g stroke="#211317" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M264 170C225 151 198 126 178 101C160 78 132 82 118 103C100 129 120 160 151 176L220 219Z" fill="url(#skin)"/>
+  <ellipse cx="151" cy="111" rx="35" ry="43" fill="url(#skin)"/>
+  <path d="M126 88C120 59 148 42 179 60C194 69 198 86 188 99C170 83 151 81 126 88Z" fill="#171117"/>
+  <path d="M190 92C220 71 247 92 248 119C251 151 222 180 195 167C176 157 170 136 181 119Z" fill="url(#skin2)"/>
+  <path d="M208 114L225 109M211 132L226 130" stroke="#171015" stroke-width="7"/>
+  <path d="M241 167C267 143 298 144 330 160C360 175 377 202 379 238L366 348L244 348L223 233Z" fill="url(#skin)"/>
+  <path d="M239 176C216 158 193 171 183 193C169 224 190 253 222 253L254 224Z" fill="url(#skin2)"/>
+  <path d="M232 194C212 190 203 211 214 227C225 242 244 236 254 221" fill="none" stroke="#f4bd97" stroke-width="13"/>
+  <path d="M319 166C343 146 374 157 385 182C397 209 382 230 359 236L331 215Z" fill="url(#skin2)"/>
+  <path d="M359 188C378 168 402 180 408 199C417 224 398 240 375 235L353 220Z" fill="url(#skin)"/>
+  <path d="M247 219C273 203 305 203 333 222L347 265L329 305L264 305L239 265Z" fill="url(#skin2)"/>
+  <path d="M257 232L282 245L268 261M298 231L287 254L312 267M268 279L286 273L304 282" fill="none" stroke="#f3c4a0" stroke-width="7"/>
+  <path d="M231 301L347 301L365 367L335 425L239 425L218 367Z" fill="url(#trunks)"/>
+  <path d="M231 309L350 309L355 331L225 331Z" fill="url(#gold)" stroke="#25180a" stroke-width="5"/>
+  <path d="M282 333L278 389M302 334L310 389" stroke="#77717a" stroke-width="4"/>
+</g>
+<!-- Right ANIKI, mirrored pose -->
+<g transform="translate(1920 0) scale(-1 1)" stroke="#211317" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M264 170C225 151 198 126 178 101C160 78 132 82 118 103C100 129 120 160 151 176L220 219Z" fill="url(#skin2)"/>
+  <ellipse cx="151" cy="111" rx="35" ry="43" fill="url(#skin2)"/>
+  <path d="M126 88C120 59 148 42 179 60C194 69 198 86 188 99C170 83 151 81 126 88Z" fill="#11151b"/>
+  <path d="M190 92C220 71 247 92 248 119C251 151 222 180 195 167C176 157 170 136 181 119Z" fill="url(#skin)"/>
+  <path d="M208 114L225 109M211 132L226 130" stroke="#171015" stroke-width="7"/>
+  <path d="M241 167C267 143 298 144 330 160C360 175 377 202 379 238L366 348L244 348L223 233Z" fill="url(#skin2)"/>
+  <path d="M239 176C216 158 193 171 183 193C169 224 190 253 222 253L254 224Z" fill="url(#skin)"/>
+  <path d="M232 194C212 190 203 211 214 227C225 242 244 236 254 221" fill="none" stroke="#f4bd97" stroke-width="13"/>
+  <path d="M319 166C343 146 374 157 385 182C397 209 382 230 359 236L331 215Z" fill="url(#skin)"/>
+  <path d="M359 188C378 168 402 180 408 199C417 224 398 240 375 235L353 220Z" fill="url(#skin2)"/>
+  <path d="M247 219C273 203 305 203 333 222L347 265L329 305L264 305L239 265Z" fill="url(#skin)"/>
+  <path d="M257 232L282 245L268 261M298 231L287 254L312 267M268 279L286 273L304 282" fill="none" stroke="#f3c4a0" stroke-width="7"/>
+  <path d="M231 301L347 301L365 367L335 425L239 425L218 367Z" fill="url(#trunks)"/>
+  <path d="M231 309L350 309L355 331L225 331Z" fill="url(#gold)" stroke="#25180a" stroke-width="5"/>
+  <path d="M282 333L278 389M302 334L310 389" stroke="#77717a" stroke-width="4"/>
+</g>
+<!-- VHS-title ghosting and distressed diagonal marks -->
+<g font-family="Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" font-weight="900" text-anchor="middle">
+  <text x="960" y="123" font-size="27" letter-spacing="13" fill="#fecc00" opacity=".87">ANIKI WRESTLING • SVENSK HARDCORE DIVISION</text>
+  <text x="960" y="206" font-size="77" letter-spacing="3" fill="#ff315f" opacity=".23" transform="translate(5 0)">GACHIMUCHI</text>
+  <text x="960" y="201" font-size="77" letter-spacing="3" fill="#f6f0e7" stroke="#111017" stroke-width="4" paint-order="stroke">GACHIMUCHI</text>
+  <text x="960" y="253" font-size="25" letter-spacing="10" fill="#83d5ff">NO MERCY • NO SKIP • NO WEAKNESS</text>
+  <text x="960" y="296" font-size="19" letter-spacing="5" fill="#fecc00" opacity=".87">♂ DUNGEON PIT  •  2O3A MAIN EVENT  •  SWEDEN ♂</text>
+</g>
+<rect width="1920" height="440" fill="url(#scan)" opacity=".7"/>
+<g stroke="#fff" stroke-opacity=".1" stroke-width="1"><path d="M0 12L1920 12M0 426L1920 426"/><path d="M20 0V440M1900 0V440"/></g>
+<g fill="#fecc00"><path d="M35 28h70v5H35zM35 37h42v3H35zM1815 28h70v5h-70zM1843 37h42v3h-42z"/></g>
+</svg>
