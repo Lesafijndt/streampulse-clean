@@ -1564,6 +1564,10 @@ function YediHubAppContent() {
 
     const initializePlayerMessaging = () => {
       if (cancelled || youtubeIframeRef.current !== iframe) return;
+      // The raw iframe API emits playerState/time info after the parent announces a listener.
+      try {
+        playerWindow.postMessage(JSON.stringify({ event: 'listening', id: `yedi-hub-${video.id}`, channel: 'widget' }), 'https://www.youtube.com');
+      } catch { /* Player may still be initializing; the next retry will announce again. */ }
       postCommand('addEventListener', ['onStateChange']);
       postCommand('addEventListener', ['onError']);
       postCommand('getCurrentTime');
@@ -2240,6 +2244,7 @@ function YediHubAppContent() {
                         if (currentVideoRef.current?.id !== currentVideo.id) return;
                         const frame = youtubeIframeRef.current?.contentWindow;
                         if (!frame) return;
+                        frame.postMessage(JSON.stringify({ event: 'listening', id: `yedi-hub-${currentVideo.id}`, channel: 'widget' }), 'https://www.youtube.com');
                         const send = (func, args = []) => frame.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
                         send('addEventListener', ['onStateChange']);
                         send('addEventListener', ['onError']);
