@@ -1401,7 +1401,7 @@ function YediHubAppContent() {
       url, title, requestedBy: username, userRole: role,
       note: 'Requested via Twitch chat', manualCategory: null
     });
-    if (ok) sendTwitchChatReply(`@${requester} added "${String(title || requestText).slice(0, 75)}". Use !position to check its spot, or !remove to remove your latest waiting request.`);
+    // Successful requests stay silent in chat to avoid spam; errors and closed-queue replies remain enabled.
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
