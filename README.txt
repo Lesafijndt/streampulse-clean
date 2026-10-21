@@ -1,44 +1,21 @@
-YEDI HUB PATCH — TIKTOK NEXT-TRACK / BLACK-SCREEN FIX
+YEDI HUB — SEAMLESS TIKTOK TRANSITION PATCH
 
-Included files
---------------
-src/App.tsx
-api/twitch/login.js
-api/twitch/callback.js
-api/twitch/chat-message.js
-api/twitch/bot-login.js
-api/twitch/bot-session.js
-api/twitch/bot-logout.js
+This is a targeted in-place patch. It does not replace the project or any Twitch login/API files.
 
-What this patch changes
------------------------
-1. Next-track transitions are now atomic in local React state and sent to Firestore as one write batch. This prevents temporary zero/two-playing-item snapshots while skipping, which could tear down the media iframe as a TikTok item was becoming active.
+APPLY
+1. Extract this ZIP into the root of your existing Yedi Hub repository (the folder containing package.json).
+2. Double-click APPLY-FIX.bat and read the PowerShell result.
+3. The script backs up src/App.tsx to your Windows TEMP folder before editing. It modifies only src/App.tsx.
+4. Delete APPLY-FIX.bat, Apply-Yedi-TikTok-BlackScreen-Fix.ps1, and README.txt from the repository root after it has run successfully.
+5. Review src/App.tsx in GitHub Desktop, commit, and Push origin. After Vercel deploys, hard-refresh the site with Ctrl+F5.
 
-2. TikTok's official player now receives a stable window reference for the specific iframe/request. Late messages from the previous track cannot issue commands to the next track.
+CHANGES
+- Attempts to exit fullscreen before Play Now / Skip Next transitions.
+- Disables TikTok's fullscreen button and removes fullscreen permission from the TikTok iframe.
+- Gives each queued request a fresh iframe identity to avoid reusing a stale embed.
+- Hides optional TikTok description, music metadata, and timestamp while keeping player controls enabled.
+- Suppresses routine success/info toast popups; warning/error messages remain so genuine failures aren't silent.
+- Adds a top-level React error boundary that displays a recovery screen if a React render/lifecycle error occurs, instead of leaving a blank app.
 
-3. TikTok players get a much larger responsive viewport (approximately a 9:16 portrait frame) rather than being squeezed into a narrow 180–220px iframe. This better matches TikTok's documented embed sizing expectations.
-
-4. The app allows a longer startup window before changing players and no longer treats an ordinary pause as a stalled video.
-
-5. If the official player really fails to start, the fallback is TikTok's documented blockquote + https://www.tiktok.com/embed.js embed—not the previous /embed/v2 iframe fallback. The retry/open-on-TikTok recovery controls remain available.
-
-6. The existing one-time unmute request after actual playback remains. Browser autoplay restrictions can still require clicking Enable sound.
-
-7. The existing queue position/vote commands and separate @gachibot69 chat integration are retained.
-
-Install
--------
-1. Extract this ZIP into the ROOT of the existing GitHub/Vercel repository. Let the included paths merge and replace matching files.
-2. Review the changes in GitHub Desktop, commit, then click Push origin.
-3. Wait for Vercel deployment to finish, reload Yedi Hub, and test skipping into at least two different TikTok requests.
-4. Test the audio separately. If audible autoplay is blocked by the browser, click Enable sound once.
-
-Important limitation
--------------------
-TikTok controls the embed and may reject/limit a particular video or the site's embedding domain. This patch fixes the app-side transition race, improves the player size, and switches to TikTok's documented standard embed on failure, but no website code can guarantee playback for posts TikTok refuses to embed. If both official embed methods fail, the Open TikTok link is the reliable fallback.
-
-Validation
-----------
-The ZIP is checked for integrity. The changed TSX was parser-checked with TypeScript, but a full production build and live browser playback test were not possible here because the project's npm dependencies are not installed and this patch has not been deployed to your live Vercel site.
-
-Keep TWITCH_CLIENT_SECRET, Firebase service account JSON, and OAuth tokens only in Vercel environment variables. Do not paste secrets into source files or chat.
+LIMITATIONS
+This is a best-effort fix, not a guarantee. TikTok owns the cross-origin iframe; this site cannot remove TikTok-controlled prompts, required notices, policy messages, blocked-video screens, or other content rendered inside that iframe. TikTok's supported player parameters only hide specific controls/metadata. A browser/GPU/renderer crash is not catchable by React's error boundary. Test after deployment.
