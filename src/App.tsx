@@ -1380,17 +1380,21 @@ export default function YediHubApp() {
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
-  // TikTok's official embedded player sends state, volume, and time updates through postMessage.
-  // Preserve autoplay first: sending unMute before playback starts can cause the browser/player
-  // to reject the initial play request. Only request sound after TikTok confirms it is playing.
+  // TikTok's official embed starts from the autoplay=1 URL parameter. Avoid sending a second
+  // play command on readiness, which can race the embed's own startup. If unmuting pauses the
+  // player, try one resume; browsers may still require a real click for audible playback.
   useEffect(() => {
     if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId) return undefined;
 
     let playbackStarted = false;
-    let unmuteAttempts = 0;
+    let unmuteSent = false;
+    let resumeAttempted = false;
+    let lastState = -1;
+    let unmuteRequestedAt = 0;
     let reportedMuted = null;
-    let muteNoticeShown = false;
-    const timers = new Set();
+    let fallbackShown = false;
+    const timers = new Set<number>();
+
     const schedule = (callback, delay) => {
       const timer = window.setTimeout(() => {
         timers.delete(timer);
@@ -1398,24 +1402,33 @@ export default function YediHubApp() {
       }, delay);
       timers.add(timer);
     };
+
     const sendTikTokCommand = (type) => {
       tiktokIframeRef.current?.contentWindow?.postMessage(
         { type, value: null, 'x-tiktok-player': true },
         'https://www.tiktok.com'
       );
     };
-    const requestUnmute = () => {
-      if (!playbackStarted || unmuteAttempts >= 2) return;
-      unmuteAttempts += 1;
-      sendTikTokCommand('unMute');
+
+    const showAutoplayFallback = () => {
+      if (fallbackShown) return;
+      fallbackShown = true;
+      addToast(
+        'TikTok autoplay with sound was blocked by the browser. Click Play or the volume control inside TikTok once; the player will not keep interrupting itself.',
+        'info'
+      );
     };
-    const showMutedFallbackIfNeeded = () => {
+
+    const requestUnmute = () => {
+      if (!playbackStarted || unmuteSent) return;
+      unmuteSent = true;
+      unmuteRequestedAt = Date.now();
+      sendTikTokCommand('unMute');
+
+      // Detect a rejected unmute without repeatedly fighting the browser's autoplay policy.
       schedule(() => {
-        if (reportedMuted === true && !muteNoticeShown) {
-          muteNoticeShown = true;
-          addToast('TikTok is playing but the browser kept it muted. Click the TikTok player’s volume button once to enable sound.', 'info');
-        }
-      }, 1800);
+        if (reportedMuted === true) showAutoplayFallback();
+      }, 1100);
     };
 
     const handleTikTokMessage = (event) => {
@@ -1429,34 +1442,43 @@ export default function YediHubApp() {
       if (!data || data['x-tiktok-player'] !== true) return;
 
       if (data.type === 'onPlayerReady') {
-        // Let TikTok's autoplay=1 parameter start playback; do not unmute before it has started.
-        sendTikTokCommand('play');
+        // autoplay=1 is already set on the iframe URL; do not send a duplicate play command.
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
       } else if (data.type === 'onStateChange') {
-        const state = Number(data.value);
-        if (state === 1) {
-          const firstPlayingEvent = !playbackStarted;
+        lastState = Number(data.value);
+        if (lastState === 1) {
           playbackStarted = true;
-          // First allow muted autoplay to begin, then request sound without restarting playback.
-          if (firstPlayingEvent) schedule(requestUnmute, 900);
-          else if (reportedMuted === true) schedule(requestUnmute, 500);
-          showMutedFallbackIfNeeded();
-        } else if (state === 0) {
+          // Try audio once after playback is confirmed. Never loop unmute commands.
+          if (!unmuteSent) schedule(requestUnmute, 700);
+        } else if (lastState === 2) {
+          // Some TikTok/browser combinations pause when the audio request is rejected.
+          // Resume only once, and only immediately after that unmute attempt.
+          const pauseFollowedUnmute = unmuteSent && !resumeAttempted && Date.now() - unmuteRequestedAt < 3000;
+          if (pauseFollowedUnmute) {
+            resumeAttempted = true;
+            schedule(() => {
+              sendTikTokCommand('play');
+              schedule(() => {
+                if (lastState !== 1) showAutoplayFallback();
+              }, 1000);
+            }, 120);
+          }
+        } else if (lastState === 0) {
           handleMediaEndedRef.current?.(currentVideo.id);
         }
       } else if (data.type === 'onMute') {
         reportedMuted = Boolean(data.value);
-        // Only try unmuting after a confirmed playing state, never before autoplay.
-        if (reportedMuted && playbackStarted) {
-          schedule(requestUnmute, 500);
-          showMutedFallbackIfNeeded();
+        if (reportedMuted === false) {
+          // Sound was enabled successfully; no further commands are needed.
+          fallbackShown = true;
         }
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
-        addToast(`TikTok could not play this post (${errorType}). Try a public full video URL.`, 'warning');
+        if (String(errorType).toUpperCase().includes('AUTOPLAY')) showAutoplayFallback();
+        else addToast(`TikTok could not play this post (${errorType}). Try a public full video URL.`, 'warning');
       }
     };
 
