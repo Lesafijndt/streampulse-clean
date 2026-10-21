@@ -16,6 +16,7 @@ export default function QueueToolbar({
   setSearchQuery
 }) {
   return (
+    <>
                   {/* Nav Tabs */}
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -119,5 +120,6 @@ export default function QueueToolbar({
                       )}
                     </div>
                   </div>
+    </>
   );
 }
