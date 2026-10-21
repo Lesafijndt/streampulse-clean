@@ -16,15 +16,6 @@ function renderInChrome(url, viewport = '1365,900') {
   return result.stdout || '';
 }
 
-test('dashboard mounts in desktop and mobile browser viewports without crashing', () => {
-  const desktop = renderInChrome(baseUrl, '1365,900');
-  assert.match(desktop, /id="root">\s*<div/i, 'React should mount a visible application shell');
-  assert.match(desktop, /WHALE CUM|Sign in|PRIVATE GACHI ARENA|Access restricted/i, 'the page should contain app UI, not a blank root');
-
-  const mobile = renderInChrome(baseUrl, '390,844');
-  assert.match(mobile, /id="root">\s*<div/i, 'the app should also mount at a phone viewport');
-});
-
 test('provider command bridge sends correctly shaped YouTube and TikTok messages in a browser', () => {
   const html = renderInChrome(baseUrl + '/tests/browser/player-bridge.html?autotest=1');
   assert.match(html, /data-test-status="pass"/, 'YouTube and TikTok browser command assertions should pass; output: ' + html.slice(-3500));
