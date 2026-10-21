@@ -116,6 +116,7 @@ export default async function handler(req, res) {
     let firebaseCustomToken = '';
     let firebaseTokenReady = false;
     let firebaseDiagnostic = 'firebase_custom_token_failed';
+    let firebaseDiagnosticCode = 'unknown_error';
     try {
       firebaseCustomToken = await (await getFirebaseAdminAuth()).createCustomToken(`twitch_${me.id}`, {
         yediAuthorized: true,
@@ -127,6 +128,11 @@ export default async function handler(req, res) {
     } catch (error) {
       // Keep the detailed error server-side; only send a non-sensitive diagnostic category to the browser.
       const message = String(error?.message || '');
+      // Expose only a short safe error identifier to the browser, never raw server messages or credentials.
+      firebaseDiagnosticCode = String(error?.code || error?.name || 'unknown_error')
+        .toLowerCase()
+        .replace(/[^a-z0-9/_-]/g, '')
+        .slice(0, 64) || 'unknown_error';
       if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured/i.test(message)) {
         firebaseDiagnostic = 'missing_service_account';
       } else if (/not valid JSON or base64 JSON|must be a JSON object/i.test(message)) {
@@ -150,6 +156,7 @@ export default async function handler(req, res) {
       role,
       firebaseTokenReady,
       firebaseDiagnostic,
+      ...(firebaseTokenReady ? {} : { firebaseDiagnosticCode }),
       ...(firebaseCustomToken ? { firebaseCustomToken } : {}),
       user: { id: me.id, login: me.login, display_name: me.display_name, profile_image_url: me.profile_image_url || '' },
       channel: '2o3a'
