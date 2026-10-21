@@ -1629,3 +1629,32 @@ body { background: #03070b; }
   .gachi-queue-panel::before,
   .gachi-player-column > section::before { inset: 4px; }
 }
+
+
+/* Player stage: dark purple-black leather-arena atmosphere, including landscape videos. */
+.gachi-theme .gachi-player-stage {
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(36, 13, 68, .34), transparent 58%),
+    linear-gradient(145deg, #030207 0%, #090511 52%, #030207 100%) !important;
+  box-shadow: inset 0 0 70px rgba(0, 0, 0, .65);
+}
+.gachi-theme .gachi-player-stage iframe {
+  background: #030207;
+}
+.gachi-theme .gachi-media-controls {
+  background: linear-gradient(145deg, rgba(25, 12, 35, .96), rgba(4, 4, 8, .98)) !important;
+  border-color: rgba(148, 66, 191, .34) !important;
+}
+.gachi-theme .gachi-sound-action {
+  background: linear-gradient(145deg, #21122f, #08060c) !important;
+  border-color: rgba(154, 83, 194, .42) !important;
+}
+.gachi-theme .gachi-sound-action:hover {
+  background: linear-gradient(145deg, #3a1753, #100817) !important;
+  border-color: rgba(203, 125, 245, .7) !important;
+}
+.gachi-theme .gachi-sound-action-primary {
+  background: linear-gradient(105deg, #7d174d, #421365) !important;
+  border-color: rgba(202, 85, 237, .68) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 0 13px rgba(155, 49, 201, .2) !important;
+}
