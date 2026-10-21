@@ -3718,7 +3718,7 @@ function YediHubAppContent() {
                   </div>
 
                   {/* Player Quick Action Bar */}
-                  <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center gap-2">
+                  <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
                     {currentVideo.status !== 'playing' && (
                       <button
@@ -3748,7 +3748,7 @@ function YediHubAppContent() {
 
                     <TransportNavigation isStaff={isStaff} onPrevious={handlePreviousTrack} onNext={handleSkipNext} />
                   </div>
-                  <KeyboardShortcutHint isStaff={isStaff} />
+                  <div className="flex w-full justify-end"><KeyboardShortcutHint isStaff={isStaff} /></div>
 
                 </div>
               </div>
