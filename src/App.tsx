@@ -463,7 +463,7 @@ function parseMediaUrl(rawUrl = '') {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
-export default function YediHubApp() {
+function YediHubAppContent() {
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -569,6 +569,8 @@ export default function YediHubApp() {
   // Notifications
   const [toasts, setToasts] = useState([]);
   const addToast = (message, type = 'info') => {
+    // Seamless mode: suppress routine informational/success popups.
+    if (type === 'info' || type === 'success') return;
     const id = 'toast-' + Date.now() + Math.random().toString(36).slice(2, 6);
     setToasts((prev) => [...prev.slice(-3), { id, message, type }]);
     setTimeout(() => {
@@ -1384,7 +1386,25 @@ export default function YediHubApp() {
   // ==========================================
   // PLAYBACK & QUEUE ACTIONS
   // ==========================================
+  const exitTikTokFullscreenBeforeTrackChange = () => {
+    if (typeof document === 'undefined') return;
+    try {
+      const doc = document as any;
+      const fullscreenActive = Boolean(
+        doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement
+      );
+      if (!fullscreenActive) return;
+      const exit = doc.exitFullscreen || doc.webkitExitFullscreen ||
+        doc.webkitCancelFullScreen || doc.msExitFullscreen;
+      if (typeof exit !== 'function') return;
+      const result = exit.call(doc);
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch {
+      // Best-effort cleanup; switching tracks must continue even if the browser rejects it.
+    }
+  };
   const handlePlayNow = (video) => {
+    exitTikTokFullscreenBeforeTrackChange();
     // Set current active playing to watched, set selected to playing
     videos.forEach((v) => {
       if (v.status === 'playing') {
@@ -1398,6 +1418,7 @@ export default function YediHubApp() {
   };
 
   const handleSkipNext = () => {
+    exitTikTokFullscreenBeforeTrackChange();
     const outgoing = currentVideo;
     if (!outgoing) return;
 
@@ -2287,7 +2308,7 @@ export default function YediHubApp() {
                           ref={tiktokIframeRef}
                           className="gachi-tiktok-player border-0"
                           style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                          src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
+                          src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&fullscreen_button=0&progress_bar=1&play_button=1&volume_control=1&timestamp=0&description=0&music_info=0&rel=0`}
                           title={currentVideo.title}
                           allow="autoplay; encrypted-media; picture-in-picture; web-share"
                           loading="eager"
@@ -3125,4 +3146,37 @@ export default function YediHubApp() {
       </div>
     </div>
   );
+}
+class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(_error: Error): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo): void {
+    console.error('Yedi Hub render failure', error, info);
+  }
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
+          <section className="max-w-lg rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
+            <h1 className="text-lg font-black">Yedi Hub recovered from a player error</h1>
+            <p className="text-sm text-slate-300">The dashboard hit a rendering error. You can try rendering it again or reload the page; this fallback keeps the screen from appearing completely blank when React can recover.</p>
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={() => this.setState({ hasError: false })} className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold">Try again</button>
+              <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold">Reload dashboard</button>
+            </div>
+          </section>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function YediHubApp() {
+  return <YediHubAppErrorBoundary><YediHubAppContent /></YediHubAppErrorBoundary>;
 }
