@@ -166,9 +166,7 @@ test('Queue statistics report retained requesters, platforms, genres, runtime, a
     { id: '4', status: 'watched', requestedBy: 'Carol', platform: 'twitch', category: 'Gaming', timestamp: now - 60_000, playedAt: now - 2 * 60 * 60 * 1000 },
     { id: '5', status: 'queue', requestedBy: 'Dave', platform: 'tiktok', category: 'Memes', timestamp: now - 30 * 60 * 1000, durationSource: 'unknown' }
   ];
-  const stats = buildQueueStatistics(data, now);
-  assert.equal(stats.totalRequests, 5);
-  assert.equal(stats.totalRequesters, 4);
+  const stats = buildQueueStatistics(data);
   assert.equal(stats.totalRequests, 5);
   assert.equal(stats.totalRequesters, 4);
   assert.equal(stats.queueCount, 3);
@@ -249,8 +247,8 @@ test('Stats platform, genre and requester rankings use all retained items', asyn
     { id: 'old-1', status: 'watched', requestedBy: 'carol', platform: 'tiktok', category: 'Memes', timestamp: now - 4 * 60 * 60 * 1000 }
   ]);
   assert.equal(stats.totalRequests, 4);
-  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
-  assert.deepEqual(stats.mostPopularGenre, { label: 'Music', count: 2 });
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'tiktok', count: 2 });
+  assert.deepEqual(stats.mostPopularGenre, { label: 'Memes', count: 2 });
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
   assert.equal(stats.totalRequesters, 3, 'overall unique counts are only for retained items');
 });

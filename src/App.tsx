@@ -3282,12 +3282,12 @@ function YediHubAppContent() {
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><Users className="h-3 w-3" /> People</div>
                 <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequesters}</div>
-                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequesters} unique in saved items</div>
+                <div className="mt-1 text-[9px] text-slate-500">unique requesters in retained items</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><TrendingUp className="h-3 w-3" /> Requests</div>
                 <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequests}</div>
-                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequests} retained items</div>
+                <div className="mt-1 text-[9px] text-slate-500">items currently saved</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><ListVideo className="h-3 w-3" /> Waiting</div>
