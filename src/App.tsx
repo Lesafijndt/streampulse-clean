@@ -2636,11 +2636,10 @@ function YediHubAppContent() {
             ) : <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-slate-500">Nothing waiting in the queue.</div>}
           </div>
           <div className="space-y-2.5">
-            <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE BREAKDOWN</div>
+            <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE</div>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Music' ? 'All' : 'Music'); }} aria-pressed={mediaTypeFilter === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={\`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left \${mediaTypeFilter === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}\`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={\`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left \${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}\`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
           </div>
-          <div className="gachi-rail-foot rounded-xl p-3"><div className="text-[10px] uppercase tracking-[0.2em] font-black text-rose-300">GACHI ARENA</div><p className="mt-1.5 text-xs leading-5 text-slate-400">Real men. Real content. Live requests from chat.</p></div>
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
           {/* ==========================================
