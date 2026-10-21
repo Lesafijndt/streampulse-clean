@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
+  Pause,
+  Volume2,
+  VolumeX,
   SkipForward,
   RotateCcw,
   Clock,
@@ -538,6 +541,7 @@ function YediHubAppContent() {
   const [simProgress, setSimProgress] = useState(0);
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
+  const [tiktokPlaybackState, setTikTokPlaybackState] = useState({ requestId: '', isPlaying: true, isMuted: false });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
   const youtubeIframeRef = useRef(null);
@@ -1793,6 +1797,7 @@ function YediHubAppContent() {
     if (!video || video.platform !== 'tiktok' || !video.videoId) return undefined;
     let cancelled = false;
     const retryTimers = [];
+    setTikTokPlaybackState({ requestId: video.id, isPlaying: true, isMuted: false });
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
     const sendCommand = (type, targetWindow = getWindow()) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
@@ -1822,8 +1827,24 @@ function YediHubAppContent() {
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        if (state === 1) sendCommand('unMute');
+        if (state === 1 || state === 2 || state === 0) {
+          setTikTokPlaybackState((previous) => previous.requestId === video.id
+            ? { ...previous, isPlaying: state === 1 }
+            : previous);
+        }
+        // Do not automatically unmute every time playback resumes: the user may have muted it.
         if (state === 0) handleMediaEndedRef.current?.(video.id);
+      } else if (data.type === 'onMute') {
+        setTikTokPlaybackState((previous) => previous.requestId === video.id
+          ? { ...previous, isMuted: Boolean(data.value) }
+          : previous);
+      } else if (data.type === 'onVolumeChange') {
+        const volume = Number(data.value);
+        if (Number.isFinite(volume)) {
+          setTikTokPlaybackState((previous) => previous.requestId === video.id
+            ? { ...previous, isMuted: volume <= 0 }
+            : previous);
+        }
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
         addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
@@ -2446,7 +2467,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
@@ -2569,8 +2590,52 @@ function YediHubAppContent() {
                               addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
                               return;
                             }
+                            const isPlaying = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true;
+                            const isMuted = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isMuted : false;
+                            const nextIsPlaying = !isPlaying;
+                            frame.postMessage({ type: nextIsPlaying ? 'play' : 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: nextIsPlaying, isMuted });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
+                          title={tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? 'Resume TikTok video' : 'Pause TikTok video'}
+                        >
+                          {tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                          {tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? 'Play' : 'Pause'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const frame = tiktokIframeRef.current?.contentWindow;
+                            if (!frame) {
+                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
+                              return;
+                            }
+                            const isMuted = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isMuted : false;
+                            const nextIsMuted = !isMuted;
+                            frame.postMessage({ type: nextIsMuted ? 'mute' : 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            setTikTokPlaybackState({
+                              requestId: currentVideo.id,
+                              isPlaying: tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true,
+                              isMuted: nextIsMuted
+                            });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
+                          title={tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? 'Unmute TikTok video' : 'Mute TikTok video'}
+                        >
+                          {tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          {tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? 'Unmute' : 'Mute'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const frame = tiktokIframeRef.current?.contentWindow;
+                            if (!frame) {
+                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
+                              return;
+                            }
                             frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
                             frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false });
                           }}
                           className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
                         >Enable TikTok sound</button>
