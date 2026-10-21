@@ -629,10 +629,19 @@ function YediHubAppContent() {
         setFirebaseLoginToken(customToken);
         if (allowed) {
           const hasWebFirebaseConfig = Boolean(getFirebaseConfig());
+          const firebaseDiagnostic = String(session.firebaseDiagnostic || '');
+          const firebaseDiagnosticMessages = {
+            missing_service_account: 'Firebase service account missing in Vercel',
+            invalid_service_account_json: 'Firebase service-account JSON is invalid',
+            invalid_service_account_credentials: 'Firebase service-account key is invalid',
+            firebase_admin_sdk_unavailable: 'Firebase Admin SDK failed to load',
+            firebase_custom_token_failed: 'Firebase custom-token creation failed',
+          };
           if (!hasWebFirebaseConfig) {
             setSyncStatusText('Twitch verified — Firebase web config missing');
           } else if (!customToken || session.firebaseTokenReady !== true) {
-            setSyncStatusText('Twitch verified — Firebase server token unavailable');
+            const reason = firebaseDiagnosticMessages[firebaseDiagnostic] || 'Firebase server token unavailable';
+            setSyncStatusText(`Twitch verified — ${reason}`);
           } else {
             setSyncStatusText('Connecting private cloud sync…');
           }
