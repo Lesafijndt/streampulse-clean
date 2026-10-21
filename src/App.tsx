@@ -1850,7 +1850,13 @@ function YediHubAppContent() {
       return;
     }
     const updates = new Map();
-    updates.set(outgoing.id, { status: 'queue', queueOrder: getNextQueueOrder() });
+    // Returning to the previous track should make the outgoing track the very next
+    // item in line, so pressing Next immediately returns to the track we just left.
+    const remainingQueued = videos.filter((video) => video.status === 'queue' && video.id !== outgoing.id);
+    const earliestQueuedOrder = remainingQueued.length
+      ? Math.min(...remainingQueued.map(queueOrderValue))
+      : queueOrderValue(outgoing);
+    updates.set(outgoing.id, { status: 'queue', queueOrder: earliestQueuedOrder - 1000, pinned: false });
     updates.set(previouslyPlayed.id, { status: 'playing', pinned: false });
     setVideos((previous) => previous.map((video) => {
       const change = updates.get(video.id);
