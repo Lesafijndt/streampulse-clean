@@ -1,6 +1,6 @@
 # Yedi Hub — Private Twitch Request Deck
 
-A private Vite/React dashboard dedicated to `twitch.tv/2o3a`. Its job is to connect to 2o3a’s Twitch chat in the background and play the links requested with `!assr <URL>`. The public chat transcript is hidden. The app keeps the existing Gachi Arena / Swedish soap visual theme.
+A private Vite/React dashboard dedicated to `twitch.tv/2o3a`. Its job is to connect to 2o3a’s Twitch chat in the background and play the links requested with `!assr <URL>`. The public chat transcript is hidden. The app keeps the existing technical Swedish gachi-wrestling visual theme.
 
 ## Access control
 
