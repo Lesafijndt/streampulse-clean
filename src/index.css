@@ -155,11 +155,14 @@ body { min-width: 320px; background: #090308; }
 
 /* TikTok's official player is portrait; keep it portrait and centered in the same deck. */
 .gachi-tiktok-player {
-  width: auto;
+  width: min(100%, calc(100vh * 9 / 16));
   height: 100%;
   max-width: 100%;
   aspect-ratio: 9 / 16;
   flex: 0 1 auto;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
   border-radius: 12px;
   background: #000;
   box-shadow: 0 0 0 1px rgba(255, 44, 89, .42), 0 0 26px rgba(255, 22, 75, .14);
@@ -247,12 +250,11 @@ body { overflow-x: hidden; }
 .yedi-hub-wordmark { letter-spacing: -.045em; text-shadow: 0 0 24px rgba(255,40,88,.32) !important; }
 .swedish-soap-badge { border-radius: 999px !important; backdrop-filter: blur(12px); }
 
-/* The React workspace is a flex container rather than a semantic <main>. */
-.gachi-theme > div.flex-1 { position: relative; animation: yh-rise-in .48s cubic-bezier(.2,.7,.2,1) both; }
-.gachi-theme > div.flex-1 > div { min-width: 0; }
-.gachi-theme > div.flex-1 section { animation: yh-rise-in .52s cubic-bezier(.2,.7,.2,1) both; }
-.gachi-theme > div.flex-1 section:nth-child(2) { animation-delay: 65ms; }
-.gachi-theme > div.flex-1 section:nth-child(3) { animation-delay: 115ms; }
+/* The main app gets a clear editorial rhythm without changing its React layout. */
+.gachi-theme main { position: relative; }
+.gachi-theme main > * { animation: yh-rise-in .48s cubic-bezier(.2,.7,.2,1) both; }
+.gachi-theme main > *:nth-child(2) { animation-delay: 60ms; }
+.gachi-theme main > *:nth-child(3) { animation-delay: 120ms; }
 .gachi-theme section,
 .gachi-theme aside {
   position: relative; overflow: hidden;
@@ -332,23 +334,12 @@ body { overflow-x: hidden; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
 @media (min-width: 1024px) {
-  .gachi-theme > div.flex-1 { padding-bottom: 3rem; }
+  .gachi-theme main { padding-bottom: 3rem; }
+  .gachi-theme main > div { gap: 1.25rem; }
 }
 @media (max-width: 640px) {
   .gachi-theme header { padding-left: .85rem !important; padding-right: .85rem !important; }
   .gachi-theme section, .gachi-theme aside { border-radius: 15px !important; }
-  .gachi-theme > div.flex-1 { padding-left: .8rem !important; padding-right: .8rem !important; }
+  .gachi-theme main { padding-left: .8rem !important; padding-right: .8rem !important; }
   .gachi-theme .gachi-tiktok-player { border-radius: 12px !important; }
-}
-
-/* Request-deck-specific framing: the fixed channel remains obvious at every size. */
-.gachi-theme header .yedi-hub-wordmark { font-size: 1.1rem; }
-.gachi-theme header .swedish-soap-badge { letter-spacing: .11em; }
-.gachi-theme .gachi-mode-badge { white-space: nowrap; }
-.gachi-theme section h2 { text-wrap: balance; }
-.gachi-theme section button { min-height: 34px; }
-.gachi-theme .gachi-overlay { background-image: radial-gradient(ellipse at top left, rgba(255,49,95,.10), transparent 40%); }
-@media (max-width: 640px) {
-  .gachi-theme header .swedish-soap-badge { display: none; }
-  .gachi-theme header .gachi-mode-badge { font-size: 9px; }
 }
