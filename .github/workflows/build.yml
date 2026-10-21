@@ -26,7 +26,13 @@ jobs:
       - name: Install browser regression runtime
         run: |
           npm install --no-save --package-lock=false playwright
-          npx playwright install chromium
+          BROWSER_PATH="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -n "$BROWSER_PATH" ]; then
+            echo "CHROME_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
+            echo "Using runner browser: $BROWSER_PATH"
+          else
+            npx playwright install chromium
+          fi
       - name: Run browser regression tests
         run: |
           npm run dev -- --host 127.0.0.1 > /tmp/whale-cum-vite.log 2>&1 &

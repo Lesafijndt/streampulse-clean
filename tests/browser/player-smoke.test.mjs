@@ -2,9 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 const baseUrl=process.env.WHALE_CUM_TEST_BASE_URL||'http://127.0.0.1:5173';
+async function launchTestBrowser() {
+ const options={headless:true};
+ if(process.env.CHROME_EXECUTABLE_PATH) options.executablePath=process.env.CHROME_EXECUTABLE_PATH;
+ return chromium.launch(options);
+}
 
 test('dashboard mounts in desktop and mobile browser viewports without crashing',async()=>{
- const browser=await chromium.launch({headless:true});
+ const browser=await launchTestBrowser();
  try{
   const page=await browser.newPage({viewport:{width:1365,height:900}});
   const pageErrors=[],consoleErrors=[],failedRequests=[],badResponses=[];
@@ -25,7 +30,7 @@ test('dashboard mounts in desktop and mobile browser viewports without crashing'
 });
 
 test('provider command bridge sends correctly shaped YouTube and TikTok messages',async()=>{
- const browser=await chromium.launch({headless:true});
+ const browser=await launchTestBrowser();
  try{
   const page=await browser.newPage();
   await page.goto(`${baseUrl}/tests/browser/player-bridge.html`,{waitUntil:'domcontentloaded'});
