@@ -21,6 +21,8 @@ jobs:
           node-version-file: .nvmrc
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Run regression tests
+        run: npm test
       - name: Build production bundle
         run: npm run build
       - name: Report dependency audit findings

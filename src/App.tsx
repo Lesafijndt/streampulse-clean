@@ -64,6 +64,16 @@ import {
   deleteDoc,
   onSnapshot
 } from 'firebase/firestore';
+import {
+  buildCategoryCounts,
+  buildNextTrackTransition,
+  buildPreviousTrackTransition,
+  buildQueueSyncWrites,
+  filterVideosForView,
+  formatMediaDuration,
+  getDurationLabel,
+  getQueueMediaCounts
+} from './queueLogic.js';
 
 
 
@@ -155,6 +165,12 @@ function normalizeLegacyVideoVotes(video) {
   };
   const normalizedCategory = getVideoCategory(normalizedBase);
   const mediaType = getVideoMediaType({ ...normalizedBase, category: normalizedCategory });
+  const normalizedPlatform = validPlatforms.has(raw.platform) ? raw.platform : 'external';
+  const legacyEstimatedDuration = raw.durationSource !== 'metadata' && (
+    (Number(raw.durationSec) === 45 && String(raw.duration || '') === '00:45' &&
+      ['tiktok', 'twitch', 'kick'].includes(normalizedPlatform)) ||
+    (Number(raw.durationSec) === 225 && String(raw.duration || '') === '03:45')
+  );
 
   return {
     ...raw,
@@ -169,8 +185,9 @@ function normalizeLegacyVideoVotes(video) {
     mediaType,
     requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
     status: validStatuses.has(raw.status) ? raw.status : 'queue',
-    duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
-    durationSec: Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
+    duration: legacyEstimatedDuration ? '' : (typeof raw.duration === 'string' ? raw.duration : ''),
+    durationSec: !legacyEstimatedDuration && Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
+    durationSource: legacyEstimatedDuration ? 'unknown' : (raw.durationSource || 'unknown'),
     addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
     watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
     note: typeof raw.note === 'string' ? raw.note : '',
@@ -1015,10 +1032,16 @@ function YediHubAppContent() {
       const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos');
       const unsubscribe = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
           if (!active) return;
-          setCloudSynced(true);
-          setSyncStatusText('Cloud Synced');
+          const cloudConfirmed = !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites;
+          setCloudSynced(cloudConfirmed);
+          setSyncStatusText(snapshot.metadata.fromCache
+            ? 'Offline cache — changes may not be synced'
+            : snapshot.metadata.hasPendingWrites
+            ? 'Syncing queue changes…'
+            : 'Cloud Synced');
 
           // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
           // requests' displayed vote counts honest and makes voter identity persistence consistent.
@@ -1365,9 +1388,7 @@ function YediHubAppContent() {
   const counts = useMemo(() => {
     const queued = videos.filter((video) => video.status === 'queue');
     return {
-      queue: queued.length,
-      music: queued.filter((video) => getVideoMediaType(video) === 'Music').length,
-      nonMusic: queued.filter((video) => getVideoMediaType(video) === 'Non-Music').length,
+      ...getQueueMediaCounts(videos, getVideoMediaType),
       watch_later: videos.filter((video) => video.status === 'watch_later').length,
       watched: videos.filter((video) => video.status === 'watched').length,
     };
@@ -1378,21 +1399,22 @@ function YediHubAppContent() {
     [videos]
   );
 
-  const categoryCounts = useMemo(() => {
-    const tabVideos = videos.filter((video) => video.status === activeTab);
-    // "All Categories" reflects the active Music/Non-Music filter, while
-    // each category pill keeps its own actual count so Music doesn't drop to 0
-    // simply because the Non-Music shortcut is selected.
-    const eligibleVideos = tabVideos.filter((video) =>
-      mediaTypeFilter === 'All' || getVideoMediaType(video) === mediaTypeFilter
-    );
-    const counts = { All: eligibleVideos.length };
-    tabVideos.forEach((video) => {
-      const category = getVideoCategory(video);
-      counts[category] = (counts[category] || 0) + 1;
-    });
-    return counts;
-  }, [videos, activeTab, mediaTypeFilter]);
+  const categoryCounts = useMemo(
+    () => buildCategoryCounts(videos, activeTab, mediaTypeFilter, getVideoCategory, getVideoMediaType),
+    [videos, activeTab, mediaTypeFilter]
+  );
+  const syncIndicatorLabel = cloudSynced
+    ? 'Cloud synced'
+    : /failed|unavailable|offline|error/i.test(syncStatusText)
+    ? 'Cloud issue'
+    : /not configured|saved in this browser|local save/i.test(syncStatusText)
+    ? 'Local save'
+    : 'Syncing';
+  const syncIndicatorClass = cloudSynced
+    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+    : syncIndicatorLabel === 'Cloud issue'
+    ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+    : 'bg-amber-500/10 border-amber-500/30 text-amber-200';
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -1403,33 +1425,12 @@ function YediHubAppContent() {
     return new Map(orderedQueue.map((video, index): [string, number] => [String(video.id), index + 1]));
   }, [videos]);
 
-  const filteredVideos = useMemo(() => {
-    return videos
-      .filter((v) => v.status === activeTab)
-      .filter((v) => (selectedCategory === 'All' ? true : getVideoCategory(v) === selectedCategory))
-      .filter((v) => mediaTypeFilter === 'All' || getVideoMediaType(v) === mediaTypeFilter)
-      .filter((v) => {
-        if (!searchQuery.trim()) return true;
-        const q = searchQuery.toLowerCase();
-        return String(v.title || '').toLowerCase().includes(q) ||
-          String(v.requestedBy || '').toLowerCase().includes(q) ||
-          String(v.category || '').toLowerCase().includes(q) ||
-          String(v.note || '').toLowerCase().includes(q);
-      })
-      .sort((a, b) => {
-        if (activeTab === 'queue') return compareQueueOrder(a, b);
-        if (activeTab === 'watched' && (sortBy === 'priority' || sortBy === 'played')) {
-          return (Number(b.playedAt) || Number(b.timestamp) || 0) -
-            (Number(a.playedAt) || Number(a.timestamp) || 0) ||
-            (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) ||
-            String(b.id || '').localeCompare(String(a.id || ''));
-        }
-        if (sortBy === 'played') return (Number(b.playedAt) || Number(b.timestamp) || 0) - (Number(a.playedAt) || Number(a.timestamp) || 0) || compareQueueOrder(a, b);
-        if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
-        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
-        return compareQueueOrder(a, b);
-      });
-  }, [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]);
+  const filteredVideos = useMemo(
+    () => filterVideosForView(videos, {
+      activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy
+    }, { getVideoCategory, getVideoMediaType, compareQueueOrder }),
+    [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]
+  );
 
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
@@ -1520,9 +1521,8 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('whale cum: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
-          sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
-          sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
+          sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !position your spot/ETA · !queue queue status.');
+          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute. ETAs are estimates.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -1593,11 +1593,11 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
     if (!requestText) {
-      sendTwitchChatReply(`@${requester} paste a video URL directly, or use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
+      sendTwitchChatReply(`@${requester} Use !assr <URL or title>.`);
       return;
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} requests are currently closed. Try again when the streamer reopens the queue.`);
+      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
 
@@ -1609,26 +1609,33 @@ function YediHubAppContent() {
         const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
-          sendTwitchChatReply(`@${requester} couldn't find "${requestText.slice(0, 45)}". Try a more specific title or paste a URL.`);
+          sendTwitchChatReply(`@${requester} No YouTube match. Try a shorter title or URL.`);
           return;
         }
         url = result.results[0].url;
         title = result.results[0].title || '';
       } catch (error) {
         console.warn('Chat title search failed:', error);
-        sendTwitchChatReply(`@${requester} title search is temporarily unavailable. Please try a direct video URL.`);
+        sendTwitchChatReply(`@${requester} Search unavailable; try a direct URL.`);
         return;
       }
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} requests are currently closed. Your video was not added; try again when the streamer reopens the queue.`);
+      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
+    const previousIds = new Set(videosRef.current.map((video) => String(video.id)));
     const ok = await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
       note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
     });
-    // Successful requests stay silent in chat to avoid spam; errors and closed-queue replies remain enabled.
+    if (ok) {
+      const added = videosRef.current.find((video) => !previousIds.has(String(video.id))) || null;
+      const waiting = videosRef.current.filter((video) => video.status === 'queue').sort(compareQueueOrder);
+      const position = added ? waiting.findIndex((video) => String(video.id) === String(added.id)) + 1 : 0;
+      const titleLabel = String(added?.title || title || 'video').slice(0, 48);
+      sendTwitchChatReply(`@${requester} Added "${titleLabel}"${position > 0 ? ' (#' + position + ')' : ''}.`);
+    }
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
@@ -1647,6 +1654,7 @@ function YediHubAppContent() {
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Room is not set.');
       return false;
     }
     // A closed queue blocks every new request, including requests sent by staff. Staff can
@@ -1654,6 +1662,7 @@ function YediHubAppContent() {
     // latest setting, not the value captured by an older render.
     if (!queueOpenRef.current) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -1670,6 +1679,7 @@ function YediHubAppContent() {
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.videoId || !result.url) {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
+          if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
           return false;
         }
         normalizedUrl = result.url;
@@ -1678,6 +1688,7 @@ function YediHubAppContent() {
       } catch (error) {
         console.warn('TikTok short-link resolution failed.', error);
         addToast('Could not resolve this TikTok share link here. Try copying the full TikTok URL with /video/ followed by its ID.', 'warning');
+        if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
         return false;
       }
     }
@@ -1693,7 +1704,7 @@ function YediHubAppContent() {
       addToast('That video already has an entry in the queue or history. Duplicate request ignored.', 'warning');
       if (fromChat) {
         const requester = normalizeTwitchLogin(requestedBy);
-        sendTwitchChatReply(`@${requester || 'viewer'} that video already exists in the queue or history, so I did not add it again.`);
+        sendTwitchChatReply(`@${requester || 'viewer'} Already requested (queue/history).`);
       }
       return false;
     }
@@ -1701,21 +1712,33 @@ function YediHubAppContent() {
     // while metadata/TikTok resolution is still running.
     pendingMediaRequestKeysRef.current.add(identityKey);
 
-    // Fetch public oEmbed metadata for titles and backdrop thumbnails when available.
+    // Fetch title/thumbnail and duration metadata. If title and thumbnail are already known,
+    // duration enrichment continues in the background so chat requests don't wait for scraping.
     let resolvedTitle = String(title || '').trim();
     let resolvedThumbnail = parsed.thumbnail || '';
-    if (!resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co')) {
-      try {
-        const metadataResponse = await fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`);
-        if (metadataResponse.ok) {
-          const metadata = await metadataResponse.json().catch(() => ({}));
-          if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
-          if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
-            resolvedThumbnail = metadata.thumbnailUrl;
-          }
+    let resolvedDurationSec = null;
+    const needsBasicMetadata = !resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co');
+    const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`, {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(async (response) => {
+      if (!response.ok) return null;
+      return response.json().catch(() => null);
+    }).catch((error) => {
+      console.warn('Media metadata lookup failed; using URL-based category detection.', error);
+      return null;
+    });
+    let deferredMetadataPromise = mediaMetadataPromise;
+    if (needsBasicMetadata) {
+      const metadata = await mediaMetadataPromise;
+      deferredMetadataPromise = null;
+      if (metadata) {
+        if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+        if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
+          resolvedThumbnail = metadata.thumbnailUrl;
         }
-      } catch (error) {
-        console.warn('Media metadata lookup failed; using URL-based category detection.', error);
+        const candidateDuration = Number(metadata.durationSec);
+        if (Number.isFinite(candidateDuration) && candidateDuration > 0) resolvedDurationSec = candidateDuration;
       }
     }
 
@@ -1723,6 +1746,7 @@ function YediHubAppContent() {
     if (!queueOpenRef.current) {
       pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -1755,8 +1779,9 @@ function YediHubAppContent() {
       category: finalCategory,
       categoryManuallySet,
       mediaType,
-      duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? '00:45' : '03:45',
-      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? 45 : 225,
+      duration: resolvedDurationSec ? formatMediaDuration(resolvedDurationSec) : '',
+      durationSec: resolvedDurationSec || undefined,
+      durationSource: resolvedDurationSec ? 'metadata' : 'unknown',
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: 'queue',
@@ -1771,8 +1796,21 @@ function YediHubAppContent() {
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
-    syncAddVideo(newVideo);
+    await syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
+
+    if (deferredMetadataPromise) {
+      void deferredMetadataPromise.then((metadata) => {
+        const candidateDuration = Number(metadata?.durationSec);
+        if (!Number.isFinite(candidateDuration) || candidateDuration <= 0) return;
+        if (!videosRef.current.some((video) => String(video.id) === String(newVideo.id))) return;
+        void syncUpdateVideo(newVideo.id, {
+          duration: formatMediaDuration(candidateDuration),
+          durationSec: candidateDuration,
+          durationSource: 'metadata'
+        });
+      });
+    }
 
     addToast(`Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] straight to the queue!`, 'success');
     return true;
@@ -1858,48 +1896,8 @@ function YediHubAppContent() {
       null;
     if (!outgoing) return;
 
-    const queuedItems = latestVideos.filter((video) =>
-      video.status === 'queue' && String(video.id) !== String(outgoing.id)
-    );
-    // Previous stores an explicit forward target. Honor it before normal queue order so
-    // Previous -> Next always returns to the track that was just left.
-    const returnTargetId = String(outgoing.nextTrackOverrideId || '');
-    const nextOne = (returnTargetId && queuedItems.find((video) => String(video.id) === returnTargetId)) ||
-      queuedItems.sort(compareQueueOrder)[0] ||
-      null;
-
-    const transitionAt = Date.now();
-    const updatesById = new Map();
-    latestVideos.forEach((video) => {
-      if (video.status === 'playing') {
-        updatesById.set(String(video.id), {
-          status: 'watched',
-          watchedAt: 'Just now',
-          playedAt: transitionAt,
-          nextTrackOverrideId: null,
-        });
-      }
-    });
-    // Clear the return target when it is consumed (or if its target was deleted).
-    updatesById.set(String(outgoing.id), {
-      status: 'watched',
-      watchedAt: 'Just now',
-      playedAt: transitionAt,
-      nextTrackOverrideId: null,
-    });
-    if (nextOne) {
-      updatesById.set(String(nextOne.id), {
-        status: 'playing',
-        pinned: false,
-        playedAt: transitionAt + 1,
-        nextTrackOverrideId: null,
-      });
-    }
-
-    const nextVideos = latestVideos.map((video) => {
-      const updates = updatesById.get(String(video.id));
-      return updates ? { ...video, ...updates } : video;
-    });
+    const transition = buildNextTrackTransition(latestVideos, outgoing, compareQueueOrder);
+    const { updatesById, nextVideos, nextOne } = transition;
     videosRef.current = nextVideos;
     setVideos(nextVideos);
     currentVideoRef.current = nextOne
@@ -1909,13 +1907,8 @@ function YediHubAppContent() {
 
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updatesById.forEach((updates, id) => {
-        const item = latestVideos.find((video) => String(video.id) === id) || { id };
-        batch.set(
-          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
-          { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
-          { merge: true }
-        );
+      buildQueueSyncWrites(updatesById, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
+        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
       });
       batch.commit().catch((error) => {
         console.warn('Next-track transition could not sync to Firestore.', error);
@@ -1995,39 +1988,12 @@ function YediHubAppContent() {
       null;
     if (!outgoing) return;
 
-    const previouslyPlayed = latestVideos
-      .filter((video) => video.status === 'watched' && String(video.id) !== String(outgoing.id))
-      .sort((a, b) =>
-        (Number(b.playedAt) || Number(b.timestamp) || 0) -
-        (Number(a.playedAt) || Number(a.timestamp) || 0) ||
-        String(b.id || '').localeCompare(String(a.id || ''))
-      )[0];
-
+    const transition = buildPreviousTrackTransition(latestVideos, outgoing);
+    const { previouslyPlayed, updates, nextVideos } = transition;
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
     }
-
-    const now = Date.now();
-    const updates = new Map([
-      [String(outgoing.id), {
-        status: 'queue',
-        pinned: false,
-        nextTrackOverrideId: null,
-      }],
-      [String(previouslyPlayed.id), {
-        status: 'playing',
-        pinned: false,
-        playedAt: now,
-        // This persistent ID guarantees the next button returns to the exact track left here.
-        nextTrackOverrideId: String(outgoing.id),
-      }],
-    ]);
-
-    const nextVideos = latestVideos.map((video) => {
-      const change = updates.get(String(video.id));
-      return change ? { ...video, ...change } : video;
-    });
     videosRef.current = nextVideos;
     setVideos(nextVideos);
     currentVideoRef.current = nextVideos.find((video) => String(video.id) === String(previouslyPlayed.id)) || null;
@@ -2035,13 +2001,8 @@ function YediHubAppContent() {
 
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updates.forEach((change, id) => {
-        const item = latestVideos.find((video) => String(video.id) === id) || { id };
-        batch.set(
-          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
-          { ...item, ...change, channelRoom: normalizeRoomName(channelRoom) },
-          { merge: true }
-        );
+      buildQueueSyncWrites(updates, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
+        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
       });
       batch.commit().catch((error) => {
         console.warn('Previous-track transition could not sync to Firestore.', error);
@@ -2343,9 +2304,11 @@ function YediHubAppContent() {
     }
     handleUpvote(target.id, voterLogin).then((result) => {
       if (!result?.ok && result?.reason === 'own-request') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you cannot upvote your own request.`);
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Can't upvote your own request.`);
       } else if (!result?.ok && result?.reason === 'already-voted') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you already voted for that video. You can upvote different videos.`);
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Already voted for that video.`);
+      } else if (result?.ok) {
+        sendTwitchChatReply('@' + normalizeTwitchLogin(voterLogin) + ' +1 vote: ' + String(result.video?.title || 'video').slice(0, 38) + '.');
       }
     });
   };
@@ -2387,13 +2350,11 @@ function YediHubAppContent() {
     });
 
     if (!messages.length) {
-      sendTwitchChatReply(`@${requester} I couldn't find an upcoming request from you. Submit with !assr <URL>, then use !position again.`);
+      sendTwitchChatReply(`@${requester} No upcoming requests. Use !assr <URL/title>.`);
       return;
     }
     const visibleItems = messages.slice(0, 3);
-    const extraCount = Math.max(0, messages.length - visibleItems.length);
-    const extraNote = extraCount > 0 ? `; plus ${extraCount} more status item${extraCount === 1 ? '' : 's'}` : '';
-    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}${extraNote}. Waits are estimates and votes can change positions.`);
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}. Waits are estimates.`);
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
@@ -2404,12 +2365,12 @@ function YediHubAppContent() {
       .filter((video) => video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === requester)
       .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
     if (!ownedWaiting.length) {
-      sendTwitchChatReply(`@${requester} you have no waiting requests to remove. Playing/already-played videos cannot be removed with !remove.`);
+      sendTwitchChatReply(`@${requester} No waiting request to remove.`);
       return;
     }
     const target = ownedWaiting[0];
     void syncDeleteVideo(target.id);
-    sendTwitchChatReply(`@${requester} removed "${String(target.title || 'your request').slice(0, 70)}" from the queue.`);
+    sendTwitchChatReply(`@${requester} Removed your latest waiting request.`);
   };
   handleRemoveOwnRequestRef.current = handleRemoveOwnRequest;
 
@@ -2417,12 +2378,12 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(requesterLogin);
     const playing = videos.find((video) => video.status === 'playing') || null;
     const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const top = queued.slice(0, 5).map((video, index) =>
-      `#${index + 1} ${String(video.title || 'Untitled').slice(0, 35)} (@${normalizeTwitchLogin(video.requestedBy) || 'viewer'}, +${Number(video.upvotes) || 0})`
+    const top = queued.slice(0, 3).map((video, index) =>
+      '#' + (index + 1) + ' ' + String(video.title || 'Untitled').slice(0, 26)
     );
     const myCount = queued.filter((video) => normalizeTwitchLogin(video.requestedBy) === requester).length;
-    const playingText = playing ? `Now playing: "${String(playing.title || 'Untitled').slice(0, 45)}".` : 'Nothing is playing right now.';
-    sendTwitchChatReply(`${playingText} Queue: ${queued.length} waiting; ${myCount} of yours waiting. ${top.length ? 'Next up: ' + top.join(' | ') + (queued.length > top.length ? ` | +${queued.length - top.length} more` : '') : 'The waiting queue is empty.'}`);
+    const playingText = playing ? 'Now: "' + String(playing.title || 'Untitled').slice(0, 32) + '"' : 'Nothing playing';
+    sendTwitchChatReply('@' + requester + ' ' + playingText + ' | ' + queued.length + ' waiting (' + myCount + ' yours). Next: ' + (top.length ? top.join(', ') : 'empty') + '.');
   };
   handleQueueSummaryRef.current = handleQueueSummary;
 
@@ -2611,15 +2572,17 @@ function YediHubAppContent() {
           </div>
 
           {/* Sync & Mode Badges */}
-          <div className="hidden xl:flex items-center gap-2.5 bg-[#141926] border border-slate-800 rounded-xl px-3.5 py-1.5 text-xs">
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className="text-slate-300 font-medium">{syncStatusText}</span>
+          <div
+            title={syncStatusText}
+            aria-label={`Cloud sync: ${syncStatusText}`}
+            className={`flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
+          >
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400'}`} />
+              <span className="font-semibold whitespace-nowrap">{syncIndicatorLabel}</span>
             </span>
-
             <span className="text-slate-600">|</span>
-
-            <span className="text-slate-400">
+            <span className="whitespace-nowrap text-slate-300">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
           </div>
@@ -3169,7 +3132,7 @@ function YediHubAppContent() {
                             </div>
                           </div>
                           <span className="absolute bottom-1 right-1 px-1.5 py-0.2 rounded bg-black/80 text-[10px] font-mono font-bold text-slate-200">
-                            {video.duration}
+                            {getDurationLabel(video)}
                           </span>
                         </div>
 
