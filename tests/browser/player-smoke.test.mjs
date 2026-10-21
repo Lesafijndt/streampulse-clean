@@ -16,6 +16,18 @@ function renderInChrome(url, viewport = '1365,900') {
   return result.stdout || '';
 }
 
+test('Vite serves the dashboard and successfully transforms the main React module', async () => {
+  const home = await fetch(baseUrl, { cache: 'no-store' });
+  assert.equal(home.status, 200, 'dashboard HTML should load');
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /id="root"/i, 'dashboard HTML must contain its React mount point');
+
+  const moduleResponse = await fetch(baseUrl + '/src/App.tsx', { cache: 'no-store' });
+  const moduleText = await moduleResponse.text();
+  assert.equal(moduleResponse.status, 200, 'main React module should compile: ' + moduleText.slice(0, 2500));
+  assert.doesNotMatch(moduleText, /Internal Server Error|Failed to resolve import/i, 'Vite should not return a transform error');
+});
+
 test('provider command bridge sends correctly shaped YouTube and TikTok messages in a browser', () => {
   const html = renderInChrome(baseUrl + '/tests/browser/player-bridge.html?autotest=1');
   assert.match(html, /data-test-status="pass"/, 'YouTube and TikTok browser command assertions should pass; output: ' + html.slice(-3500));

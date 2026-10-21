@@ -1897,44 +1897,44 @@ body { background: #03070b; }
 
 /* Shared component system: one panel surface, one inset surface, and consistent controls. */
 .gachi-theme {
-  --gachi-surface: rgba(6, 16, 25, .88);
-  --gachi-surface-raised: rgba(9, 24, 36, .9);
-  --gachi-surface-line: rgba(120, 190, 222, .17);
-  --gachi-surface-line-strong: rgba(254, 204, 0, .3);
-  --gachi-text-muted: #9cafbd;
+  --gachi-surface: rgba(18, 5, 12, .9);
+  --gachi-surface-raised: rgba(30, 8, 18, .92);
+  --gachi-surface-line: rgba(255, 84, 120, .18);
+  --gachi-surface-line-strong: rgba(255, 189, 112, .35);
+  --gachi-text-muted: #b9a3ad;
 }
 .gachi-theme .gachi-panel {
   border-color: var(--gachi-surface-line) !important;
-  background: linear-gradient(145deg, rgba(8, 27, 42, .94), rgba(4, 12, 20, .96)) !important;
-  box-shadow: 0 15px 42px rgba(0, 0, 0, .29), inset 0 1px 0 rgba(255,255,255,.035) !important;
+  background: linear-gradient(145deg, rgba(28, 7, 17, .96), rgba(10, 4, 9, .97)) !important;
+  box-shadow: 0 15px 42px rgba(0, 0, 0, .3), inset 0 1px 0 rgba(255,255,255,.035) !important;
 }
 .gachi-theme .gachi-panel-header { border-bottom: 1px solid var(--gachi-surface-line); padding-bottom: .65rem; }
 .gachi-theme .gachi-inset-card,
 .gachi-theme .gachi-stat-card {
   border-color: var(--gachi-surface-line) !important;
-  background: linear-gradient(145deg, rgba(12, 32, 47, .83), rgba(5, 14, 23, .88)) !important;
+  background: linear-gradient(145deg, rgba(34, 9, 21, .86), rgba(13, 5, 11, .9)) !important;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
 }
 .gachi-theme .gachi-stat-card { min-height: 82px; }
 .gachi-theme .gachi-chart-track { background: rgba(255,255,255,.075); }
 .gachi-theme .gachi-chart-track > div {
-  background: linear-gradient(90deg, #006aa7, #36a1c6 48%, #fecc00) !important;
-  box-shadow: 0 0 9px rgba(0,106,167,.24);
+  background: linear-gradient(90deg, #a91542, #ff2858 48%, #ffbd70) !important;
+  box-shadow: 0 0 9px rgba(255,40,88,.2);
 }
 .gachi-theme .gachi-control-btn {
   border-color: var(--gachi-surface-line-strong) !important;
-  background: linear-gradient(145deg, rgba(17, 43, 60, .95), rgba(7, 19, 29, .95)) !important;
-  color: #eaf6ff !important;
+  background: linear-gradient(145deg, rgba(47, 12, 28, .96), rgba(17, 5, 12, .97)) !important;
+  color: #f8edf1 !important;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
 }
 .gachi-theme .gachi-control-btn-primary {
-  border-color: rgba(254,204,0,.55) !important;
-  background: linear-gradient(100deg, #07517d, #087eb1 62%, #8a6c00) !important;
+  border-color: rgba(255,189,112,.6) !important;
+  background: linear-gradient(100deg, #861337, #d91d4b 62%, #8c4c29) !important;
   color: #fff !important;
 }
-.gachi-theme .gachi-control-btn:focus-visible { outline: 2px solid #fecc00; outline-offset: 2px; }
+.gachi-theme .gachi-control-btn:focus-visible { outline: 2px solid #ffbd70; outline-offset: 2px; }
 .gachi-theme .gachi-status-pill { white-space: nowrap; max-width: 52%; overflow: hidden; text-overflow: ellipsis; }
-.gachi-theme .gachi-stats-panel { color: #f5f9ff; }
+.gachi-theme .gachi-stats-panel { color: #fff7fa; }
 @media (max-width: 640px) {
   .gachi-theme .gachi-status-pill { max-width: 58%; font-size: 8px; }
   .gachi-theme .gachi-stat-card { min-height: 78px; }
@@ -1945,20 +1945,17 @@ body { background: #03070b; }
 .gachi-theme .gachi-select,
 .gachi-theme .gachi-input {
   border: 1px solid var(--gachi-surface-line) !important;
-  background: linear-gradient(145deg, rgba(12, 32, 47, .9), rgba(5, 14, 23, .95)) !important;
-  color: #e5eef5 !important;
+  background: linear-gradient(145deg, rgba(34, 9, 21, .9), rgba(13, 5, 11, .96)) !important;
+  color: #f3e8ed !important;
 }
 .gachi-theme .gachi-select:focus,
 .gachi-theme .gachi-input:focus {
-  outline: 2px solid rgba(254, 204, 0, .5);
+  outline: 2px solid rgba(255, 189, 112, .5);
   outline-offset: 1px;
 }
-.gachi-theme .gachi-input::placeholder { color: #72889a; }
-.gachi-theme .gachi-inline-icon-btn {
-  color: #98aaba;
-  transition: color .15s ease;
-}
-.gachi-theme .gachi-inline-icon-btn:hover { color: #fecc00; }
+.gachi-theme .gachi-input::placeholder { color: #a48d98; }
+.gachi-theme .gachi-inline-icon-btn { color: #bca6af; transition: color .15s ease; }
+.gachi-theme .gachi-inline-icon-btn:hover { color: #ffbd70; }
 .gachi-theme .gachi-counter-badge {
   display: inline-flex;
   min-width: 1.45rem;
@@ -1966,15 +1963,15 @@ body { background: #03070b; }
   align-items: center;
   border: 1px solid var(--gachi-surface-line);
   border-radius: .45rem;
-  background: rgba(255,255,255,.06);
-  color: #b8c7d3;
+  background: rgba(255,255,255,.045);
+  color: #e3cbd5;
   padding: .1rem .35rem;
   font-size: 10px;
   font-weight: 800;
 }
 .gachi-theme .gachi-counter-badge-active {
-  border-color: rgba(254,204,0,.35);
-  background: rgba(254,204,0,.12);
-  color: #ffe9a3;
+  border-color: rgba(255,189,112,.4);
+  background: rgba(255,189,112,.12);
+  color: #ffe3c0;
 }
-.gachi-theme .gachi-category-count { background: rgba(255,255,255,.07); border: 1px solid var(--gachi-surface-line); color: #b8c7d3; }
+.gachi-theme .gachi-category-count { background: rgba(255,255,255,.045); border: 1px solid var(--gachi-surface-line); color: #e3cbd5; }
