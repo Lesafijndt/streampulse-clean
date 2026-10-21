@@ -884,3 +884,174 @@ body { background: #03070b; }
   .gachi-workspace { grid-template-columns: minmax(210px, 22vw) minmax(0,1fr) !important; }
   .gachi-queue-column { grid-column: 1 / -1; }
 }
+
+
+/* Final desktop fit pass: prevent controls from stealing width from media details. */
+.gachi-player-footer {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  gap: 1rem !important;
+  width: 100%;
+  min-width: 0;
+}
+.gachi-player-meta {
+  width: 100% !important;
+  min-width: 0 !important;
+  flex: 0 0 auto !important;
+}
+.gachi-player-meta h2 {
+  max-width: 100%;
+}
+.gachi-player-controlbar {
+  width: 100% !important;
+  min-width: 0 !important;
+  flex: 0 0 auto !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: .55rem !important;
+}
+.gachi-player-controlbar > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.gachi-media-controls {
+  display: flex !important;
+  flex: 0 1 auto !important;
+  flex-wrap: wrap !important;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.gachi-player-controlbar .max-w-56 {
+  flex: 1 1 180px;
+  max-width: 240px;
+}
+
+/* Queue cards retain a single readable information row; controls use a compact two-row icon grid. */
+.gachi-queue-panel { min-width: 0; }
+.gachi-queue-feed { padding-bottom: .35rem; }
+.gachi-queue-item {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: .55rem !important;
+  min-height: 82px;
+  padding: .55rem !important;
+}
+.gachi-queue-item > div:first-child {
+  display: flex !important;
+  flex: 1 1 0% !important;
+  width: auto !important;
+  min-width: 0 !important;
+  align-items: center !important;
+  gap: .45rem !important;
+}
+.gachi-queue-item > div:first-child > div:first-child {
+  flex: 0 0 1.1rem;
+  width: 1.1rem !important;
+}
+.gachi-queue-thumbnail {
+  flex: 0 0 3.25rem !important;
+  width: 3.25rem !important;
+  height: 3.25rem !important;
+}
+.gachi-queue-details {
+  flex: 1 1 0% !important;
+  width: auto !important;
+  min-width: 0 !important;
+  overflow: hidden;
+}
+.gachi-queue-details > div:first-child {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: .2rem .25rem !important;
+  max-width: 100%;
+  overflow: hidden;
+}
+.gachi-queue-details select,
+.gachi-queue-details > div:first-child > span {
+  max-width: 100%;
+  white-space: nowrap;
+  font-size: .58rem !important;
+  line-height: 1.15 !important;
+}
+.gachi-queue-details h4 {
+  margin-top: .1rem;
+  font-size: .76rem !important;
+  line-height: 1.2 !important;
+  overflow-wrap: anywhere;
+}
+.gachi-queue-details > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .15rem .35rem !important;
+  font-size: .61rem !important;
+  line-height: 1.25 !important;
+}
+.gachi-queue-actions {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  grid-auto-flow: row;
+  align-content: center;
+  align-items: center;
+  justify-content: stretch !important;
+  gap: .25rem !important;
+  flex: 0 0 142px !important;
+  width: 142px !important;
+  min-width: 142px;
+  padding: 0 !important;
+}
+.gachi-queue-actions button {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 0 !important;
+  width: 100%;
+  height: 1.65rem;
+  padding: .15rem .2rem !important;
+  border-radius: 7px !important;
+  font-size: .6rem !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.gachi-queue-actions button svg { width: .8rem; height: .8rem; flex-shrink: 0; }
+.gachi-queue-actions .gachi-queue-play-now {
+  grid-column: span 2;
+  padding-left: .25rem !important;
+  padding-right: .25rem !important;
+  font-size: .59rem !important;
+}
+.gachi-queue-actions button span { min-width: 0; }
+@media (max-width: 1199px) {
+  .gachi-queue-actions {
+    flex-basis: 128px !important;
+    width: 128px !important;
+    min-width: 128px;
+  }
+}
+@media (max-width: 767px) {
+  .gachi-player-footer { gap: .8rem !important; }
+  .gachi-queue-item {
+    align-items: flex-start !important;
+    flex-direction: column !important;
+  }
+  .gachi-queue-item > div:first-child { width: 100% !important; }
+  .gachi-queue-actions {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0;
+    flex-wrap: wrap !important;
+    justify-content: flex-end !important;
+    padding: 0 !important;
+  }
+  .gachi-queue-actions button { width: auto; }
+}
