@@ -60,12 +60,11 @@
   <path d="M282 333L278 389M302 334L310 389" stroke="#77717a" stroke-width="4"/>
 </g>
 <!-- VHS-title ghosting and distressed diagonal marks -->
-<g font-family="Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" font-weight="900" text-anchor="middle">
-  <text x="960" y="123" font-size="27" letter-spacing="13" fill="#fecc00" opacity=".87">ANIKI WRESTLING • SVENSK HARDCORE DIVISION</text>
-  <text x="960" y="206" font-size="77" letter-spacing="3" fill="#ff315f" opacity=".23" transform="translate(5 0)">GACHIMUCHI</text>
-  <text x="960" y="201" font-size="77" letter-spacing="3" fill="#f6f0e7" stroke="#111017" stroke-width="4" paint-order="stroke">GACHIMUCHI</text>
-  <text x="960" y="253" font-size="25" letter-spacing="10" fill="#83d5ff">NO MERCY • NO SKIP • NO WEAKNESS</text>
-  <text x="960" y="296" font-size="19" letter-spacing="5" fill="#fecc00" opacity=".87">♂ DUNGEON PIT  •  2O3A MAIN EVENT  •  SWEDEN ♂</text>
+<g opacity=".8" fill="none" stroke-linecap="square">
+  <path d="M590 145L650 145M1270 145L1330 145" stroke="#fecc00" stroke-width="4"/>
+  <path d="M620 160L660 160M1260 160L1300 160" stroke="#006aa7" stroke-width="3"/>
+  <path d="M720 210H1200" stroke="#fff" stroke-opacity=".12" stroke-width="1"/>
+  <path d="M780 280H1140" stroke="#ff315f" stroke-opacity=".22" stroke-width="2"/>
 </g>
 <rect width="1920" height="440" fill="url(#scan)" opacity=".7"/>
 <g stroke="#fff" stroke-opacity=".1" stroke-width="1"><path d="M0 12L1920 12M0 426L1920 426"/><path d="M20 0V440M1900 0V440"/></g>
