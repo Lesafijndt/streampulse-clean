@@ -1490,19 +1490,18 @@ function YediHubAppContent() {
       }
     }
 
-    // Reject duplicates that are already waiting, playing, or saved for later. Recently watched
-    // items may be requested again later; this prevents duplicate copies playing back-to-back.
+    // Only allow each media identity once in the room's queue/history, so it can't be
+    // re-requested after playing either. Remove the old entry if it should become requestable again.
     const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
-    const activeStatuses = new Set(['queue', 'playing', 'watch_later']);
-    const isAlreadyActive = (video) => activeStatuses.has(video?.status)
-      && getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey;
-    const alreadyExists = videosRef.current.some(isAlreadyActive);
+    const alreadyExists = videosRef.current.some((video) =>
+      getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
+    );
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
     if (alreadyExists || requestAlreadyPending) {
-      addToast('That video is already queued, playing, or saved for later. Duplicate request ignored.', 'warning');
+      addToast('That video already has an entry in the queue or history. Duplicate request ignored.', 'warning');
       if (fromChat) {
         const requester = normalizeTwitchLogin(requestedBy);
-        sendTwitchChatReply(`@${requester || 'viewer'} that video is already queued, playing, or saved for later, so I did not add it again.`);
+        sendTwitchChatReply(`@${requester || 'viewer'} that video already exists in the queue or history, so I did not add it again.`);
       }
       return false;
     }
