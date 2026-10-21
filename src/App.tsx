@@ -584,6 +584,8 @@ function YediHubAppContent() {
   // Player State
   const [simProgress, setSimProgress] = useState(0);
   const [isTheatreMode, setIsTheatreMode] = useState(false);
+  const [youtubeVolume, setYoutubeVolume] = useState(100);
+  const [youtubeMuted, setYoutubeMuted] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [tiktokPlaybackState, setTikTokPlaybackState] = useState({ requestId: '', isPlaying: true, isMuted: false });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -1693,11 +1695,26 @@ function YediHubAppContent() {
       if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
       else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
       else if (volumeCommand.action === 'set') next = volumeCommand.value;
-      else if (volumeCommand.action === 'mute') { player.mute(); addToast('YouTube player muted by staff command.', 'info'); return; }
-      else if (volumeCommand.action === 'unmute') { player.unMute(); addToast('YouTube player unmuted by staff command.', 'info'); return; }
+      else if (volumeCommand.action === 'mute') {
+        player.mute();
+        setYoutubeMuted(true);
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
+        addToast('YouTube player muted by staff command.', 'info');
+        return;
+      }
+      else if (volumeCommand.action === 'unmute') {
+        player.unMute();
+        setYoutubeMuted(false);
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
+        addToast('YouTube player unmuted by staff command.', 'info');
+        return;
+      }
       player.setVolume(next);
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
+      setYoutubeVolume(next);
+      setYoutubeMuted(next === 0);
+      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
       addToast(`YouTube volume set to ${next}%.`, 'success');
       return;
     }
@@ -1705,11 +1722,11 @@ function YediHubAppContent() {
     if (currentVideo?.platform === 'tiktok') {
       const iframeWindow = tiktokIframeRef.current?.contentWindow;
       if (!iframeWindow) { addToast('TikTok player is not ready for volume commands yet.', 'warning'); return; }
-      if (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100) {
-        addToast('TikTok only exposes mute/unmute to remote commands. Use its in-player volume slider for exact levels.', 'info');
+      if (volumeCommand.action === 'up' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100)) {
+        addToast('TikTok does not allow exact volume changes from chat commands. Use the volume control inside the TikTok player; !mute, !unmute, !volume 0 and !volume 100 still work.', 'info');
         return;
       }
-      const shouldMute = volumeCommand.action === 'mute' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
+      const shouldMute = volumeCommand.action === 'mute' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
       tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: shouldMute ? 'muted' : 'unmuted' };
       const messageType = shouldMute ? 'mute' : 'unMute';
       iframeWindow.postMessage({ type: messageType, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
@@ -1833,6 +1850,8 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        if (info.volume !== undefined && Number.isFinite(Number(info.volume))) setYoutubeVolume(Math.max(0, Math.min(100, Number(info.volume))));
+        if (info.muted !== undefined) setYoutubeMuted(Boolean(info.muted));
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
         if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
@@ -2666,6 +2685,62 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {currentVideo.platform === 'youtube' && (
+                      <div className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] px-2.5 py-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const player = youtubePlayerRef.current;
+                            if (!player) {
+                              addToast('YouTube player is not ready for volume control yet.', 'warning');
+                              return;
+                            }
+                            if (youtubeMuted) {
+                              const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50;
+                              player.setVolume(nextVolume);
+                              player.unMute();
+                              youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false };
+                              setYoutubeVolume(nextVolume);
+                              setYoutubeMuted(false);
+                            } else {
+                              player.mute();
+                              youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
+                              setYoutubeMuted(true);
+                            }
+                          }}
+                          className="inline-flex items-center justify-center rounded-lg p-1 text-cyan-300 hover:bg-slate-800"
+                          title={youtubeMuted ? 'Unmute YouTube video' : 'Mute YouTube video'}
+                          aria-label={youtubeMuted ? 'Unmute YouTube video' : 'Mute YouTube video'}
+                        >
+                          {youtubeMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                        </button>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={youtubeVolume}
+                          onChange={(e) => {
+                            const player = youtubePlayerRef.current;
+                            if (!player) {
+                              addToast('YouTube player is not ready for volume control yet.', 'warning');
+                              return;
+                            }
+                            const nextVolume = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                            player.setVolume(nextVolume);
+                            if (nextVolume === 0) player.mute();
+                            else player.unMute();
+                            youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: nextVolume === 0 };
+                            setYoutubeVolume(nextVolume);
+                            setYoutubeMuted(nextVolume === 0);
+                          }}
+                          className="w-24 cursor-pointer accent-cyan-400"
+                          title="Set YouTube volume"
+                          aria-label="YouTube volume"
+                        />
+                        <span className="min-w-10 text-right text-[10px] font-bold tabular-nums text-slate-300">{youtubeMuted ? 'Muted' : `${youtubeVolume}%`}</span>
+                      </div>
+                    )}
                     {currentVideo.platform === 'tiktok' && (
                       <>
                         <button
@@ -2734,6 +2809,11 @@ function YediHubAppContent() {
                           className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold"
                         >Open TikTok</a>
                       </>
+                    )}
+                    {currentVideo.platform === 'tiktok' && (
+                      <span className="max-w-56 text-[10px] leading-4 text-slate-500" title="TikTok's embedded player does not allow external exact-volume control.">
+                        Exact volume: use the speaker control inside the video. App/chat controls can mute or unmute only.
+                      </span>
                     )}
                     {/* Instant Category Tag Override */}
                     {isStaff && (
