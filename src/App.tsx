@@ -608,7 +608,14 @@ function YediHubAppContent() {
         const login = String(session.user?.login || '').toLowerCase();
         const allowed = Boolean(session.authenticated && ALLOWED_TWITCH_USERS.has(login));
         authorizedLoginRef.current = allowed ? login : '';
-        setFirebaseLoginToken(allowed ? String(session.firebaseCustomToken || '') : '');
+        const customToken = allowed ? String(session.firebaseCustomToken || '') : '';
+        setFirebaseLoginToken(customToken);
+        if (allowed) {
+          const hasWebFirebaseConfig = Boolean(getFirebaseConfig());
+          setSyncStatusText(customToken && hasWebFirebaseConfig
+            ? 'Connecting private cloud sync…'
+            : 'Twitch verified — local save is active');
+        }
         setTwitchAuth({
           username: allowed ? login : '',
           displayName: allowed ? (session.user?.display_name || login) : 'Access restricted',
