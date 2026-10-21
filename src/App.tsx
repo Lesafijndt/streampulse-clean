@@ -217,43 +217,7 @@ function isStaffRole(role) {
   return role === 'streamer' || role === 'moderator';
 }
 
-function loadYouTubeIframeApi() {
-  const globalWindow = window as any;
-  if (globalWindow.YT && globalWindow.YT.Player) return Promise.resolve(globalWindow.YT);
-  if (globalWindow.__streamPulseYouTubeApiPromise) return globalWindow.__streamPulseYouTubeApiPromise;
 
-  globalWindow.__streamPulseYouTubeApiPromise = new Promise((resolve, reject) => {
-    const scriptUrl = 'https://www.youtube.com/iframe_api';
-    const existingScript = document.querySelector(`script[src="${scriptUrl}"]`);
-    const previousReady = globalWindow.onYouTubeIframeAPIReady;
-    const timeoutId = window.setTimeout(() => {
-      reject(new Error('YouTube player API timed out loading.'));
-    }, 20000);
-
-    globalWindow.onYouTubeIframeAPIReady = () => {
-      if (typeof previousReady === 'function') previousReady();
-      window.clearTimeout(timeoutId);
-      if (globalWindow.YT && globalWindow.YT.Player) resolve(globalWindow.YT);
-      else reject(new Error('YouTube player API loaded without a Player constructor.'));
-    };
-
-    if (!existingScript) {
-      const script = document.createElement('script');
-      script.src = scriptUrl;
-      script.async = true;
-      script.onerror = () => {
-        window.clearTimeout(timeoutId);
-        reject(new Error('Could not load the YouTube player API.'));
-      };
-      document.head.appendChild(script);
-    }
-  });
-  return globalWindow.__streamPulseYouTubeApiPromise;
-}
-
-// ==========================================
-// CATEGORY DEFINITIONS & HEURISTIC ENGINE
-// ==========================================
 const CATEGORY_META = {
   Music: {
     label: 'Music',
@@ -507,7 +471,7 @@ function YediHubAppContent() {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
     if (Array.isArray(saved)) {
       return saved
-        .filter((video) => !String(video?.id || '').startsWith('demo-'))
+        .filter((video) => video && typeof video === 'object' && !String(video.id || '').startsWith('demo-'))
         .map(normalizeLegacyVideoVotes);
     }
     // Start empty so demo requests never appear to be real viewer submissions.
@@ -526,8 +490,9 @@ function YediHubAppContent() {
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
-  const youtubePlayerContainerRef = useRef(null);
+  const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
+  const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
   const tiktokIframeRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
@@ -786,7 +751,8 @@ function YediHubAppContent() {
           // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
           // requests' displayed vote counts honest and makes voter identity persistence consistent.
           const list = snapshot.docs.map((d) => {
-            const data = d.data();
+            const rawData = d.data();
+            const data = rawData && typeof rawData === 'object' && !Array.isArray(rawData) ? rawData : {};
             const normalized = {
               ...normalizeLegacyVideoVotes(data),
               id: d.id,
@@ -802,7 +768,7 @@ function YediHubAppContent() {
             return normalized;
           });
           const roomList = list.filter(
-            (v) => normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
+            (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
 
           if (roomList.length > 0) {
@@ -1134,21 +1100,7 @@ function YediHubAppContent() {
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
 
-  // The visual progress bar mirrors real YouTube playback. TikTok sends its own time events below.
-  useEffect(() => {
-    if (!currentVideo || currentVideo.platform !== 'youtube') return;
-    const timer = window.setInterval(() => {
-      const player = youtubePlayerRef.current;
-      if (!player || typeof player.getCurrentTime !== 'function' || typeof player.getDuration !== 'function') return;
-      const duration = Number(player.getDuration()) || 0;
-      const currentTime = Number(player.getCurrentTime()) || 0;
-      if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [currentVideo?.id, currentVideo?.platform]);
 
-  // ==========================================
-  // REAL TWITCH IRC WEBSOCKET BRIDGE
   // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
   const connectTwitchIrc = (targetChan, options = {}) => {
@@ -1573,69 +1525,101 @@ function YediHubAppContent() {
     }
   };
 
-  // Mount the official YouTube IFrame API player, allowing reliable autoplay and end-of-video detection.
-  // The API must receive an imperative child, never a DOM node React owns.
+  // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
+  // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
   useEffect(() => {
     const video = currentVideo;
-    const host = youtubePlayerContainerRef.current;
-    if (!video || video.platform !== 'youtube' || !video.videoId || !host) return undefined;
+    const iframe = youtubeIframeRef.current;
+    if (!video || video.platform !== 'youtube' || !video.videoId || !iframe) {
+      youtubePlayerRef.current = null;
+      youtubePlaybackInfoRef.current = { currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 };
+      return undefined;
+    }
 
+    const playerWindow = iframe.contentWindow;
+    if (!playerWindow) return undefined;
     let cancelled = false;
-    let player = null;
-    let playerMountNode = null;
-
-    loadYouTubeIframeApi().then((YT) => {
-      if (cancelled || !host.isConnected) return;
-      playerMountNode = document.createElement('div');
-      playerMountNode.className = 'w-full h-full';
-      host.appendChild(playerMountNode);
+    let hasStarted = false;
+    let endedHandled = false;
+    let previousState = -1;
+    const postCommand = (func, args = []) => {
+      if (cancelled) return;
       try {
-        player = new YT.Player(playerMountNode, {
-          width: '100%',
-          height: '100%',
-          videoId: video.videoId,
-          playerVars: { autoplay: 1, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, origin: window.location.origin },
-          events: {
-            onReady: (event) => {
-              if (cancelled) return;
-              youtubePlayerRef.current = event.target;
-              event.target.playVideo();
-            },
-            onStateChange: (event) => {
-              if (cancelled) return;
-              if (event.data === 0) handleMediaEndedRef.current?.(video.id);
-            },
-            onAutoplayBlocked: () => {
-              if (!cancelled) addToast('Your browser blocked autoplay with sound. Press Play once to allow playback.', 'info');
-            },
-            onError: () => {
-              if (!cancelled) addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
-            }
-          }
-        });
+        playerWindow.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
       } catch (error) {
-        console.warn('Could not create the YouTube player.', error);
-        if (!cancelled) addToast('YouTube player initialization failed.', 'warning');
+        console.debug('YouTube command could not be sent.', error);
       }
-    }).catch((error) => {
-      console.warn('YouTube player API could not load.', error);
-      if (!cancelled) addToast('The YouTube player could not load. Check browser extensions or network access.', 'warning');
-    });
+    };
+    const proxy = {
+      getCurrentTime: () => Number(youtubePlaybackInfoRef.current.currentTime) || 0,
+      getDuration: () => Number(youtubePlaybackInfoRef.current.duration) || 0,
+      getVolume: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.volume)) ? Number(youtubePlaybackInfoRef.current.volume) : 100,
+      setVolume: (value) => postCommand('setVolume', [Math.max(0, Math.min(100, Number(value) || 0))]),
+      mute: () => postCommand('mute'),
+      unMute: () => postCommand('unMute'),
+      playVideo: () => postCommand('playVideo'),
+      pauseVideo: () => postCommand('pauseVideo'),
+    };
+    youtubePlayerRef.current = proxy;
 
+    const initializePlayerMessaging = () => {
+      if (cancelled || youtubeIframeRef.current !== iframe) return;
+      postCommand('addEventListener', ['onStateChange']);
+      postCommand('addEventListener', ['onError']);
+      postCommand('getCurrentTime');
+      postCommand('getDuration');
+      postCommand('getVolume');
+      postCommand('playVideo');
+    };
+    const handleMessage = (event) => {
+      if (cancelled || event.source !== playerWindow) return;
+      if (event.origin !== 'https://www.youtube.com' && event.origin !== 'https://www.youtube-nocookie.com') return;
+      let payload = event.data;
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch { return; }
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      const info = payload.event === 'infoDelivery' && payload.info && typeof payload.info === 'object'
+        ? payload.info
+        : null;
+      const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
+      if (info) {
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        const now = Number(info.currentTime);
+        const duration = Number(info.duration);
+        if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
+          setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
+        }
+      }
+      if (Number.isFinite(stateFromEvent)) {
+        youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
+        if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
+          endedHandled = true;
+          if (currentVideoRef.current?.id === video.id) handleMediaEndedRef.current?.(video.id);
+        }
+        if (stateFromEvent !== 0) endedHandled = false;
+        previousState = stateFromEvent;
+      }
+      if (payload.event === 'onError') {
+        console.warn('YouTube embed reported playback error:', payload.info);
+        if (currentVideoRef.current?.id === video.id) {
+          addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    // The iframe can ignore commands sent before its API is ready, so retry briefly after mount.
+    const retryTimers = [0, 250, 750, 1500].map((delay) => window.setTimeout(initializePlayerMessaging, delay));
     return () => {
       cancelled = true;
-      const oldPlayer = player;
-      if (youtubePlayerRef.current === oldPlayer) youtubePlayerRef.current = null;
-      if (oldPlayer && typeof oldPlayer.destroy === 'function') {
-        try { oldPlayer.destroy(); } catch (error) { console.debug('YouTube player was already detached during cleanup.', error); }
-      }
-      // YouTube replaces the imperative mount node with its iframe. The permanent host is not
-      // reconciled by React internally; destroy the API player and safely clear unmanaged children.
-      try { host.replaceChildren(); } catch { /* the host may already be detached */ }
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      window.removeEventListener('message', handleMessage);
+      if (youtubePlayerRef.current === proxy) youtubePlayerRef.current = null;
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
-
-
 
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
   // window reference, listener, and startup timeout; stale messages from the previous iframe
@@ -2242,13 +2226,30 @@ function YediHubAppContent() {
                       : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
                   }`}
                 >
-                  <div
-                    ref={youtubePlayerContainerRef}
-                    aria-hidden={currentVideo.platform !== 'youtube' || !currentVideo.videoId}
-                    className={`absolute inset-0 h-full w-full ${currentVideo.platform === 'youtube' && currentVideo.videoId ? '' : 'invisible pointer-events-none'}`}
-                  />
-                  {currentVideo.platform === 'youtube' && currentVideo.videoId ? null
-                  : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
+                  {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
+                    <iframe
+                      key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
+                      ref={youtubeIframeRef}
+                      className="absolute inset-0 h-full w-full border-0"
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      title={currentVideo.title || 'YouTube video'}
+                      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                      allowFullScreen
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      onLoad={() => {
+                        if (currentVideoRef.current?.id !== currentVideo.id) return;
+                        const frame = youtubeIframeRef.current?.contentWindow;
+                        if (!frame) return;
+                        const send = (func, args = []) => frame.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
+                        send('addEventListener', ['onStateChange']);
+                        send('addEventListener', ['onError']);
+                        send('getCurrentTime');
+                        send('getDuration');
+                        send('getVolume');
+                        send('playVideo');
+                      }}
+                    />
+                  ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
                       <iframe
                         key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
@@ -3071,26 +3072,32 @@ function YediHubAppContent() {
     </div>
   );
 }
-class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasError: boolean }> {
-  state = { hasError: false };
+class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasError: boolean; errorMessage: string; componentStack: string }> {
+  state = { hasError: false, errorMessage: '', componentStack: '' };
 
-  static getDerivedStateFromError(_error: Error): { hasError: boolean } {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): { hasError: true; errorMessage: string; componentStack: string } {
+    return { hasError: true, errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: '' };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
     console.error('Yedi Hub render failure', error, info);
+    this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
   render(): React.ReactNode {
     if (this.state.hasError) {
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
-          <section className="max-w-lg rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">Yedi Hub recovered from a player error</h1>
-            <p className="text-sm text-slate-300">The dashboard hit a rendering error. You can try rendering it again or reload the page; this fallback keeps the screen from appearing completely blank when React can recover.</p>
+          <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
+            <h1 className="text-lg font-black">Yedi Hub hit a rendering error</h1>
+            <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
+            <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
+              <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
+              <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-200">{this.state.errorMessage}</pre>
+              {this.state.componentStack && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-slate-300">Component stack</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] text-slate-400">{this.state.componentStack}</pre></details>}
+            </div>
             <div className="flex flex-wrap gap-3">
-              <button type="button" onClick={() => this.setState({ hasError: false })} className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold">Try again</button>
+              <button type="button" onClick={() => this.setState({ hasError: false, errorMessage: '', componentStack: '' })} className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold">Try again</button>
               <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold">Reload dashboard</button>
             </div>
           </section>
