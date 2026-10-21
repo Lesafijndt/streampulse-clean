@@ -888,19 +888,32 @@ function YediHubAppContent() {
   // The chat bot has a separate server-side Twitch session. It does not grant dashboard access.
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/twitch/bot-session', { credentials: 'same-origin', cache: 'no-store' })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
-      .then((session) => {
-        if (cancelled) return;
-        setChatBotSession({
-          loading: false,
-          connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
-          username: session.connected ? String(session.user?.login || 'gachibot69') : ''
-        });
+    let requestInFlight = false;
+    const refreshBotSession = () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      fetch('/api/twitch/bot-session', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000)
       })
-      .catch(() => {
-        if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
-      });
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
+        .then((session) => {
+          if (cancelled) return;
+          setChatBotSession({
+            loading: false,
+            connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
+            username: session.connected ? String(session.user?.login || 'gachibot69') : ''
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
+        })
+        .finally(() => { requestInFlight = false; });
+    };
+    refreshBotSession();
+    const botStatusTimer = window.setInterval(refreshBotSession, 30000);
+    window.addEventListener('focus', refreshBotSession);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('bot_connected') === '1') {
@@ -921,7 +934,11 @@ function YediHubAppContent() {
       const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', nextUrl);
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearInterval(botStatusTimer);
+      window.removeEventListener('focus', refreshBotSession);
+    };
   }, []);
 
   // Firebase is initialized without anonymous sign-in. Only the server-issued custom token
@@ -1796,7 +1813,7 @@ function YediHubAppContent() {
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
-    await syncAddVideo(newVideo);
+    void syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
 
     if (deferredMetadataPromise) {
