@@ -459,7 +459,7 @@ function getVideoMediaType(video = {}) {
   if (video.categoryManuallySet === true) {
     return String(video.category || '').trim() === 'Music' ? 'Music' : 'Non-Music';
   }
-  return detectMusicType(video.url || '', video.title || '', video.note || '', video.category || '');
+  return detectMusicType(video.url || '', video.title || '', video.note || '', '');
 }
 
 function getVideoCategory(video = {}) {
