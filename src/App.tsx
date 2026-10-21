@@ -1036,7 +1036,7 @@ export default function YediHubApp() {
         const volumeCommand = parseModVolumeCommand(lowerText);
         if (isRequestCommand) {
           handleIncomingChatCommandRef.current?.(username, role, text);
-        } else if (lowerText === '!hype' && currentVideoRef.current) {
+        } else if (lowerText === '!bigcock' && currentVideoRef.current) {
           handleUpvoteRef.current?.(currentVideoRef.current.id);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
           handleSkipNextRef.current?.();
