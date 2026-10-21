@@ -387,7 +387,8 @@ function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all'
 function detectMusicType(url = '', title = '', note = '', category = '') {
   const parsed = (() => { try { return new URL(String(url || '')); } catch { return null; } })();
   const host = (parsed?.hostname || '').toLowerCase().replace(/^www\./, '');
-  const rawText = [String(title || ''), String(note || '')].join(' ').toLowerCase();
+  const rawTitle = String(title || '').trim();
+  const rawText = [rawTitle, String(note || '')].join(' ').toLowerCase();
   const normalizedText = rawText.replace(/[_]+/g, ' ').replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim();
   const paddedText = ' ' + normalizedText + ' ';
   const hasPhrase = (phrase) => paddedText.includes(' ' + phrase.toLowerCase().replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ');
@@ -426,7 +427,21 @@ function detectMusicType(url = '', title = '', note = '', category = '') {
   ];
   const musicScore = musicSignals.reduce((score, [phrase, weight]) => score + (hasPhrase(phrase) ? weight : 0), 0);
   const nonMusicScore = nonMusicSignals.reduce((score, [phrase, weight]) => score + (hasPhrase(phrase) ? weight : 0), 0);
+
+  // YouTube track uploads often use "Artist - Track" naming without saying "music" anywhere.
+  // Only use this fallback for YouTube titles and otherwise-generic categories, after strong
+  // non-music words have been ruled out (so things like "Artist - Interview" stay Non-Music).
+  const isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+  const titleParts = rawTitle.split(/\s[-–—|]\s/);
+  const looksLikeArtistTrackTitle = isYouTube &&
+    (String(category || '').trim() === '' || String(category || '').trim() === 'General') &&
+    titleParts.length === 2 &&
+    titleParts[0].trim().length >= 2 &&
+    titleParts[1].trim().length >= 2 &&
+    rawTitle.length <= 110;
+
   if (musicScore >= 3 && musicScore > nonMusicScore) return 'Music';
+  if (looksLikeArtistTrackTitle && nonMusicScore === 0) return 'Music';
   return 'Non-Music';
 }
 
