@@ -1301,17 +1301,24 @@ function YediHubAppContent() {
     }
     if (activeItems.length === 1) return;
     const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0];
-    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false });
+    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
   }, [videos]);
 
   const counts = useMemo(() => {
+    const queued = videos.filter((video) => video.status === 'queue');
     return {
-      queue: videos.filter((v) => v.status === 'queue').length,
-      watch_later: videos.filter((v) => v.status === 'watch_later').length,
-      watched: videos.filter((v) => v.status === 'watched').length,
-
+      queue: queued.length,
+      music: queued.filter((video) => (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music').length,
+      nonMusic: queued.filter((video) => (video.mediaType || detectMusicType(video.url, video.title, video.note)) !== 'Music').length,
+      watch_later: videos.filter((video) => video.status === 'watch_later').length,
+      watched: videos.filter((video) => video.status === 'watched').length,
     };
   }, [videos]);
+
+  const nextQueuedVideo = useMemo(
+    () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
+    [videos]
+  );
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -1335,8 +1342,14 @@ function YediHubAppContent() {
           String(v.note || '').toLowerCase().includes(q);
       })
       .sort((a, b) => {
-        // Active Queue always shows actual playback order. Other tabs may use their selected sort.
         if (activeTab === 'queue') return compareQueueOrder(a, b);
+        if (activeTab === 'watched' && (sortBy === 'priority' || sortBy === 'played')) {
+          return (Number(b.playedAt) || Number(b.timestamp) || 0) -
+            (Number(a.playedAt) || Number(a.timestamp) || 0) ||
+            (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) ||
+            String(b.id || '').localeCompare(String(a.id || ''));
+        }
+        if (sortBy === 'played') return (Number(b.playedAt) || Number(b.timestamp) || 0) - (Number(a.playedAt) || Number(a.timestamp) || 0) || compareQueueOrder(a, b);
         if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
         if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
         return compareQueueOrder(a, b);
@@ -1432,7 +1445,7 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('whale cum: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
+          sendTwitchChatReply('WHALE CUM: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
@@ -1712,10 +1725,13 @@ function YediHubAppContent() {
     const playedAt = Date.now();
     videos.forEach((v) => {
       if (v.status === 'playing' && v.id !== video.id) {
-        syncUpdateVideo(v.id, { status: 'watched', watchedAt: 'Just now', playedAt });
+        syncUpdateVideo(v.id, {
+          status: 'watched',
+          watchedAt: 'Just now',
+          ...(Number(v.playedAt) > 0 ? {} : { playedAt: Number(v.timestamp) || playedAt - 1 })
+        });
       }
     });
-
     syncUpdateVideo(video.id, { status: 'playing', pinned: false, playedAt });
     setSimProgress(0);
     addToast(`Now Playing: ${video.title.slice(0, 32)}...`, 'info');
@@ -1733,12 +1749,12 @@ function YediHubAppContent() {
       .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
       .sort(compareQueueOrder)[0] || null;
     const updatesById = new Map();
-    const playedAt = Date.now();
+    const nextPlayedAt = Date.now();
     videos.filter((video) => video.status === 'playing').forEach((video) => {
-      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now', playedAt });
+      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now', ...(Number(video.playedAt) > 0 ? {} : { playedAt: Number(video.timestamp) || nextPlayedAt - 1 }) });
     });
-    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now', playedAt });
-    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false, playedAt });
+    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now', ...(Number(outgoing.playedAt) > 0 ? {} : { playedAt: Number(outgoing.timestamp) || nextPlayedAt - 1 }) });
+    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false, playedAt: nextPlayedAt });
 
     setVideos((previous) => previous.map((video) => {
       const updates = updatesById.get(video.id);
@@ -1863,7 +1879,7 @@ function YediHubAppContent() {
       ? Math.min(...remainingQueued.map(queueOrderValue))
       : queueOrderValue(outgoing);
     updates.set(outgoing.id, { status: 'queue', queueOrder: earliestQueuedOrder - 1000, pinned: false });
-    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false });
+    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false, playedAt: Date.now() });
     setVideos((previous) => previous.map((video) => {
       const change = updates.get(video.id);
       return change ? { ...video, ...change } : video;
@@ -2171,7 +2187,7 @@ function YediHubAppContent() {
         lastChatReplyAtRef.current = Date.now();
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
-          console.warn('whale cum could not reply in Twitch chat:', result.error || response.statusText);
+          console.warn('WHALE CUM could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
             addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
@@ -2342,7 +2358,7 @@ function YediHubAppContent() {
     return (
       <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 text-center shadow-2xl">
-          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">whale cum</h1>
+          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">WHALE CUM</h1>
           <p className="mt-3 text-sm text-slate-300">Verifying your private Twitch session…</p>
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-purple-500 to-cyan-400" /></div>
         </div>
@@ -2355,7 +2371,7 @@ function YediHubAppContent() {
         <div className="w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 sm:p-10 text-center shadow-2xl">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-4xl">🧼</div>
           <div className="text-[10px] font-black uppercase tracking-[0.35em] text-amber-200">Private streamer deck</div>
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">whale cum</h1>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">WHALE CUM</h1>
           <p className="mt-3 text-sm leading-6 text-slate-300">A private request player for <strong className="text-purple-200">twitch.tv/2o3a</strong>. Sign in using one of the two approved Twitch accounts.</p>
           {loginError === 'unauthorized' ? <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">This Twitch account is not on the access list. No site access was granted.</div> : null}
           {loginError && loginError !== 'unauthorized' ? <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-xs text-amber-100">Twitch login returned an error. Please try again.</div> : null}
@@ -2463,13 +2479,13 @@ function YediHubAppContent() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
-                  whale cum
+                  WHALE CUM
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ GACHI MODE ♂
+                  ♂ GACHI ARENA ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  🇸🇪 fitta javla fih
+                  REAL MEN • REAL CONTENT
                 </span>
               </div>
 
@@ -2593,9 +2609,38 @@ function YediHubAppContent() {
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
-      <div className="flex-1 max-w-[1680px] w-full mx-auto flex flex-col lg:flex-row gap-5 p-4 lg:p-6">
-        {/* LEFT COLUMN: ACTIVE MEDIA PLAYER & QUEUE LISTS */}
-        <div className="flex-1 flex flex-col gap-5 min-w-0">
+      <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
+        <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
+        <div className="relative z-10 mx-auto flex min-h-[150px] max-w-[1740px] flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
+          <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
+          <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
+          <p className="mt-1 text-xs sm:text-sm font-black uppercase italic tracking-[0.22em] text-slate-100">REAL MEN WATCH REAL CONTENT</p>
+        </div>
+      </section>
+
+      <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5">
+        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-4 space-y-5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-rose-300"><span className="gachi-live-dot" /> LIVE</div>
+            <span className="text-[10px] font-black text-slate-300">{counts.queue} IN QUEUE</span>
+          </div>
+          <div className="space-y-2.5">
+            <div className="gachi-rail-heading"><Play className="w-3.5 h-3.5 fill-current" /> NEXT UP</div>
+            {nextQueuedVideo ? (
+              <button type="button" onClick={() => handlePlayNow(nextQueuedVideo)} className="gachi-next-up-card w-full flex items-center gap-3 text-left rounded-xl p-2">
+                <img src={nextQueuedVideo.thumbnail} alt="" onError={(e) => { e.currentTarget.src = 'https://placehold.co/160x160/18181b/ff315f?text=WHALE+CUM'; }} className="w-14 h-14 rounded-lg object-cover shrink-0 border border-white/10" />
+                <span className="min-w-0"><span className="block text-[10px] uppercase tracking-widest text-slate-400">Waiting</span><span className="block mt-1 text-xs font-extrabold text-white line-clamp-2">{nextQueuedVideo.title}</span><span className="block mt-1 text-[10px] text-slate-400">by @{nextQueuedVideo.requestedBy}</span></span>
+              </button>
+            ) : <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-slate-500">Nothing waiting in the queue.</div>}
+          </div>
+          <div className="space-y-2.5">
+            <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE BREAKDOWN</div>
+            <div className="gachi-queue-stat flex items-center justify-between rounded-xl px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></div>
+            <div className="gachi-queue-stat flex items-center justify-between rounded-xl px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></div>
+          </div>
+          <div className="gachi-rail-foot rounded-xl p-3"><div className="text-[10px] uppercase tracking-[0.2em] font-black text-rose-300">GACHI ARENA</div><p className="mt-1.5 text-xs leading-5 text-slate-400">Real men. Real content. Live requests from chat.</p></div>
+        </aside>
+        <div className="gachi-player-column flex flex-col gap-4 min-w-0">
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
@@ -2603,11 +2648,6 @@ function YediHubAppContent() {
             {/* Header info strip */}
             <div className="px-4 py-2.5 bg-[#141926] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-wider text-[11px]">
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  MAIN EVENT
-                </span>
-
                 {currentVideo && (
                   <>
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
@@ -2706,7 +2746,7 @@ function YediHubAppContent() {
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
                           <div className="text-base font-black text-white">TikTok player could not start</div>
-                          <p className="max-w-sm text-sm text-slate-300">Retry the player or open the post directly on TikTok.</p>
+                          <p className="max-w-sm text-sm text-slate-300">Check that the post is public, then retry the embedded player.</p>
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
                               type="button"
@@ -2716,12 +2756,7 @@ function YediHubAppContent() {
                               }}
                               className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
                             >Retry TikTok player</button>
-                            <a
-                              href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700"
-                            >Open on TikTok</a>
+                            
                           </div>
                         </div>
                       )}
@@ -2729,10 +2764,8 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so whale cum can extract the post ID.</p>
-                      <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
-                        Open TikTok <ExternalLink className="h-4 w-4" />
-                      </a>
+                      <p className="text-sm text-slate-300">This shortened link could not be resolved. Request the full video URL containing <code>/video/</code> followed by the post ID.</p>
+                      
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
                     <iframe
@@ -2794,129 +2827,22 @@ function YediHubAppContent() {
                   {/* Player Quick Action Bar */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     {currentVideo.platform === 'youtube' && (
-                      <div className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] px-2.5 py-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const player = youtubePlayerRef.current;
-                            if (!player) {
-                              addToast('YouTube player is not ready for volume control yet.', 'warning');
-                              return;
-                            }
-                            if (youtubeMuted) {
-                              const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50;
-                              player.setVolume(nextVolume);
-                              player.unMute();
-                              youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false };
-                              setYoutubeVolume(nextVolume);
-                              setYoutubeMuted(false);
-                            } else {
-                              player.mute();
-                              youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
-                              setYoutubeMuted(true);
-                            }
-                          }}
-                          className="inline-flex items-center justify-center rounded-lg p-1 text-cyan-300 hover:bg-slate-800"
-                          title={youtubeMuted ? 'Unmute YouTube video' : 'Mute YouTube video'}
-                          aria-label={youtubeMuted ? 'Unmute YouTube video' : 'Mute YouTube video'}
-                        >
-                          {youtubeMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                        </button>
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value={youtubeVolume}
-                          onChange={(e) => {
-                            const player = youtubePlayerRef.current;
-                            if (!player) {
-                              addToast('YouTube player is not ready for volume control yet.', 'warning');
-                              return;
-                            }
-                            const nextVolume = Math.max(0, Math.min(100, Number(e.target.value) || 0));
-                            player.setVolume(nextVolume);
-                            if (nextVolume === 0) player.mute();
-                            else player.unMute();
-                            youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: nextVolume === 0 };
-                            setYoutubeVolume(nextVolume);
-                            setYoutubeMuted(nextVolume === 0);
-                          }}
-                          className="w-24 cursor-pointer accent-cyan-400"
-                          title="Set YouTube volume"
-                          aria-label="YouTube volume"
-                        />
-                        <span className="min-w-10 text-right text-[10px] font-bold tabular-nums text-slate-300">{youtubeMuted ? 'Muted' : `${youtubeVolume}%`}</span>
+                      <div className="gachi-media-controls flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] p-2">
+                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.playVideo(); }} className="gachi-sound-action" title="Play YouTube video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
+                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.mute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true }; setYoutubeMuted(true); }} className="gachi-sound-action" title="Mute YouTube sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
+                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50; player.setVolume(nextVolume); player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false }; setYoutubeVolume(nextVolume); setYoutubeMuted(false); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable YouTube sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
+                        <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5">
+                          <input type="range" min="0" max="100" step="1" value={youtubeVolume} onChange={(e) => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = Math.max(0, Math.min(100, Number(e.target.value) || 0)); player.setVolume(nextVolume); if (nextVolume === 0) player.mute(); else player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: nextVolume === 0 }; setYoutubeVolume(nextVolume); setYoutubeMuted(nextVolume === 0); }} className="w-20 cursor-pointer accent-rose-500" title="Set YouTube volume" aria-label="YouTube volume" />
+                          <span className="min-w-9 text-right text-[10px] font-bold tabular-nums text-slate-300">{youtubeMuted ? 'Muted' : String(youtubeVolume) + '%'}</span>
+                        </div>
                       </div>
                     )}
                     {currentVideo.platform === 'tiktok' && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) {
-                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
-                              return;
-                            }
-                            const isPlaying = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true;
-                            const isMuted = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isMuted : false;
-                            const nextIsPlaying = !isPlaying;
-                            frame.postMessage({ type: nextIsPlaying ? 'play' : 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: nextIsPlaying, isMuted });
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
-                          title={tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? 'Resume TikTok video' : 'Pause TikTok video'}
-                        >
-                          {tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                          {tiktokPlaybackState.requestId === currentVideo.id && !tiktokPlaybackState.isPlaying ? 'Play' : 'Pause'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) {
-                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
-                              return;
-                            }
-                            const isMuted = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isMuted : false;
-                            const nextIsMuted = !isMuted;
-                            tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: nextIsMuted ? 'muted' : 'unmuted' };
-                            frame.postMessage({ type: nextIsMuted ? 'mute' : 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            setTikTokPlaybackState({
-                              requestId: currentVideo.id,
-                              isPlaying: tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true,
-                              isMuted: nextIsMuted
-                            });
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
-                          title={tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? 'Unmute TikTok video' : 'Mute TikTok video'}
-                        >
-                          {tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                          {tiktokPlaybackState.requestId === currentVideo.id && tiktokPlaybackState.isMuted ? 'Unmute' : 'Mute'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) {
-                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
-                              return;
-                            }
-                            tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'unmuted' };
-                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false });
-                          }}
-                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
-                        >Enable TikTok sound</button>
-                        <a
-                          href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold"
-                        >Open TikTok</a>
-                      </>
+                      <div className="gachi-media-controls flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: true, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false })); }} className="gachi-sound-action" title="Play TikTok video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
+                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'muted' }; frame.postMessage({ type: 'mute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: previous.requestId === currentVideo.id ? previous.isPlaying : true, isMuted: true })); }} className="gachi-sound-action" title="Mute TikTok sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
+                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'unmuted' }; frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false }); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable TikTok sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
+                      </div>
                     )}
                     {currentVideo.platform === 'tiktok' && (
                       <span className="max-w-56 text-[10px] leading-4 text-slate-500" title="TikTok's embedded player does not allow external exact-volume control.">
@@ -3000,10 +2926,18 @@ function YediHubAppContent() {
             )}
           </section>
 
+          <div className="gachi-primary-actions grid grid-cols-3 gap-2 sm:gap-3">
+            <button type="button" onClick={handleSkipNext} className="gachi-primary-action"><SkipForward className="w-6 h-6 fill-current" /><span>SKIP</span></button>
+            <button type="button" onClick={() => { const target = currentVideo?.status === 'queue' ? currentVideo : nextQueuedVideo; if (target) void handleUpvote(target.id); else addToast('There is no waiting video to hype yet.', 'warning'); }} disabled={!currentVideo && !nextQueuedVideo} className="gachi-primary-action" title="Hype the active request or the next queued video"><Flame className="w-6 h-6 fill-current" /><span>HYPE</span></button>
+            <button type="button" onClick={() => setShowRequestModal(true)} className="gachi-primary-action"><Plus className="w-6 h-6" /><span>REQUEST</span></button>
+          </div>
+        </div>
+
+        <div className="gachi-queue-column min-w-0">
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
-          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+          <section className="gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
             {/* Nav Tabs */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -3036,13 +2970,14 @@ function YediHubAppContent() {
 
               {/* Sorter */}
               <select
-                value={activeTab === 'queue' ? 'priority' : sortBy}
+                value={activeTab === 'queue' ? 'priority' : activeTab === 'watched' && sortBy === 'priority' ? 'played' : sortBy}
                 onChange={(e) => setSortBy(e.target.value)}
                 disabled={activeTab === 'queue'}
                 title={activeTab === 'queue' ? 'Queue order follows pinned priority, then votes, then request time' : 'Sort this non-queue list'}
                 className="bg-[#151a27] border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-purple-500 disabled:opacity-70"
               >
                 <option value="priority">Sort: Playback priority</option>
+                <option value="played">Sort: Recently Played</option>
                 <option value="upvotes">Sort: Most Hype (Votes)</option>
                 <option value="newest">Sort: Recently Added</option>
               </select>
@@ -3106,13 +3041,13 @@ function YediHubAppContent() {
             </div>
 
             {/* Video Cards Feed */}
-            <div className="space-y-3 pt-1">
+            <div className="gachi-queue-feed space-y-3 pt-1">
               {filteredVideos.length === 0 ? (
                 <div className="p-10 border border-dashed border-slate-800 rounded-2xl text-center space-y-2 bg-[#121622]/40">
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />
                   <p className="text-sm font-bold text-slate-300">No media found in this view</p>
                   <p className="text-xs text-slate-500">
-                    The arena awaits its next main event. Submit a YouTube, Twitch Clip, or TikTok link.
+                    Nothing in this view yet. Add a video link or request one through Twitch chat.
                   </p>
                 </div>
               ) : (
@@ -3123,7 +3058,7 @@ function YediHubAppContent() {
                   return (
                     <div
                       key={video.id}
-                      className={`group relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3.5 rounded-2xl border transition-all ${
+                      className={`gachi-queue-item group relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-2.5 rounded-2xl border transition-all ${
                         isCurrent
                           ? 'bg-purple-950/20 border-purple-500/50 shadow-lg shadow-purple-950/40'
                           : video.pinned
@@ -3145,13 +3080,13 @@ function YediHubAppContent() {
                         {/* Thumbnail */}
                         <div
                           onClick={() => handlePlayNow(video)}
-                          className="relative w-28 sm:w-36 h-20 rounded-xl overflow-hidden bg-slate-900 shrink-0 cursor-pointer border border-white/5"
+                          className="gachi-queue-thumbnail relative w-28 sm:w-36 h-20 rounded-xl overflow-hidden bg-slate-900 shrink-0 cursor-pointer border border-white/5"
                         >
                           <img
                             src={video.thumbnail}
                             alt=""
                             onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=WHALE+CUM';
                             }}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -3166,7 +3101,7 @@ function YediHubAppContent() {
                         </div>
 
                         {/* Details */}
-                        <div className="min-w-0 flex-1 space-y-1">
+                        <div className="gachi-queue-details min-w-0 flex-1 space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
                             {/* Editable Category Dropdown for 1-Click Fixes */}
                             {isStaff ? (
@@ -3233,7 +3168,7 @@ function YediHubAppContent() {
                       </div>
 
                       {/* Right: Arena Control Buttons */}
-                      <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
+                      <div className="gachi-queue-actions flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
                         {/* Hype Vote */}
                         <button
                           onClick={() => handleUpvote(video.id)}
@@ -3616,7 +3551,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('whale cum render failure', error, info);
+    console.error('WHALE CUM render failure', error, info);
     this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
@@ -3625,7 +3560,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
+            <h1 className="text-lg font-black">WHALE CUM hit a rendering error</h1>
             <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
             <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
