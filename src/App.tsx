@@ -2802,8 +2802,8 @@ function YediHubAppContent() {
                 </div>
 
                 {/* Sub-Player Controls & Fast Stash Deck */}
-                <div className="p-4 sm:p-5 bg-[#141926] flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="min-w-0 space-y-1 flex-1">
+                <div className="gachi-player-footer p-4 sm:p-5 bg-[#141926] flex flex-col gap-4">
+                  <div className="gachi-player-meta w-full min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
                       <h2 className="text-base sm:text-lg font-extrabold text-white truncate">
                         {currentVideo.title}
@@ -2826,7 +2826,7 @@ function YediHubAppContent() {
                   </div>
 
                   {/* Player Quick Action Bar */}
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center gap-2">
                     {currentVideo.platform === 'youtube' && (
                       <div className="gachi-media-controls flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] p-2">
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.playVideo(); }} className="gachi-sound-action" title="Play YouTube video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
@@ -3202,7 +3202,7 @@ function YediHubAppContent() {
                             )}
                             <button
                               onClick={() => handlePlayNow(video)}
-                              className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
+                              className="gachi-queue-play-now px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
                             >
                               Play Now
                             </button>
