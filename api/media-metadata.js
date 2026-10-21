@@ -33,6 +33,11 @@ function readAttribute(tag, name) {
   const match = String(tag || '').match(pattern);
   return match ? (match[1] || match[2] || match[3] || '') : '';
 }
+export function parseDurationFromPlayerResponse(payload) {
+  const seconds = Number(payload?.videoDetails?.lengthSeconds || payload?.microformat?.playerMicroformatRenderer?.lengthSeconds);
+  return Number.isFinite(seconds) && seconds > 0 && seconds <= 86400 ? seconds : null;
+}
+
 export function parseDurationFromHtml(html) {
   const source = String(html || '').slice(0, 8_000_000);
   const metaTags = source.match(/<meta\b[^>]*>/gi) || [];
@@ -47,6 +52,11 @@ export function parseDurationFromHtml(html) {
   const milliseconds = source.match(/"approxDurationMs"\s*:\s*"([0-9]+)"/i);
   if (milliseconds) {
     const seconds = Math.round(Number(milliseconds[1]) / 1000);
+    if (seconds > 0 && seconds <= 86400) return seconds;
+  }
+  const tiktokVideo = source.match(/"video"\s*:\s*\{[^{}]{0,3000}?"duration"\s*:\s*([0-9]{1,5})/i);
+  if (tiktokVideo) {
+    const seconds = Number(tiktokVideo[1]);
     if (seconds > 0 && seconds <= 86400) return seconds;
   }
   const isoDuration = source.match(/"(?:duration|contentDuration)"\s*:\s*"(PT[^"]+)"/i);
@@ -66,7 +76,7 @@ async function fetchDurationFromPage(source) {
     const response = await fetch(source.href, {
       headers: { Accept: 'text/html,application/xhtml+xml', 'User-Agent': 'Mozilla/5.0 (compatible; WhaleCumMetadata/1.0)' },
       redirect: 'manual',
-      signal: AbortSignal.timeout(4500)
+      signal: AbortSignal.timeout(2800)
     });
     if (!response.ok) return null;
     return parseDurationFromHtml(await response.text());
@@ -78,15 +88,79 @@ async function fetchYouTubeApiDuration(videoId) {
   try {
     const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
     endpoint.search = new URLSearchParams({ part: 'contentDetails', id: videoId, key: apiKey }).toString();
-    const response = await fetch(endpoint, { signal: AbortSignal.timeout(4500) });
+    const response = await fetch(endpoint, { signal: AbortSignal.timeout(2200) });
     if (!response.ok) return null;
     const payload = await response.json().catch(() => ({}));
     return parseIso8601Duration(payload.items?.[0]?.contentDetails?.duration);
   } catch { return null; }
 }
+async function fetchYouTubeInnertubeDuration(videoId) {
+  if (!videoId) return null;
+  try {
+    const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': 'https://www.youtube.com',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+        'X-YouTube-Client-Name': '1',
+        'X-YouTube-Client-Version': '2.20261022.01.00'
+      },
+      body: JSON.stringify({
+        videoId,
+        context: { client: { clientName: 'WEB', clientVersion: '2.20261022.01.00', hl: 'en', gl: 'US' } }
+      }),
+      signal: AbortSignal.timeout(3000)
+    });
+    if (!response.ok) return null;
+    return parseDurationFromPlayerResponse(await response.json().catch(() => ({})));
+  } catch { return null; }
+}
+function getTikTokVideoId(source) {
+  return source.pathname.match(/\/video\/(\d{10,25})/i)?.[1] ||
+    source.searchParams.get('item_id') ||
+    source.searchParams.get('video_id') || '';
+}
+async function fetchTikTokApiDuration(source) {
+  const videoId = getTikTokVideoId(source);
+  if (!videoId) return null;
+  try {
+    const endpoint = new URL('https://www.tiktok.com/api/item/detail/');
+    endpoint.search = new URLSearchParams({
+      aid: '1988',
+      app_name: 'tiktok_web',
+      app_language: 'en',
+      itemId: videoId
+    }).toString();
+    const response = await fetch(endpoint, {
+      headers: {
+        Accept: 'application/json',
+        Referer: 'https://www.tiktok.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(2800)
+    });
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => ({}));
+    const seconds = Number(payload?.itemInfo?.itemStruct?.video?.duration);
+    return Number.isFinite(seconds) && seconds > 0 && seconds <= 86400 ? seconds : null;
+  } catch { return null; }
+}
 async function fetchMediaDuration(source, host) {
   if (host === 'youtu.be' || host.endsWith('youtube.com')) {
     const fromApi = await fetchYouTubeApiDuration(getYouTubeVideoId(source, host));
+    if (fromApi) return fromApi;
+    // YouTube's public oEmbed response has no duration. Try its player metadata
+    // endpoint alongside HTML parsing, which is increasingly blocked server-side.
+    const [fromPlayer, fromPage] = await Promise.all([
+      fetchYouTubeInnertubeDuration(getYouTubeVideoId(source, host)),
+      fetchDurationFromPage(source)
+    ]);
+    return fromPlayer || fromPage || null;
+  }
+  if (host === 'tiktok.com' || host.endsWith('.tiktok.com')) {
+    const fromApi = await fetchTikTokApiDuration(source);
     if (fromApi) return fromApi;
   }
   return fetchDurationFromPage(source);

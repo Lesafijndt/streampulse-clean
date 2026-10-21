@@ -154,3 +154,31 @@ test('Queue backup validation rejects unsafe URLs, duplicate IDs, and unrelated 
   ] };
   assert.equal(validateQueueBackup(duplicate).valid, false);
 });
+
+
+test('Live queue statistics report recent requesters, platforms, genres, runtime, and recent plays', async () => {
+  const { buildQueueStatistics } = await import('../src/queueLogic.js');
+  const now = 10_000_000;
+  const data = [
+    { id: '1', status: 'queue', requestedBy: 'Alice', platform: 'youtube', category: 'Music', timestamp: now - 1000, durationSec: 180, durationSource: 'metadata' },
+    { id: '2', status: 'queue', requestedBy: 'alice', platform: 'youtube', category: 'Music', timestamp: now - 2000, durationSec: 120, durationSource: 'metadata' },
+    { id: '3', status: 'watched', requestedBy: 'Bob', platform: 'tiktok', category: 'Memes', timestamp: now - 4 * 60 * 60 * 1000, playedAt: now - 20 * 60 * 1000 },
+    { id: '4', status: 'watched', requestedBy: 'Carol', platform: 'twitch', category: 'Gaming', timestamp: now - 60_000, playedAt: now - 2 * 60 * 60 * 1000 },
+    { id: '5', status: 'queue', requestedBy: 'Dave', platform: 'tiktok', category: 'Memes', timestamp: now - 30 * 60 * 1000, durationSource: 'unknown' }
+  ];
+  const stats = buildQueueStatistics(data, now);
+  assert.equal(stats.totalRequests, 5);
+  assert.equal(stats.totalRequesters, 4);
+  assert.equal(stats.requestsLastWindow, 4);
+  assert.equal(stats.requestersLastWindow, 3);
+  assert.equal(stats.queueCount, 3);
+  assert.equal(stats.queueDurationSeconds, 180 + 120 + 45);
+  assert.equal(stats.watchedLastWindow, 2);
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
+  assert.deepEqual(stats.mostPopularGenre, { label: 'Memes', count: 2 });
+  assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
+});
+
+test('player-reported real 03:45 duration is not hidden as a legacy placeholder', () => {
+  assert.equal(getDurationLabel({ platform: 'youtube', duration: '03:45', durationSec: 225, durationSource: 'player' }), '3:45');
+});

@@ -43,7 +43,11 @@ import {
   FolderSync,
   Download,
   Upload,
-  History
+  History,
+  Activity,
+  BarChart3,
+  Timer,
+  TrendingUp
 } from 'lucide-react';
 
 // Firebase imports
@@ -78,6 +82,7 @@ import {
   getDurationLabel,
   getQueueMediaCounts,
   getDurationEstimate,
+  buildQueueStatistics,
   createQueueBackup,
   validateQueueBackup
 } from './queueLogic.js';
@@ -731,6 +736,10 @@ function YediHubAppContent() {
   // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
   videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
+  const durationEnrichmentAttemptedRef = useRef(new Set());
+  const durationEnrichmentInFlightRef = useRef(new Set());
+  const [durationRefreshCount, setDurationRefreshCount] = useState(0);
+  const [statsNow, setStatsNow] = useState(() => Date.now());
   const restoringBackupRef = useRef(false);
   const backupFileInputRef = useRef(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -1279,6 +1288,88 @@ function YediHubAppContent() {
     }
   };
 
+  const reportPlayerDuration = (videoId, rawDurationSeconds) => {
+    const seconds = Math.round(Number(rawDurationSeconds));
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) return;
+    const target = videosRef.current.find((video) => String(video.id) === String(videoId));
+    if (!target) return;
+    const label = formatMediaDuration(seconds);
+    const storedSeconds = Number(target.durationSec) || 0;
+    if (Math.abs(storedSeconds - seconds) <= 1 &&
+        String(target.duration || '') === label &&
+        ['metadata', 'player'].includes(String(target.durationSource || ''))) return;
+    void syncUpdateVideo(String(target.id), {
+      duration: label,
+      durationSec: seconds,
+      durationSource: target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
+        ? 'metadata'
+        : 'player'
+    });
+  };
+
+  // Backfill existing queue/history items added before provider durations were retrieved.
+  // Run a few requests at a time; a manual refresh retries items whose provider hides duration.
+  const durationScanKey = videos.map((video) => String(video.id)).join('|');
+  useEffect(() => {
+    const candidates = videosRef.current.filter((video) => {
+      if (!video?.id || !video?.url ||
+          !['youtube', 'tiktok', 'twitch', 'kick'].includes(String(video.platform || '').toLowerCase())) return false;
+      const id = String(video.id);
+      if (durationEnrichmentAttemptedRef.current.has(id) || durationEnrichmentInFlightRef.current.has(id)) return false;
+      const seconds = Number(video.durationSec) || 0;
+      const label = String(video.duration || '').trim();
+      const placeholder = (seconds === 45 && label === '00:45') ||
+        (seconds === 225 && ['03:45', '3:45'].includes(label));
+      const hasUsefulSeconds = seconds > 0 && !placeholder;
+      const hasUsefulLabel = /^(?:\d+:)?\d{1,2}:\d{2}$/.test(label) &&
+        !['00:45', '03:45', '3:45'].includes(label);
+      if (['metadata', 'player'].includes(String(video.durationSource || ''))) return false;
+      return !hasUsefulSeconds && !hasUsefulLabel;
+    }).slice(0, 160);
+
+    const enrich = async () => {
+      for (let offset = 0; offset < candidates.length; offset += 3) {
+        const batch = candidates.slice(offset, offset + 3).filter((video) => {
+          const id = String(video.id);
+          return !durationEnrichmentAttemptedRef.current.has(id) && !durationEnrichmentInFlightRef.current.has(id);
+        });
+        batch.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
+        await Promise.all(batch.map(async (video) => {
+          const id = String(video.id);
+          try {
+            const response = await fetch('/api/media-metadata?url=' + encodeURIComponent(video.url), {
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: AbortSignal.timeout(8500)
+            });
+            if (!response.ok) return;
+            const metadata = await response.json().catch(() => null);
+            const seconds = Math.round(Number(metadata?.durationSec));
+            if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) return;
+            const current = videosRef.current.find((item) => String(item.id) === id);
+            if (!current || ['metadata', 'player'].includes(String(current.durationSource || ''))) return;
+            void syncUpdateVideo(id, {
+              duration: formatMediaDuration(seconds),
+              durationSec: seconds,
+              durationSource: 'metadata'
+            });
+          } catch {
+            console.debug('Duration backfill did not return a duration for this item.', id);
+          } finally {
+            durationEnrichmentAttemptedRef.current.add(id);
+            durationEnrichmentInFlightRef.current.delete(id);
+          }
+        }));
+      }
+    };
+    void enrich();
+  }, [durationScanKey, channelRoom, durationRefreshCount]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setStatsNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const syncIncrementUpvote = async (videoId, voterLogin) => {
     setVideos((prev) => prev.map((video) => {
       if (video.id !== videoId) return video;
@@ -1591,14 +1682,22 @@ function YediHubAppContent() {
     if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
   }, [videos]);
 
-  const counts = useMemo(() => {
-    const queued = videos.filter((video) => video.status === 'queue');
-    return {
-      ...getQueueMediaCounts(videos, getVideoMediaType),
-      watch_later: videos.filter((video) => video.status === 'watch_later').length,
-      watched: videos.filter((video) => video.status === 'watched').length,
-    };
-  }, [videos]);
+  const counts = useMemo(() => ({
+    ...getQueueMediaCounts(videos, getVideoMediaType),
+    watch_later: videos.filter((video) => video.status === 'watch_later').length,
+    watched: videos.filter((video) => video.status === 'watched').length,
+  }), [videos]);
+
+  const queueStats = useMemo(
+    () => buildQueueStatistics(videos, statsNow),
+    [videos, statsNow]
+  );
+
+  const handleRefreshDurations = () => {
+    durationEnrichmentAttemptedRef.current.clear();
+    durationEnrichmentInFlightRef.current.clear();
+    setDurationRefreshCount((count) => count + 1);
+  };
 
   const nextQueuedVideo = useMemo(
     () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
@@ -1727,8 +1826,8 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !position your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute. ETAs are estimates.');
+          sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
+          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -2298,6 +2397,7 @@ function YediHubAppContent() {
         const duration = Number(info.duration);
         if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
           playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+          reportPlayerDuration(video.id, duration);
           if (Number.isFinite(now)) setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
         }
       }
@@ -2360,6 +2460,7 @@ function YediHubAppContent() {
         if (duration > 0) {
           if (currentVideoRef.current?.id === video.id) {
             playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+            reportPlayerDuration(video.id, duration);
           }
           setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
         }
@@ -2511,7 +2612,7 @@ function YediHubAppContent() {
     const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const target = queue[position - 1];
     if (!target) {
-      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !position to see your requests.`);
+      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !when to see your requests.`);
       return;
     }
     handleUpvote(target.id, voterLogin).then((result) => {
@@ -2567,8 +2668,7 @@ function YediHubAppContent() {
     });
 
     myQueued.forEach(({ video, position }) => {
-      const fallbackMark = etaFallbackById.get(video.id) ? '*' : '';
-      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))}${fallbackMark})`);
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))})`);
     });
 
     if (!messages.length) {
@@ -2576,8 +2676,7 @@ function YediHubAppContent() {
       return;
     }
     const visibleItems = messages.slice(0, 3);
-    const usesFallback = myQueued.slice(0, 3).some(({ video }) => etaFallbackById.get(video.id));
-    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}. ETAs are estimates.${usesFallback ? ' * = fallback duration used.' : ''}`);
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}.`);
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
@@ -2850,7 +2949,7 @@ function YediHubAppContent() {
             >
               Restart Bridge
             </button>
-            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !position are sent by the separate Twitch account gachibot69">
+            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !when are sent by the separate Twitch account gachibot69">
               <span className={`h-1.5 w-1.5 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
               {chatBotSession.loading ? 'Bot checking' : chatBotSession.connected ? 'Bot Online' : 'Bot Offline'}
             </div>
@@ -2918,6 +3017,102 @@ function YediHubAppContent() {
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory(selectedCategory === 'Music' && activeTab === 'queue' ? 'All' : 'Music'); setMediaTypeFilter('All'); }} aria-pressed={selectedCategory === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${selectedCategory === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter('Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
           </div>
+
+          <section className="rounded-xl border border-fuchsia-500/20 bg-gradient-to-b from-[#181022] to-[#0e111b] p-3 space-y-3 shadow-lg shadow-fuchsia-950/10">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
+                <BarChart3 className="h-3.5 w-3.5 text-fuchsia-300" /> STATS BOARD
+              </div>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300">
+                <Activity className="h-2.5 w-2.5" /> Live
+              </span>
+            </div>
+            <p className="text-[9px] text-slate-500">Recent activity · last 3 hours</p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><Users className="h-3 w-3" /> People</div>
+                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.requestersLastWindow}</div>
+                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequesters} unique total</div>
+              </div>
+              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><TrendingUp className="h-3 w-3" /> Requests</div>
+                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.requestsLastWindow}</div>
+                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequests} total items</div>
+              </div>
+              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><ListVideo className="h-3 w-3" /> Waiting</div>
+                <div className="mt-1 text-xl font-black leading-none text-purple-200">{queueStats.queueCount}</div>
+                <div className="mt-1 text-[9px] text-slate-500">queued videos</div>
+              </div>
+              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><CheckCircle2 className="h-3 w-3" /> Watched</div>
+                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.watchedLastWindow}</div>
+                <div className="mt-1 text-[9px] text-slate-500">in the last 3h</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-2.5 py-2">
+              <div className="min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Queue runway</div>
+                <div className="mt-0.5 text-sm font-black text-white">{queueStats.queueDurationSeconds > 0 ? formatQueueWait(queueStats.queueDurationSeconds).replace(/^~/, '') : '0s'} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div>
+              </div>
+              <Timer className="h-4 w-4 shrink-0 text-purple-300" />
+            </div>
+
+            <div className="space-y-2.5">
+              <div>
+                <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px]">
+                  <span className="font-bold uppercase tracking-wide text-slate-400">Top platform</span>
+                  <span className="truncate font-black capitalize text-cyan-200">{queueStats.mostPopularPlatform?.label || '—'}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {queueStats.platforms.length ? queueStats.platforms.slice(0, 3).map((item) => (
+                    <div key={item.label}>
+                      <div className="mb-0.5 flex justify-between gap-2 text-[9px] text-slate-400">
+                        <span className="capitalize">{item.label}</span><span className="font-mono text-slate-300">{item.count}</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-slate-800">
+                        <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-purple-500" style={{ width: (Math.max(7, Math.round((item.count / Math.max(1, queueStats.platforms[0]?.count || 1)) * 100))) + '%' }} />
+                      </div>
+                    </div>
+                  )) : <p className="text-[10px] text-slate-600">No requests yet</p>}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px]">
+                  <span className="font-bold uppercase tracking-wide text-slate-400">Top genre</span>
+                  <span className="truncate font-black text-amber-200">{queueStats.mostPopularGenre?.label || '—'}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {queueStats.genres.slice(0, 3).map((item) => (
+                    <div key={item.label}>
+                      <div className="mb-0.5 flex justify-between gap-2 text-[9px] text-slate-400">
+                        <span className="truncate">{item.label}</span><span className="font-mono text-slate-300">{item.count}</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-slate-800">
+                        <div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-rose-500" style={{ width: (Math.max(7, Math.round((item.count / Math.max(1, queueStats.genres[0]?.count || 1)) * 100))) + '%' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {queueStats.mostActiveRequester && (
+              <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[9px]">
+                <span className="text-slate-500">Most requests</span>
+                <span className="max-w-[130px] truncate font-bold text-fuchsia-200">@{queueStats.mostActiveRequester.label} · {queueStats.mostActiveRequester.count}</span>
+              </div>
+            )}
+
+            {isStaff && (
+              <button type="button" onClick={handleRefreshDurations} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-[9px] font-bold text-slate-300 transition hover:border-purple-400/50 hover:text-white" title="Retry provider metadata lookups for entries whose duration is still unknown">
+                <RefreshCw className="h-3 w-3" /> Refresh missing durations
+              </button>
+            )}
+          </section>
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
           {/* ==========================================

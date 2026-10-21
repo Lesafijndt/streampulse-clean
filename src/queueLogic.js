@@ -12,7 +12,7 @@ export function formatMediaDuration(totalSeconds) {
 }
 
 function isDefaultPlaceholderDuration(video) {
-  if (!video || video.durationSource === 'metadata') return false;
+  if (!video || ['metadata', 'player'].includes(String(video.durationSource || ''))) return false;
   const platform = String(video.platform || '');
   return (
     Number(video.durationSec) === 45 &&
@@ -295,5 +295,67 @@ export function validateQueueBackup(value) {
       streamSettings: value.streamSettings,
       votedIds: value.votedIds && typeof value.votedIds === 'object' && !Array.isArray(value.votedIds) ? value.votedIds : {}
     }
+  };
+}
+
+
+export function buildQueueStatistics(videos = [], now = Date.now(), recentWindowMs = 3 * 60 * 60 * 1000) {
+  const items = Array.isArray(videos) ? videos : [];
+  const cutoff = Number(now) - Math.max(0, Number(recentWindowMs) || 0);
+  const countsFor = (selector) => {
+    const totals = new Map();
+    items.forEach((video) => {
+      const value = selector(video);
+      if (!value) return;
+      totals.set(value, (totals.get(value) || 0) + 1);
+    });
+    return [...totals.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  };
+  const requesterOf = (video) => {
+    const login = String(video?.requestedBy || '').trim().replace(/^@/, '').toLowerCase();
+    return login && login !== 'viewer' && login !== 'unknown' ? login : '';
+  };
+  const timestampOf = (value) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+  const requestsRecent = items.filter((video) => {
+    const timestamp = timestampOf(video?.timestamp) || timestampOf(video?.createdAt);
+    return timestamp >= cutoff && timestamp <= Number(now);
+  });
+  const watchedRecent = items.filter((video) => {
+    if (video?.status !== 'watched') return false;
+    const playedAt = timestampOf(video?.playedAt) || timestampOf(video?.watchedAt);
+    return playedAt >= cutoff && playedAt <= Number(now);
+  });
+  const requesters = new Set(items.map(requesterOf).filter(Boolean));
+  const recentRequesters = new Set(requestsRecent.map(requesterOf).filter(Boolean));
+  const requesterCounts = countsFor(requesterOf);
+  const platforms = countsFor((video) => {
+    const platform = String(video?.platform || 'external').toLowerCase();
+    return platform === 'web' ? 'external' : platform;
+  });
+  const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General');
+  const queued = items.filter((video) => video?.status === 'queue');
+  return {
+    totalRequests: items.length,
+    totalRequesters: requesters.size,
+    requestsLastWindow: requestsRecent.length,
+    requestersLastWindow: recentRequesters.size,
+    queueCount: queued.length,
+    queueDurationSeconds: queued.reduce((total, video) => total + estimateVideoDurationSeconds(video), 0),
+    watchedLastWindow: watchedRecent.length,
+    mostPopularPlatform: platforms[0] || null,
+    mostPopularGenre: genres[0] || null,
+    mostActiveRequester: requesterCounts[0] || null,
+    platforms: platforms.slice(0, 4),
+    genres: genres.slice(0, 4)
   };
 }
