@@ -412,28 +412,42 @@ function detectMusicType(url = '', title = '', note = '') {
  * Standardize media platform parsing
  */
 function getMediaIdentityKey(platform = '', videoId = '', rawUrl = '') {
-  const normalizedPlatform = String(platform || 'web').trim().toLowerCase();
-  const normalizedId = String(videoId || '').trim().toLowerCase();
+  let normalizedPlatform = String(platform || 'web').trim().toLowerCase();
+  let normalizedId = String(videoId || '').trim().toLowerCase();
 
-  // Platform IDs deduplicate equivalent URL forms (for example youtu.be and youtube.com).
+  // Prefer the canonical ID from the URL so legacy records lacking platform/videoId
+  // still match new requests (including youtu.be vs youtube.com and Shorts links).
+  const cleanUrl = String(rawUrl || '').trim();
+  const parsedFromUrl = cleanUrl ? parseMediaUrl(cleanUrl) : null;
+  if (
+    parsedFromUrl &&
+    parsedFromUrl.platform &&
+    parsedFromUrl.platform !== 'web' &&
+    parsedFromUrl.videoId &&
+    !String(parsedFromUrl.videoId).startsWith('ext-')
+  ) {
+    normalizedPlatform = String(parsedFromUrl.platform).trim().toLowerCase();
+    normalizedId = String(parsedFromUrl.videoId).trim().toLowerCase();
+  }
+
   if (normalizedPlatform !== 'web' && normalizedId && !normalizedId.startsWith('ext-')) {
-    return `${normalizedPlatform}:${normalizedId}`;
+    return normalizedPlatform + ':' + normalizedId;
   }
 
   // For generic media URLs, ignore common tracking parameters and trailing slashes.
   try {
-    const parsed = new URL(String(rawUrl || '').trim());
+    const parsed = new URL(cleanUrl);
     const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     const pathname = parsed.pathname.replace(/\/+$/, '').toLowerCase();
     const ignoredParams = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'feature', 'si', 'share', 'ab_channel']);
     const query = [...parsed.searchParams.entries()]
       .filter(([key]) => !ignoredParams.has(key.toLowerCase()))
       .sort(([keyA, valueA], [keyB, valueB]) => keyA.localeCompare(keyB) || valueA.localeCompare(valueB))
-      .map(([key, value]) => `${key.toLowerCase()}=${value}`)
+      .map(([key, value]) => key.toLowerCase() + '=' + value)
       .join('&');
-    return `url:${host}${pathname}${query ? `?${query}` : ''}`;
+    return 'url:' + host + pathname + (query ? '?' + query : '');
   } catch {
-    return `url:${String(rawUrl || '').trim().replace(/\/+$/, '').toLowerCase()}`;
+    return 'url:' + cleanUrl.replace(/\/+$/, '').toLowerCase();
   }
 }
 
@@ -441,6 +455,76 @@ function isVerticalMedia(video) {
   if (!video) return false;
   if (video.platform === 'tiktok' || video.isVertical === true) return true;
   return String(video.url || '').toLowerCase().includes('youtube.com/shorts/');
+}
+
+function getStableMediaDocumentId(identityKey = '') {
+  // Stable across browser sessions, so simultaneous Twitch-chat handlers write one Firestore row.
+  let hashA = 0x811c9dc5;
+  let hashB = 0x9e3779b9;
+  let hashC = 0x85ebca6b;
+  const input = String(identityKey || '');
+  for (let i = 0; i < input.length; i += 1) {
+    const code = input.charCodeAt(i);
+    hashA = Math.imul(hashA ^ code, 0x01000193);
+    hashB = Math.imul(hashB ^ code, 0x5bd1e995);
+    hashC = Math.imul(hashC ^ code, 0x27d4eb2d);
+  }
+  return 'media-' + (hashA >>> 0).toString(36) + '-' +
+    (hashB >>> 0).toString(36) + '-' + (hashC >>> 0).toString(36);
+}
+
+function getMediaStatusPriority(video) {
+  const status = String(video?.status || '').toLowerCase();
+  if (status === 'playing') return 4;
+  if (status === 'watched') return 3;
+  if (status === 'queue') return 2;
+  if (status === 'watch_later') return 1;
+  return 0;
+}
+
+function dedupeMediaVideos(items) {
+  const winners = new Map();
+  const duplicateIds = [];
+
+  (Array.isArray(items) ? items : []).forEach((video, index) => {
+    if (!video || typeof video !== 'object') return;
+    const url = String(video.url || '').trim();
+    const platform = String(video.platform || 'web').trim().toLowerCase();
+    const videoId = String(video.videoId || '').trim().toLowerCase();
+    const hasPlatformId = platform !== 'web' && videoId && !videoId.startsWith('ext-');
+    const identityKey = url || hasPlatformId
+      ? getMediaIdentityKey(platform, videoId, url)
+      : 'entry:' + String(video.id || index);
+    const existing = winners.get(identityKey);
+    if (!existing) {
+      winners.set(identityKey, video);
+      return;
+    }
+
+    // Prefer the item that's already playing or further along in history. On ties,
+    // keep the oldest request so an accidental second request cannot replay it.
+    const existingPriority = getMediaStatusPriority(existing);
+    const incomingPriority = getMediaStatusPriority(video);
+    const existingTime = Number(existing.timestamp) || Number(existing.createdAt) || Number.MAX_SAFE_INTEGER;
+    const incomingTime = Number(video.timestamp) || Number(video.createdAt) || Number.MAX_SAFE_INTEGER;
+    const keepIncoming =
+      incomingPriority > existingPriority ||
+      (incomingPriority === existingPriority && incomingTime < existingTime) ||
+      (incomingPriority === existingPriority && incomingTime === existingTime &&
+        String(video.id || '').localeCompare(String(existing.id || '')) < 0);
+
+    if (keepIncoming) {
+      if (existing.id && String(existing.id) !== String(video.id)) duplicateIds.push(String(existing.id));
+      winners.set(identityKey, video);
+    } else if (video.id && String(video.id) !== String(existing.id)) {
+      duplicateIds.push(String(video.id));
+    }
+  });
+
+  return {
+    videos: Array.from(winners.values()),
+    duplicateIds: Array.from(new Set(duplicateIds)),
+  };
 }
 
 function parseMediaUrl(rawUrl = '') {
@@ -562,9 +646,10 @@ function YediHubAppContent() {
   const [videos, setVideos] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
     if (Array.isArray(saved)) {
-      return saved
+      const realSavedVideos = saved
         .filter((video) => video && typeof video === 'object' && !String(video.id || '').startsWith('demo-'))
         .map(normalizeLegacyVideoVotes);
+      return dedupeMediaVideos(realSavedVideos).videos;
     }
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
@@ -895,9 +980,20 @@ function YediHubAppContent() {
             }
             return normalized;
           });
-          const roomList = list.filter(
+          const rawRoomList = list.filter(
             (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
+          const dedupedRoomList = dedupeMediaVideos(rawRoomList);
+          const roomList = dedupedRoomList.videos;
+
+          // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
+          // so a future refresh or deletion cannot make a duplicate reappear.
+          if (dedupedRoomList.duplicateIds.length > 0) {
+            void Promise.all(dedupedRoomList.duplicateIds.map((duplicateId) =>
+              deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', duplicateId))
+                .catch((error) => console.warn('Could not delete a duplicate queue document.', error))
+            ));
+          }
 
           if (roomList.length > 0) {
             initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
@@ -1559,7 +1655,7 @@ function YediHubAppContent() {
     const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
 
     const newVideo = {
-      id: 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
       channelRoom,
       title: cleanTitle,
       url: normalizedUrl,
