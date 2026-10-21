@@ -1,0 +1,26 @@
+YEDI HUB PATCH: QUEUE VOTES + TIKTOK SKIP RECOVERY
+
+Files in this patch
+- src/App.tsx
+- api/twitch/login.js
+- api/twitch/chat-message.js (new server-side route)
+
+What changed
+1) Queue order is now pinned items first, then highest real upvote count, then oldest request when votes tie. Voting updates the actual playback queue, rank labels, and Next Up ticker. Existing requests created by the older version have their automatic seed vote removed during migration.
+2) Viewers can vote for multiple different queued videos but only once per video. A requester cannot vote for their own request. In Twitch chat, use !bigcock to vote for queue position #1 or !bigcock 2, !bigcock 3, etc. to vote for a different queued request. Queue pins set by staff remain higher priority.
+3) !position (also !queue, !when, !myqueue, !queueposition) replies with a viewer's requests, queue ranks, and approximate waiting times. These replies are sent through Twitch's Chat API, not the anonymous read-only IRC connection.
+4) TikTok embeds are remounted for each request, try playback recovery after loading/ready, and show Retry/Open on TikTok if the player reports an error or doesn't become ready. Browser/TikTok autoplay policy can still prevent automatic playback with sound.
+5) Twitch OAuth now requests user:write:chat to allow the position replies. After deploying, log out of Yedi Hub and sign back in to approve this permission.
+
+Install
+1. Extract this ZIP into the root of your existing Yedi Hub project folder.
+2. Allow the files to merge/replace existing files, and add the new api/twitch/chat-message.js file.
+3. In GitHub Desktop, review the changes, commit them, and click Push origin.
+4. Wait for Vercel to deploy.
+5. Open Yedi Hub, log out, then log back in to grant Twitch chat-write permission.
+6. Test in Twitch chat: !position, !bigcock, and !bigcock 2. Test skipping from one TikTok request to another; if the embed stalls, use Retry TikTok player or Open on TikTok.
+
+Validation
+- TypeScript/JSX transpile check completed with zero diagnostics.
+- Node syntax checks passed for api/twitch/login.js and api/twitch/chat-message.js.
+- This ZIP has not been tested against the live Vercel deployment. Full npm build wasn't run because project dependencies are not installed in this workspace.

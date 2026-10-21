@@ -62,6 +62,7 @@ import {
   setDoc,
   updateDoc,
   increment,
+  arrayUnion,
   deleteDoc,
   onSnapshot
 } from 'firebase/firestore';
@@ -113,6 +114,49 @@ function normalizeRoomName(value) {
 
 function roomStorageKey(room, suffix) {
   return `${STORAGE_PREFIX}:room:${encodeURIComponent(normalizeRoomName(room))}:${suffix}`;
+}
+
+function normalizeTwitchLogin(value) {
+  return String(value || '').trim().toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_]/g, '');
+}
+
+function compareQueuePriority(a, b) {
+  if (Boolean(a?.pinned) !== Boolean(b?.pinned)) return a?.pinned ? -1 : 1;
+  const voteDifference = (Number(b?.upvotes) || 0) - (Number(a?.upvotes) || 0);
+  if (voteDifference !== 0) return voteDifference;
+  return (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0);
+}
+
+function normalizeLegacyVideoVotes(video) {
+  if (Array.isArray(video?.voters)) {
+    return { ...video, upvotes: Math.max(0, Number(video.upvotes) || 0), voters: video.voters };
+  }
+  // Previous versions gave every new request one free vote. No voter identities were saved then,
+  // so subtract that seed once when migrating old records into the new voter-tracked system.
+  return {
+    ...video,
+    upvotes: Math.max(0, (Number(video?.upvotes) || 0) - 1),
+    voters: [],
+  };
+}
+
+function estimateVideoDurationSeconds(video) {
+  const storedDuration = Number(video?.durationSec);
+  if (video?.platform === 'tiktok' || video?.platform === 'twitch') {
+    return storedDuration > 0 && storedDuration <= 90 ? storedDuration : 45;
+  }
+  if (Number.isFinite(storedDuration) && storedDuration > 0) return storedDuration;
+  const match = String(video?.duration || '').match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (match) return (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
+  return 225;
+}
+
+function formatQueueWait(seconds) {
+  const rounded = Math.max(0, Math.round(Number(seconds) || 0));
+  if (rounded < 60) return `~${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  return remainder ? `~${minutes}m ${remainder}s` : `~${minutes}m`;
 }
 
 function getSavedRoom() {
@@ -460,7 +504,11 @@ export default function YediHubApp() {
   // Videos master state. Persist locally even when Firebase is not configured or is offline.
   const [videos, setVideos] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
-    if (Array.isArray(saved)) return saved.filter((video) => !String(video?.id || '').startsWith('demo-'));
+    if (Array.isArray(saved)) {
+      return saved
+        .filter((video) => !String(video?.id || '').startsWith('demo-'))
+        .map(normalizeLegacyVideoVotes);
+    }
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
   });
@@ -474,6 +522,8 @@ export default function YediHubApp() {
   // Player State
   const [simProgress, setSimProgress] = useState(0);
   const [isTheatreMode, setIsTheatreMode] = useState(false);
+  const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
+  const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const youtubePlayerContainerRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const tiktokIframeRef = useRef(null);
@@ -481,8 +531,15 @@ export default function YediHubApp() {
   const handleVolumeCommandRef = useRef(null);
   const handleIncomingChatCommandRef = useRef(null);
   const handleUpvoteRef = useRef(null);
+  const handleVoteCommandRef = useRef(null);
+  const handleQueuePositionRef = useRef(null);
   const currentVideoRef = useRef(null);
   const handleMediaEndedRef = useRef(null);
+  const voteAttemptsRef = useRef(new Set());
+  const positionCommandCooldownRef = useRef(new Map());
+  const chatReplyQueueRef = useRef(Promise.resolve());
+  const lastChatReplyAtRef = useRef(0);
+  const reauthNoticeShownRef = useRef(false);
   const [votedIds, setVotedIds] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'votes'), {});
     return saved && typeof saved === 'object' ? saved : {};
@@ -668,6 +725,7 @@ export default function YediHubApp() {
   // REAL-TIME FIRESTORE LISTENER FOR ROOM
   // ==========================================
   const initializedCloudRoomsRef = useRef(new Set());
+  const legacyVoteMigrationRef = useRef(new Set());
 
   useEffect(() => {
     if (!db || !firebaseUser || !normalizeRoomName(channelRoom)) return;
@@ -682,10 +740,23 @@ export default function YediHubApp() {
           setCloudSynced(true);
           setSyncStatusText('Cloud Synced');
 
-          // Place the Firestore document ID last so it is always the ID used for updates/deletes.
+          // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
+          // requests' displayed vote counts honest and makes voter identity persistence consistent.
           const list = snapshot.docs.map((d) => {
             const data = d.data();
-            return { ...data, id: d.id, mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note) };
+            const normalized = {
+              ...normalizeLegacyVideoVotes(data),
+              id: d.id,
+              mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note),
+            };
+            if (!Array.isArray(data.voters) && !legacyVoteMigrationRef.current.has(d.id)) {
+              legacyVoteMigrationRef.current.add(d.id);
+              updateDoc(d.ref, { upvotes: normalized.upvotes, voters: [] }).catch((error) => {
+                legacyVoteMigrationRef.current.delete(d.id);
+                console.warn('Could not migrate legacy vote counts for one queue item.', error);
+              });
+            }
+            return normalized;
           });
           const roomList = list.filter(
             (v) => normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
@@ -837,24 +908,29 @@ export default function YediHubApp() {
     }
   };
 
-  const syncIncrementUpvote = async (videoId) => {
-    setVideos((prev) => prev.map((video) => (
-      video.id === videoId ? { ...video, upvotes: (video.upvotes || 0) + 1 } : video
-    )));
+  const syncIncrementUpvote = async (videoId, voterLogin) => {
+    setVideos((prev) => prev.map((video) => {
+      if (video.id !== videoId) return video;
+      const voters = Array.isArray(video.voters) ? video.voters : [];
+      if (voters.some((item) => normalizeTwitchLogin(item) === voterLogin)) return video;
+      return { ...video, upvotes: (Number(video.upvotes) || 0) + 1, voters: [...voters, voterLogin] };
+    }));
 
     if (db && firebaseUser) {
       try {
         const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-        await updateDoc(itemRef, { upvotes: increment(1) });
+        await updateDoc(itemRef, { upvotes: increment(1), voters: arrayUnion(voterLogin) });
       } catch (error) {
-        // A legacy/demo document may not exist in Firestore yet; create it with the current count.
+        // A legacy/local-only item may not exist in Firestore yet; preserve the vote and voter list.
         try {
           const fullItem = videos.find((video) => video.id === videoId);
           if (fullItem) {
             const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
+            const voters = Array.isArray(fullItem.voters) ? fullItem.voters : [];
             await setDoc(itemRef, {
               ...fullItem,
-              upvotes: (fullItem.upvotes || 0) + 1,
+              upvotes: (Number(fullItem.upvotes) || 0) + 1,
+              voters: [...voters.filter((item) => normalizeTwitchLogin(item) !== voterLogin), voterLogin],
               channelRoom: normalizeRoomName(channelRoom),
             }, { merge: true });
           }
@@ -905,13 +981,24 @@ export default function YediHubApp() {
     // Current playing item or top of queue
     const playing = videos.find((v) => v.status === 'playing');
     if (playing) return playing;
-    const queued = videos
-      .filter((v) => v.status === 'queue')
-      .sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : (a.timestamp || 0) - (b.timestamp || 0)));
+    const queued = videos.filter((v) => v.status === 'queue').sort(compareQueuePriority);
     return queued[0] || null;
   }, [videos]);
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
+
+  // Older saved queues may have no explicit "playing" status even though their top item is visible.
+  // Promote that first item once so vote changes reorder waiting requests, not the video already on screen.
+  useEffect(() => {
+    const activeItems = videos.filter((video) => video.status === 'playing');
+    if (activeItems.length > 1) {
+      activeItems.slice(1).forEach((video) => syncUpdateVideo(video.id, { status: 'queue' }));
+      return;
+    }
+    if (activeItems.length === 1) return;
+    const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority)[0];
+    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false });
+  }, [videos]);
 
   const counts = useMemo(() => {
     return {
@@ -937,12 +1024,21 @@ export default function YediHubApp() {
         );
       })
       .sort((a, b) => {
+        // The active queue reflects real playback priority, not merely a visual sort.
+        if (activeTab === 'queue' || sortBy === 'priority' || sortBy === 'upvotes') return compareQueuePriority(a, b);
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        if (sortBy === 'upvotes') return (b.upvotes || 0) - (a.upvotes || 0);
-        if (sortBy === 'newest') return (b.timestamp || 0) - (a.timestamp || 0);
-        return (a.timestamp || 0) - (b.timestamp || 0); // Priority / FIFO
+        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
+        return compareQueuePriority(a, b);
       });
   }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
+
+  // Keep queue rank labels true even when viewers filter the visible list by title or category.
+  const queueRankById = useMemo(() => {
+    const ranks = new Map();
+    videos.filter((video) => video.status === 'queue').sort(compareQueuePriority)
+      .forEach((video, index) => ranks.set(video.id, index + 1));
+    return ranks;
+  }, [videos]);
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
 
@@ -1015,9 +1111,11 @@ export default function YediHubApp() {
           const separator = tag.indexOf('=');
           return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
         }));
-        const username = String(tagMap['display-name'] || 'Viewer');
+        const prefixLogin = raw.match(/^@[^ ]+ :([^!]+)/)?.[1] || raw.match(/^:([^!]+)/)?.[1] || '';
+        const username = String(tagMap['display-name'] || prefixLogin || 'Viewer');
+        const voterLogin = normalizeTwitchLogin(prefixLogin || username);
         const text = msgMatch ? msgMatch[1].trim() : '';
-        const usernameKey = username.trim().toLowerCase().replace(/^@/, '');
+        const usernameKey = voterLogin || normalizeTwitchLogin(username);
         const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
         if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
 
@@ -1035,9 +1133,12 @@ export default function YediHubApp() {
         const isRequestCommand = lowerText.startsWith('!assr ');
         const volumeCommand = parseModVolumeCommand(lowerText);
         if (isRequestCommand) {
-          handleIncomingChatCommandRef.current?.(username, role, text);
-        } else if (lowerText === '!bigcock' && currentVideoRef.current) {
-          handleUpvoteRef.current?.(currentVideoRef.current.id);
+          // Use the canonical Twitch login as requester identity so self-vote protection is reliable.
+          handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
+        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
+          handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
+        } else if (['!position', '!queue', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
+          handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
           handleSkipNextRef.current?.();
         } else if (volumeCommand && isStaffRole(role)) {
@@ -1205,11 +1306,12 @@ export default function YediHubApp() {
       category: finalCategory,
       mediaType,
       duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? '00:45' : '03:45',
-      durationSec: 225,
-      requestedBy: requestedBy || twitchAuth.username || 'Viewer',
+      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? 45 : 225,
+      requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: targetStatus,
-      upvotes: 1,
+      upvotes: 0,
+      voters: [],
       pinned: false,
       addedAt: 'Just now',
       timestamp: Date.now(),
@@ -1247,23 +1349,24 @@ export default function YediHubApp() {
   const handleSkipNext = () => {
     if (!currentVideo) return;
 
-    // Mark current as watched
-    syncUpdateVideo(currentVideo.id, {
-      status: 'watched',
-      watchedAt: 'Just now'
+    // Mark the outgoing item (and any stale duplicate playing flags) as watched.
+    videos.filter((video) => video.status === 'playing' && video.id !== currentVideo.id).forEach((video) => {
+      syncUpdateVideo(video.id, { status: 'watched', watchedAt: 'Just now' });
     });
+    syncUpdateVideo(currentVideo.id, { status: 'watched', watchedAt: 'Just now' });
 
-    // Find next in queue
+    // The same priority order is used by the visible queue and !bigcock voting.
     const queuedList = videos
-      .filter((v) => v.status === 'queue' && v.id !== currentVideo.id)
-      .sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : (a.timestamp || 0) - (b.timestamp || 0)));
+      .filter((video) => video.status === 'queue' && video.id !== currentVideo.id)
+      .sort(compareQueuePriority);
 
     const nextOne = queuedList[0];
     if (nextOne) {
       syncUpdateVideo(nextOne.id, { status: 'playing', pinned: false });
       setSimProgress(0);
-        addToast(`Skipped! Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
+      addToast(`Skipped! Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
     } else {
+      setSimProgress(0);
       addToast('Reached end of queue.', 'info');
     }
   };
@@ -1380,57 +1483,36 @@ export default function YediHubApp() {
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
-  // TikTok's official embed starts from the autoplay=1 URL parameter. Avoid sending a second
-  // play command on readiness, which can race the embed's own startup. If unmuting pauses the
-  // player, try one resume; browsers may still require a real click for audible playback.
+  // TikTok's official player needs a fresh iframe for every queue request. After a skip, retry
+  // play/unmute on load and ready; if the embed never becomes ready, expose a retry/open fallback.
   useEffect(() => {
     if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId) return undefined;
 
-    let playbackStarted = false;
-    let unmuteSent = false;
-    let resumeAttempted = false;
-    let lastState = -1;
-    let unmuteRequestedAt = 0;
-    let reportedMuted = null;
-    let fallbackShown = false;
-    const timers = new Set<number>();
+    let readyTimeout = null;
+    const recoveryTimers = [];
+    setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
 
-    const schedule = (callback, delay) => {
+    const postTikTokCommand = (type) => {
+      const frame = tiktokIframeRef.current;
+      if (!frame?.contentWindow) return;
+      try {
+        frame.contentWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+      } catch (error) {
+        console.warn('TikTok player command could not be sent.', error);
+      }
+    };
+    const schedulePlaybackRecovery = (delay) => {
       const timer = window.setTimeout(() => {
-        timers.delete(timer);
-        callback();
+        if (currentVideoRef.current?.id !== currentVideo.id) return;
+        postTikTokCommand('play');
+        postTikTokCommand('unMute');
       }, delay);
-      timers.add(timer);
+      recoveryTimers.push(timer);
     };
-
-    const sendTikTokCommand = (type) => {
-      tiktokIframeRef.current?.contentWindow?.postMessage(
-        { type, value: null, 'x-tiktok-player': true },
-        'https://www.tiktok.com'
-      );
+    const markReady = () => {
+      if (readyTimeout) window.clearTimeout(readyTimeout);
+      setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
     };
-
-    const showAutoplayFallback = () => {
-      if (fallbackShown) return;
-      fallbackShown = true;
-      addToast(
-        'TikTok autoplay with sound was blocked by the browser. Click Play or the volume control inside TikTok once; the player will not keep interrupting itself.',
-        'info'
-      );
-    };
-
-    const requestUnmute = () => {
-      if (!playbackStarted || unmuteSent) return;
-      unmuteSent = true;
-      unmuteRequestedAt = Date.now();
-      sendTikTokCommand('unMute');
-
-      // Detect a rejected unmute without repeatedly fighting the browser's autoplay policy.
-      schedule(() => {
-        if (reportedMuted === true) showAutoplayFallback();
-      }, 1100);
-    };
-
     const handleTikTokMessage = (event) => {
       if (event.origin !== 'https://www.tiktok.com') return;
       if (event.source !== tiktokIframeRef.current?.contentWindow) return;
@@ -1442,52 +1524,42 @@ export default function YediHubApp() {
       if (!data || data['x-tiktok-player'] !== true) return;
 
       if (data.type === 'onPlayerReady') {
-        // autoplay=1 is already set on the iframe URL; do not send a duplicate play command.
+        markReady();
+        postTikTokCommand('play');
+        postTikTokCommand('unMute');
+        // Some quick queue transitions report ready before the inner media element is available.
+        schedulePlaybackRecovery(700);
+        schedulePlaybackRecovery(1800);
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
       } else if (data.type === 'onStateChange') {
-        lastState = Number(data.value);
-        if (lastState === 1) {
-          playbackStarted = true;
-          // Try audio once after playback is confirmed. Never loop unmute commands.
-          if (!unmuteSent) schedule(requestUnmute, 700);
-        } else if (lastState === 2) {
-          // Some TikTok/browser combinations pause when the audio request is rejected.
-          // Resume only once, and only immediately after that unmute attempt.
-          const pauseFollowedUnmute = unmuteSent && !resumeAttempted && Date.now() - unmuteRequestedAt < 3000;
-          if (pauseFollowedUnmute) {
-            resumeAttempted = true;
-            schedule(() => {
-              sendTikTokCommand('play');
-              schedule(() => {
-                if (lastState !== 1) showAutoplayFallback();
-              }, 1000);
-            }, 120);
-          }
-        } else if (lastState === 0) {
-          handleMediaEndedRef.current?.(currentVideo.id);
-        }
-      } else if (data.type === 'onMute') {
-        reportedMuted = Boolean(data.value);
-        if (reportedMuted === false) {
-          // Sound was enabled successfully; no further commands are needed.
-          fallbackShown = true;
-        }
-      } else if (data.type === 'onPlayerError') {
-        const errorType = data.value?.errorType || 'playback error';
-        if (String(errorType).toUpperCase().includes('AUTOPLAY')) showAutoplayFallback();
-        else addToast(`TikTok could not play this post (${errorType}). Try a public full video URL.`, 'warning');
+        const state = Number(data.value);
+        if (state === 1) markReady();
+        if (state === 0) handleMediaEndedRef.current?.(currentVideo.id);
+      } else if (data.type === 'onPlayerError' || data.type === 'onError') {
+        if (readyTimeout) window.clearTimeout(readyTimeout);
+        const errorType = data.value?.errorType || data.value || 'playback error';
+        setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
+        addToast(`TikTok could not start this post (${String(errorType)}). Retry the embed or open it on TikTok.`, 'warning');
       }
     };
 
     window.addEventListener('message', handleTikTokMessage);
+    readyTimeout = window.setTimeout(() => {
+      if (currentVideoRef.current?.id !== currentVideo.id) return;
+      setTikTokPlayerState((previous) => previous.requestId === currentVideo.id && previous.status === 'loading'
+        ? { requestId: currentVideo.id, status: 'error' }
+        : previous);
+    }, 12000);
+
     return () => {
       window.removeEventListener('message', handleTikTokMessage);
-      for (const timer of timers) window.clearTimeout(timer);
+      if (readyTimeout) window.clearTimeout(readyTimeout);
+      recoveryTimers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
+  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, tiktokFrameReload]);
 
   const handleMoveToWatchLater = (video) => {
     const isNowPlaying = video.status === 'playing';
@@ -1496,7 +1568,7 @@ export default function YediHubApp() {
     if (isNowPlaying) {
       const nextOne = videos
         .filter((item) => item.status === 'queue' && item.id !== video.id)
-        .sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : (a.timestamp || 0) - (b.timestamp || 0)))[0];
+        .sort(compareQueuePriority)[0];
       if (nextOne) {
         syncUpdateVideo(nextOne.id, { status: 'playing', pinned: false });
         addToast(`Saved to Watch Later. Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
@@ -1535,20 +1607,136 @@ export default function YediHubApp() {
     addToast(`Category updated to "${newCategory}"`, 'success');
   };
 
-  const handleUpvote = (videoId) => {
-    if (votedIds[videoId]) {
-      addToast('You have already hyped this request!', 'info');
-      return;
+  const handleUpvote = async (videoId, voterUsername = twitchAuth.username) => {
+    const voterLogin = normalizeTwitchLogin(voterUsername);
+    const target = videos.find((video) => video.id === videoId);
+    if (!target) return { ok: false, reason: 'missing' };
+    if (target.status !== 'queue') {
+      addToast('Only waiting queue videos can be upvoted.', 'info');
+      return { ok: false, reason: 'not-queued', video: target };
     }
-    setVotedIds((prev) => ({ ...prev, [videoId]: true }));
-    const target = videos.find((v) => v.id === videoId);
-    if (target) {
-      syncIncrementUpvote(videoId);
-      addToast('+1 Hype added to request!', 'success');
+    if (!voterLogin) {
+      addToast('Could not identify the voter. Please try again.', 'warning');
+      return { ok: false, reason: 'unknown-voter', video: target };
     }
+    if (normalizeTwitchLogin(target.requestedBy) === voterLogin) {
+      addToast('You cannot upvote your own request.', 'warning');
+      return { ok: false, reason: 'own-request', video: target };
+    }
+
+    const voterList = Array.isArray(target.voters) ? target.voters : [];
+    const voteKey = `${voterLogin}:${target.id}`;
+    if (voterList.some((name) => normalizeTwitchLogin(name) === voterLogin) || votedIds[voteKey] || voteAttemptsRef.current.has(voteKey)) {
+      addToast('You already upvoted this video. You can vote on other videos.', 'info');
+      return { ok: false, reason: 'already-voted', video: target };
+    }
+
+    // Keep the in-memory guard synchronous so repeated chat lines cannot race React state updates.
+    voteAttemptsRef.current.add(voteKey);
+    setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
+    await syncIncrementUpvote(videoId, voterLogin);
+    addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
+    return { ok: true, video: target };
   };
 
   handleUpvoteRef.current = handleUpvote;
+
+  const sendTwitchChatReply = (message) => {
+    const safeMessage = String(message || '').trim().slice(0, 450);
+    if (!safeMessage) return;
+
+    // Serialize replies and keep a comfortable gap so many !position commands do not trip Twitch rate limits.
+    chatReplyQueueRef.current = chatReplyQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const wait = Math.max(0, 1100 - (Date.now() - lastChatReplyAtRef.current));
+        if (wait) await new Promise((resolve) => window.setTimeout(resolve, wait));
+        const response = await fetch('/api/twitch/chat-message', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: safeMessage })
+        });
+        lastChatReplyAtRef.current = Date.now();
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          console.warn('Yedi Hub could not reply in Twitch chat:', result.error || response.statusText);
+          if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
+            reauthNoticeShownRef.current = true;
+            addToast('Twitch chat replies need permission: log out and back in to approve chat messaging.', 'warning');
+          }
+        }
+      })
+      .catch((error) => console.warn('Twitch chat reply failed.', error));
+  };
+
+  const handleVoteCommand = (voterLogin, rawText) => {
+    const match = String(rawText || '').trim().toLowerCase().match(/^!bigcock(?:\s+(\d+))?$/);
+    if (!match) return;
+    const position = Math.max(1, Number(match[1] || 1));
+    const queue = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    const target = queue[position - 1];
+    if (!target) {
+      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !position to see your requests.`);
+      return;
+    }
+    handleUpvote(target.id, voterLogin).then((result) => {
+      if (!result?.ok && result?.reason === 'own-request') {
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you cannot upvote your own request.`);
+      } else if (!result?.ok && result?.reason === 'already-voted') {
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you already voted for that video. You can upvote different videos.`);
+      }
+    });
+  };
+  handleVoteCommandRef.current = handleVoteCommand;
+
+  const handleQueuePositionCommand = (requesterLogin) => {
+    const requester = normalizeTwitchLogin(requesterLogin);
+    if (!requester) return;
+    const now = Date.now();
+    const lastAskedAt = positionCommandCooldownRef.current.get(requester) || 0;
+    if (now - lastAskedAt < 10000) return;
+    positionCommandCooldownRef.current.set(requester, now);
+
+    const owned = (video) => normalizeTwitchLogin(video.requestedBy) === requester;
+    const playing = videos.find((video) => video.status === 'playing');
+    const queued = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    const pending = videos.filter((video) => video.status === 'pending' && owned(video));
+    const myQueued = queued.map((video, index) => ({ video, position: index + 1 })).filter((item) => owned(item.video));
+    const messages = [];
+
+    if (playing && owned(playing)) messages.push('one request is playing now');
+    if (pending.length) messages.push(`${pending.length} request${pending.length === 1 ? '' : 's'} waiting for moderator approval`);
+
+    let secondsAhead = 0;
+    if (playing) {
+      const duration = estimateVideoDurationSeconds(playing);
+      const progress = currentVideo?.id === playing.id && (playing.platform === 'youtube' || playing.platform === 'tiktok')
+        ? Math.max(0, Math.min(100, Number(simProgress) || 0))
+        : 0;
+      secondsAhead = Math.max(0, duration * (1 - progress / 100));
+    }
+    let queuedDurationBefore = 0;
+    const etaById = new Map();
+    queued.forEach((video, index) => {
+      etaById.set(video.id, secondsAhead + queuedDurationBefore);
+      queuedDurationBefore += estimateVideoDurationSeconds(video);
+    });
+
+    myQueued.forEach(({ video, position }) => {
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (est. ${formatQueueWait(etaById.get(video.id))})`);
+    });
+
+    if (!messages.length) {
+      sendTwitchChatReply(`@${requester} I couldn't find an upcoming request from you. Submit with !assr <URL>, then use !position again.`);
+      return;
+    }
+    const visibleItems = messages.slice(0, 3);
+    const extraCount = Math.max(0, messages.length - visibleItems.length);
+    const extraNote = extraCount > 0 ? `; plus ${extraCount} more status item${extraCount === 1 ? '' : 's'}` : '';
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}${extraNote}. Waits are estimates and votes can change positions.`);
+  };
+  handleQueuePositionRef.current = handleQueuePositionCommand;
 
   const handleMoveOrder = (videoId, direction) => {
     const list = filteredVideos;
@@ -1668,7 +1856,7 @@ export default function YediHubApp() {
           <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">Next Up:</span>
           {counts.queue > 0 ? (
             <span className="text-xs text-slate-200 truncate">
-              {videos.filter((v) => v.status === 'queue')[0]?.title || 'Loading next item...'}
+              {videos.filter((v) => v.status === 'queue').sort(compareQueuePriority)[0]?.title || 'Loading next item...'}
             </span>
           ) : (
             <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
@@ -1853,15 +2041,55 @@ export default function YediHubApp() {
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div ref={youtubePlayerContainerRef} className="w-full h-full" />
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
-                    <iframe
-                      key={`tiktok-${currentVideo.videoId}`}
-                      ref={tiktokIframeRef}
-                      className="gachi-tiktok-player border-0"
-                      src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
-                      title={currentVideo.title}
-                      allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                      allowFullScreen
-                    />
+                    <>
+                      <iframe
+                        key={`tiktok-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                        ref={tiktokIframeRef}
+                        className="gachi-tiktok-player border-0"
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
+                        title={currentVideo.title}
+                        allow="autoplay; encrypted-media; fullscreen; picture-in-picture; web-share"
+                        loading="eager"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        onLoad={() => {
+                          const requestId = currentVideo.id;
+                          [250, 850, 1700].forEach((delay) => window.setTimeout(() => {
+                            if (currentVideoRef.current?.id !== requestId) return;
+                            const frame = tiktokIframeRef.current;
+                            if (!frame?.contentWindow) return;
+                            frame.contentWindow.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            frame.contentWindow.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                          }, delay));
+                        }}
+                        allowFullScreen
+                      />
+                      {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
+                          <div className="text-base font-black text-white">TikTok did not load correctly</div>
+                          <p className="max-w-sm text-sm text-slate-300">The embed can stall after a skip or be blocked by TikTok/browser playback rules. Retry it, or open the original post.</p>
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
+                                setTikTokFrameReload((attempt) => attempt + 1);
+                              }}
+                              className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
+                            >
+                              Retry TikTok player
+                            </button>
+                            <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
+                              Open on TikTok
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                      {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'loading' && (
+                        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/65 px-3 py-1 text-[11px] text-slate-200">
+                          Loading TikTok player…
+                        </div>
+                      )}
+                    </>
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
@@ -1947,17 +2175,19 @@ export default function YediHubApp() {
                       </div>
                     )}
 
-                    {/* Hype / Upvote */}
+                    {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
                     <button
                       onClick={() => handleUpvote(currentVideo.id)}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
-                        votedIds[currentVideo.id]
+                      disabled={currentVideo.status !== 'queue' || normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
+                      title={currentVideo.status === 'playing' ? 'This video is already playing' : normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                        votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
                           ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
                           : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
                       }`}
                     >
                       <Flame className="w-4 h-4 text-amber-400" />
-                      <span>Hype ({currentVideo.upvotes || 0})</span>
+                      <span>{currentVideo.status === 'playing' ? 'Playing' : `Upvote (${currentVideo.upvotes || 0})`}</span>
                     </button>
 
                     {/* Watch Later Quick Stash */}
@@ -2031,11 +2261,13 @@ export default function YediHubApp() {
 
               {/* Sorter */}
               <select
-                value={sortBy}
+                value={activeTab === 'queue' ? 'priority' : sortBy}
                 onChange={(e) => setSortBy(e.target.value)}
-                className="bg-[#151a27] border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-purple-500"
+                disabled={activeTab === 'queue'}
+                title={activeTab === 'queue' ? 'Queue order follows pinned priority, then votes, then request time' : 'Sort this non-queue list'}
+                className="bg-[#151a27] border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-purple-500 disabled:opacity-70"
               >
-                <option value="priority">Sort: FIFO / Priority</option>
+                <option value="priority">Sort: Playback priority</option>
                 <option value="upvotes">Sort: Most Hype (Votes)</option>
                 <option value="newest">Sort: Recently Added</option>
               </select>
@@ -2131,7 +2363,7 @@ export default function YediHubApp() {
                           {video.pinned ? (
                             <Pin className="w-4 h-4 text-amber-400 fill-current" />
                           ) : (
-                            <span className="text-xs font-mono font-bold text-slate-500">#{idx + 1}</span>
+                            <span className="text-xs font-mono font-bold text-slate-500">#{queueRankById.get(video.id) ?? (idx + 1)}</span>
                           )}
                         </div>
 
@@ -2230,12 +2462,13 @@ export default function YediHubApp() {
                         {/* Hype Vote */}
                         <button
                           onClick={() => handleUpvote(video.id)}
-                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                            votedIds[video.id]
+                          disabled={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`])}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                            (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`]
                               ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
                               : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700/80 text-slate-300'
                           }`}
-                          title="Hype Up Request"
+                          title={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote this video to move it higher in the queue'}
                         >
                           <ThumbsUp className="w-3.5 h-3.5" />
                           <span>{video.upvotes || 0}</span>
