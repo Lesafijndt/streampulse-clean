@@ -1350,6 +1350,10 @@ function YediHubAppContent() {
         return;
       }
     }
+    if (!queueOpenRef.current) {
+      sendTwitchChatReply(`@${requester} requests are currently closed. Your video was not added; try again when the streamer reopens the queue.`);
+      return;
+    }
     const ok = await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
       note: 'Requested via Twitch chat', manualCategory: null
