@@ -158,7 +158,7 @@ test('Queue backup validation rejects unsafe URLs, duplicate IDs, and unrelated 
 
 test('Live queue statistics report recent requesters, platforms, genres, runtime, and recent plays', async () => {
   const { buildQueueStatistics } = await import('../src/queueLogic.js');
-  const now = 10_000_000;
+  const now = 10_000_000_000;
   const data = [
     { id: '1', status: 'queue', requestedBy: 'Alice', platform: 'youtube', category: 'Music', timestamp: now - 1000, durationSec: 180, durationSource: 'metadata' },
     { id: '2', status: 'queue', requestedBy: 'alice', platform: 'youtube', category: 'Music', timestamp: now - 2000, durationSec: 120, durationSource: 'metadata' },
