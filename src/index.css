@@ -1939,3 +1939,42 @@ body { background: #03070b; }
   .gachi-theme .gachi-status-pill { max-width: 58%; font-size: 8px; }
   .gachi-theme .gachi-stat-card { min-height: 78px; }
 }
+
+
+/* Consistent form controls and badges across the queue toolbar. */
+.gachi-theme .gachi-select,
+.gachi-theme .gachi-input {
+  border: 1px solid var(--gachi-surface-line) !important;
+  background: linear-gradient(145deg, rgba(12, 32, 47, .9), rgba(5, 14, 23, .95)) !important;
+  color: #e5eef5 !important;
+}
+.gachi-theme .gachi-select:focus,
+.gachi-theme .gachi-input:focus {
+  outline: 2px solid rgba(254, 204, 0, .5);
+  outline-offset: 1px;
+}
+.gachi-theme .gachi-input::placeholder { color: #72889a; }
+.gachi-theme .gachi-inline-icon-btn {
+  color: #98aaba;
+  transition: color .15s ease;
+}
+.gachi-theme .gachi-inline-icon-btn:hover { color: #fecc00; }
+.gachi-theme .gachi-counter-badge {
+  display: inline-flex;
+  min-width: 1.45rem;
+  justify-content: center;
+  align-items: center;
+  border: 1px solid var(--gachi-surface-line);
+  border-radius: .45rem;
+  background: rgba(255,255,255,.06);
+  color: #b8c7d3;
+  padding: .1rem .35rem;
+  font-size: 10px;
+  font-weight: 800;
+}
+.gachi-theme .gachi-counter-badge-active {
+  border-color: rgba(254,204,0,.35);
+  background: rgba(254,204,0,.12);
+  color: #ffe9a3;
+}
+.gachi-theme .gachi-category-count { background: rgba(255,255,255,.07); border: 1px solid var(--gachi-surface-line); color: #b8c7d3; }
