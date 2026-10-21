@@ -1,23 +1,24 @@
-YEDI HUB — COMBINED PLAYER / QUEUE / AUDIO / VIDEO-ONLY PATCH
+YEDI HUB PLAYER + QUEUE FIX — VERSION 2
 
-Included changes:
-- Fixes the React removeChild crash by making the YouTube IFrame API replace a dynamically-created child inside a stable React-owned host.
-- Replaces timestamp swaps in the queue arrows with stable queueOrder values, local reorder, and Firebase persistence when configured.
-- Sends TikTok play + unMute when the player reports ready, retries unMute once shortly afterward, and sends another unMute when playback starts.
-- Applies video-only TikTok embed settings: disables player controls, progress, play/volume/fullscreen buttons, timestamps, descriptions, music info, captions and the native context menu where supported by TikTok's player.
-- Makes the video stage larger in cinema/theatre mode.
-- Suppresses routine success/information toast popups while leaving actionable warnings and errors visible.
-- Leaves existing authentication/API files untouched.
+This version fixes the installer's brittle YouTube-effect boundary check. It locates the end of the React effect by its dependency list, and locates the TikTok effect by its actual iframe/event references rather than a specific comment. It has been tested against saved source variants with changed comments and already-applied TikTok video-only query settings, including a second run.
 
-Install:
-1. Extract this ZIP into the existing repository root (the same folder as package.json).
-2. Double-click APPLY-FIX.bat. The patch uses Node.js, which is the runtime used by this Vite project.
-3. If it reports success, open GitHub Desktop and review the changes to src/App.tsx and src/index.css.
-4. From the repo root, run `npm run build`. Commit and push only if the build succeeds.
+INSTALL
+1. Extract this ZIP into the root of your existing streampulse-clean repository (the folder containing package.json). Allow these installer files to overwrite earlier patch installer files.
+2. Run APPLY-FIX.bat.
+3. If the patch stops with an error, do not commit anything. Send the full error text.
+4. If successful, run `npm run build` from the repository root.
+5. If the build succeeds, review changes in GitHub Desktop, commit, and push to Vercel.
 
-The patcher creates backups of both modified files in the Windows TEMP folder. It validates the edits before writing and refuses ambiguous source matches.
+WHAT IT CHANGES
+- src/App.tsx: fixes the YouTube IFrame API mounting into a nested imperative child inside a stable React-owned container, addressing the reported removeChild crash during player switching.
+- src/App.tsx: gives active queue entries a dedicated queueOrder, applies arrow reordering across media types, and writes reordered entries via an atomic Firestore batch when cloud sync is available.
+- src/App.tsx: sends TikTok play/unMute messages when ready and during playback, with timers cleaned up during track changes.
+- src/App.tsx: applies TikTok's supported options to hide playback controls, description, music information, timestamps and caption icon; refreshes the iframe key per request.
+- src/App.tsx + src/index.css: retains cinema-sized player and suppresses routine informational/success toasts while preserving warnings/errors.
+- No API/Twitch authentication files are changed.
 
-Limits:
-- Browser autoplay policy may still require one manual click before audio is allowed. The patch retries unmute, but cannot override a browser's sound-autoplay policy.
-- TikTok may still draw creator/social overlays that its embed settings do not expose for removal.
-- This patch preserves existing chat-command code; it does not add a separate Twitch chat-send/OAuth endpoint. A working `!help` response in chat depends on the bot-send integration already being present in your current project.
+BACKUPS
+A copy of src/App.tsx and src/index.css is saved in your Windows temporary directory under yedi-hub-backups before writing.
+
+LIMITS
+TikTok's embed settings do not remove every creator attribution element; the account nickname/avatar may remain because the official player preserves attribution. Browser autoplay policy may also require a click before sound is allowed. This patch has not been tested in your live deployed browser. The test environment here lacks the project's Vite dependencies, so you must run `npm run build` locally before pushing.

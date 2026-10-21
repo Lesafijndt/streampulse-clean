@@ -1023,20 +1023,23 @@ function YediHubAppContent() {
   // ==========================================
   // DERIVED DATA & ACTIVE PLAYING ITEM
   // ==========================================
-  // YEDI_ALL_FIXES_V1: stable FIFO priority order; older saved entries fall back to timestamp.
+  // YEDI_RELIABLE_PLAYER_QUEUE_FIX: one platform-independent, persisted queue order.
   const queueOrderValue = (video) => {
-    const savedOrder = Number(video?.queueOrder);
-    if (Number.isFinite(savedOrder) && savedOrder > 0) return savedOrder;
-    const oldTimestamp = Number(video?.timestamp);
-    return Number.isFinite(oldTimestamp) ? oldTimestamp : 0;
+    const saved = Number(video?.queueOrder);
+    if (video?.queueOrder !== undefined && video?.queueOrder !== null && Number.isFinite(saved)) return saved;
+    const legacyTimestamp = Number(video?.timestamp);
+    return Number.isFinite(legacyTimestamp) ? legacyTimestamp : 0;
   };
-  const compareQueueOrder = (a, b) => {
-    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
-    return queueOrderValue(a) - queueOrderValue(b) || String(a.id).localeCompare(String(b.id));
+  const compareQueueOrder = (a, b) => queueOrderValue(a) - queueOrderValue(b) ||
+    (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0) || String(a?.id).localeCompare(String(b?.id));
+  const queueOrderSequenceRef = useRef(0);
+  const getNextQueueOrder = () => {
+    const maxOrder = videos.filter((video) => video.status === 'queue')
+      .reduce((max, video) => Math.max(max, queueOrderValue(video)), 0);
+    const next = Math.max(maxOrder + 1000, Date.now(), queueOrderSequenceRef.current + 1000);
+    queueOrderSequenceRef.current = next;
+    return next;
   };
-  const getNextQueueOrder = () => videos
-    .filter((video) => video.status === 'queue')
-    .reduce((maxOrder, video) => Math.max(maxOrder, queueOrderValue(video)), 0) + 1000;
 
   const currentVideo = useMemo(() => {
     // Current playing item or top of queue
@@ -1080,29 +1083,18 @@ function YediHubAppContent() {
       .filter((v) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
-        return (
-          v.title.toLowerCase().includes(q) ||
-          v.requestedBy.toLowerCase().includes(q) ||
-          v.category.toLowerCase().includes(q) ||
-          (v.note && v.note.toLowerCase().includes(q))
-        );
+        return String(v.title || '').toLowerCase().includes(q) ||
+          String(v.requestedBy || '').toLowerCase().includes(q) ||
+          String(v.category || '').toLowerCase().includes(q) ||
+          String(v.note || '').toLowerCase().includes(q);
       })
       .sort((a, b) => {
-        // The active queue reflects real playback priority, not merely a visual sort.
-        if (activeTab === 'queue' || sortBy === 'priority' || sortBy === 'upvotes') return compareQueuePriority(a, b);
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
-        return compareQueuePriority(a, b);
+        if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
+        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
+        return compareQueueOrder(a, b);
       });
   }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
 
-  // Keep queue rank labels true even when viewers filter the visible list by title or category.
-  const queueRankById = useMemo(() => {
-    const ranks = new Map();
-    videos.filter((video) => video.status === 'queue').sort(compareQueuePriority)
-      .forEach((video, index) => ranks.set(video.id, index + 1));
-    return ranks;
-  }, [videos]);
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
 
@@ -1546,195 +1538,122 @@ function YediHubAppContent() {
   };
 
   // Mount the official YouTube IFrame API player, allowing reliable autoplay and end-of-video detection.
+  // The API must receive an imperative child, never a DOM node React owns.
   useEffect(() => {
     const video = currentVideo;
-    if (!video || video.platform !== 'youtube' || !video.videoId || !youtubePlayerContainerRef.current) return undefined;
+    const host = youtubePlayerContainerRef.current;
+    if (!video || video.platform !== 'youtube' || !video.videoId || !host) return undefined;
 
     let cancelled = false;
     let player = null;
+    let playerMountNode = null;
+
     loadYouTubeIframeApi().then((YT) => {
-      if (cancelled || !youtubePlayerContainerRef.current) return;
-      const playerMountNode = document.createElement('div');
+      if (cancelled || !host.isConnected) return;
+      playerMountNode = document.createElement('div');
       playerMountNode.className = 'w-full h-full';
-      youtubePlayerContainerRef.current.appendChild(playerMountNode);
-      player = new YT.Player(playerMountNode, {
-        width: '100%',
-        height: '100%',
-        videoId: video.videoId,
-        playerVars: {
-          autoplay: 1,
-          controls: 1,
-          playsinline: 1,
-          rel: 0,
-          modestbranding: 1,
-          origin: window.location.origin
-        },
-        events: {
-          onReady: (event) => {
-            if (cancelled) return;
-            youtubePlayerRef.current = event.target;
-            // Request autoplay with audio enabled. Browsers may still require a user gesture
-            // before they allow audible autoplay; the player remains unmuted when playback starts.
-            event.target.playVideo();
-                  },
-          onStateChange: (event) => {
-            if (cancelled) return;
-            // YouTube PlayerState: 0 = ended, 1 = playing, 2 = paused.
-            if (event.data === 0) handleMediaEndedRef.current?.(video.id);
-          },
-          onAutoplayBlocked: () => {
-            if (!cancelled) addToast('Your browser blocked autoplay with sound. Press Play in the player once to allow playback.', 'info');
-          },
-          onError: () => {
-            if (!cancelled) addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
+      host.appendChild(playerMountNode);
+      try {
+        player = new YT.Player(playerMountNode, {
+          width: '100%',
+          height: '100%',
+          videoId: video.videoId,
+          playerVars: { autoplay: 1, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, origin: window.location.origin },
+          events: {
+            onReady: (event) => {
+              if (cancelled) return;
+              youtubePlayerRef.current = event.target;
+              event.target.playVideo();
+            },
+            onStateChange: (event) => {
+              if (cancelled) return;
+              if (event.data === 0) handleMediaEndedRef.current?.(video.id);
+            },
+            onAutoplayBlocked: () => {
+              if (!cancelled) addToast('Your browser blocked autoplay with sound. Press Play once to allow playback.', 'info');
+            },
+            onError: () => {
+              if (!cancelled) addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
+            }
           }
-        }
-      });
+        });
+      } catch (error) {
+        console.warn('Could not create the YouTube player.', error);
+        if (!cancelled) addToast('YouTube player initialization failed.', 'warning');
+      }
     }).catch((error) => {
-      console.warn('YouTube player could not initialize.', error);
+      console.warn('YouTube player API could not load.', error);
       if (!cancelled) addToast('The YouTube player could not load. Check browser extensions or network access.', 'warning');
     });
 
     return () => {
       cancelled = true;
-      if (youtubePlayerRef.current === player) youtubePlayerRef.current = null;
-      if (player && typeof player.destroy === 'function') {
-        try { player.destroy(); } catch { /* Player may already have been removed by React. */ }
+      const oldPlayer = player;
+      if (youtubePlayerRef.current === oldPlayer) youtubePlayerRef.current = null;
+      if (oldPlayer && typeof oldPlayer.destroy === 'function') {
+        try { oldPlayer.destroy(); } catch (error) { console.debug('YouTube player was already detached during cleanup.', error); }
+      }
+      // The API replaces playerMountNode with its iframe. Remove only the original node if it is still attached.
+      if (playerMountNode && playerMountNode.parentNode === host) {
+        try { host.removeChild(playerMountNode); } catch { /* already detached */ }
       }
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
+
+
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
   // window reference, listener, and startup timeout; stale messages from the previous iframe
-  // can never control the next item. The fallback below uses TikTok's official embed.js markup.
   useEffect(() => {
-    if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId) return undefined;
-
-    const requestId = currentVideo.id;
-    const mode = currentTikTokMode;
-    const playerWindow = mode === 'player' ? tiktokIframeRef.current?.contentWindow : null;
-    let playbackStarted = false;
-    let playerPaused = false;
-    let unmuteRequested = false;
-    let lastPlaybackTime = -1;
-    let lastMediaAdvanceAt = Date.now();
-    let startupTimer = null;
-    let stallMonitor = null;
-
-    setTikTokPlayerState({ requestId, status: 'loading' });
-
-    const postTikTokCommand = (type) => {
-      if (!playerWindow || currentVideoRef.current?.id !== requestId) return;
-      try {
-        playerWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-      } catch (error) {
-        console.warn('TikTok player command could not be sent.', error);
+    const video = currentVideo;
+    if (!video || video.platform !== 'tiktok' || !video.videoId) return undefined;
+    let cancelled = false;
+    const retryTimers = [];
+    const getWindow = () => tiktokIframeRef.current?.contentWindow;
+    const sendCommand = (type, targetWindow = getWindow()) => {
+      if (!cancelled && targetWindow && targetWindow === getWindow()) {
+        targetWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
       }
     };
-
-    const markPlaybackStarted = () => {
-      playbackStarted = true;
-      setTikTokPlayerState({ requestId, status: 'playing' });
-      // Keep the existing audio behavior: request unmute only after a confirmed play event,
-      // once per iframe. Browsers may still require the visible Enable sound button.
-      if (!unmuteRequested && mode === 'player') {
-        unmuteRequested = true;
-        window.setTimeout(() => postTikTokCommand('unMute'), 180);
-      }
-    };
-
-    const switchToOfficialEmbed = (reason) => {
-      if (currentVideoRef.current?.id !== requestId) return;
-      if (mode === 'player') {
-        setTikTokPlayerState({ requestId, status: 'loading' });
-        setTikTokEmbedMode({ requestId, mode: 'classic' });
-        setTikTokFrameReload((attempt) => attempt + 1);
-        addToast(`TikTok's player did not start${reason ? ` (${reason})` : ''}; trying its official embed.`, 'warning');
-      } else {
-        setTikTokPlayerState({ requestId, status: 'error' });
-      }
-    };
-
     const handleTikTokMessage = (event) => {
-      if (event.origin !== 'https://www.tiktok.com') return;
-      if (event.source !== playerWindow || !playerWindow) return;
+      if (event.origin !== 'https://www.tiktok.com' || event.source !== getWindow()) return;
       let data = event.data;
-      if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch { return; }
-      }
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
-
       if (data.type === 'onPlayerReady') {
-
-        const playerWindow = tiktokIframeRef.current?.contentWindow;
-        if (playerWindow) {
-          const sendTikTokCommand = (type) => playerWindow.postMessage(
-            { type, value: null, 'x-tiktok-player': true },
-            'https://www.tiktok.com'
-          );
-          sendTikTokCommand('unMute');
-          sendTikTokCommand('play');
-          window.setTimeout(() => {
-            if (tiktokIframeRef.current?.contentWindow === playerWindow) sendTikTokCommand('unMute');
-          }, 350);
-        }
+        const playerWindow = getWindow();
+        sendCommand('play', playerWindow);
+        sendCommand('unMute', playerWindow);
+        [250, 800].forEach((delay) => {
+          retryTimers.push(window.setTimeout(() => {
+            if (!cancelled && getWindow() === playerWindow) {
+              sendCommand('unMute', playerWindow);
+              if (delay === 800) sendCommand('play', playerWindow);
+            }
+          }, delay));
+        });
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
-        if (currentTime > lastPlaybackTime + 0.04) {
-          lastPlaybackTime = currentTime;
-          lastMediaAdvanceAt = Date.now();
-        }
-        if (currentTime > 0.15) markPlaybackStarted();
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        if (state === 1) tiktokIframeRef.current?.contentWindow?.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-        if (state === 1) {
-          playerPaused = false;
-          lastMediaAdvanceAt = Date.now();
-          markPlaybackStarted();
-        }
-        if (state === 2) playerPaused = true;
-        if (state === 0) handleMediaEndedRef.current?.(requestId);
-      } else if (data.type === 'onPlayerError' || data.type === 'onError') {
-        const errorType = data.value?.errorType || data.value || 'playback error';
-        switchToOfficialEmbed(String(errorType));
+        if (state === 1) sendCommand('unMute');
+        if (state === 0) handleMediaEndedRef.current?.(video.id);
+      } else if (data.type === 'onPlayerError') {
+        const errorType = data.value?.errorType || 'playback error';
+        addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
       }
     };
-
-    if (mode === 'player') {
-      window.addEventListener('message', handleTikTokMessage);
-      // Network startup is variable; don't replace the official player after only five seconds.
-      startupTimer = window.setTimeout(() => {
-        if (!playbackStarted && currentVideoRef.current?.id === requestId) {
-          switchToOfficialEmbed('no playback signal');
-        }
-      }, 9000);
-      stallMonitor = window.setInterval(() => {
-        // Only treat a player as stalled after it has actually played and emitted current time.
-        // Paused videos and buffering gaps should not cause needless iframe replacement.
-        if (playbackStarted && !playerPaused && lastPlaybackTime >= 0 && currentVideoRef.current?.id === requestId && Date.now() - lastMediaAdvanceAt > 12000) {
-          switchToOfficialEmbed('playback stopped advancing');
-        }
-      }, 2500);
-    } else {
-      // embed.js has no player/v1 postMessage API; its own effect below reports load/error.
-      startupTimer = window.setTimeout(() => {
-        if (currentVideoRef.current?.id === requestId) {
-          setTikTokPlayerState((previous) => previous.requestId === requestId && previous.status === 'loading'
-            ? { requestId, status: 'error' }
-            : previous);
-        }
-      }, 16000);
-    }
-
+    window.addEventListener('message', handleTikTokMessage);
     return () => {
+      cancelled = true;
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
       window.removeEventListener('message', handleTikTokMessage);
-      if (startupTimer) window.clearTimeout(startupTimer);
-      if (stallMonitor) window.clearInterval(stallMonitor);
     };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, currentTikTokMode, tiktokFrameReload]);
+  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
+
+
 
   // TikTok's supported video-embed fallback uses the standard blockquote + embed.js snippet,
   // rather than an undocumented embed/v2 iframe URL. Rebuild the markup on every track change.
@@ -1858,8 +1777,14 @@ function YediHubAppContent() {
 
   const handleTogglePin = (video) => {
     if (!isStaff) return;
-    syncUpdateVideo(video.id, { pinned: !video.pinned });
-    addToast(video.pinned ? 'Unpinned video' : 'Pinned priority to top of queue!', 'info');
+    const nextPinned = !video.pinned;
+    const otherQueued = videos.filter((item) => item.status === 'queue' && String(item.id) !== String(video.id));
+    const minOtherOrder = otherQueued.reduce((min, item) => Math.min(min, queueOrderValue(item)), Number.POSITIVE_INFINITY);
+    const queueOrder = nextPinned
+      ? (Number.isFinite(minOtherOrder) ? minOtherOrder - 1000 : queueOrderValue(video))
+      : getNextQueueOrder();
+    syncUpdateVideo(video.id, { pinned: nextPinned, queueOrder });
+    addToast(nextPinned ? 'Pinned priority to the top of the queue.' : 'Unpinned video and moved it to the end.', 'info');
   };
 
   const handleCategoryChange = (videoId, newCategory) => {
@@ -1999,44 +1924,61 @@ function YediHubAppContent() {
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
   const handleMoveOrder = (videoId, direction) => {
-    if (!isStaff) return;
+    if (!isStaff || activeTab !== 'queue') return;
+    const visibleQueue = filteredVideos.filter((video) => video.status === 'queue');
+    const visibleIndex = visibleQueue.findIndex((video) => String(video.id) === String(videoId));
+    if (visibleIndex < 0) return;
+    const targetVisibleIndex = direction === 'up' ? visibleIndex - 1 : visibleIndex + 1;
+    if (targetVisibleIndex < 0 || targetVisibleIndex >= visibleQueue.length) return;
 
-    // Use explicit order values so quick consecutive arrow clicks cannot collide.
-    const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const index = queue.findIndex((video) => video.id === videoId);
-    if (index < 0) return;
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= queue.length) return;
+    // Recreate the current visual sort over the full queue, then swap the two adjacent visible rows.
+    // This also works if search/category filters hide entries between those visible rows.
+    const fullQueue = videos.filter((video) => video.status === 'queue').sort((a, b) => {
+      if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
+      if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
+      return compareQueueOrder(a, b);
+    });
+    const movingId = String(visibleQueue[visibleIndex].id);
+    const targetId = String(visibleQueue[targetVisibleIndex].id);
+    const movingIndex = fullQueue.findIndex((video) => String(video.id) === movingId);
+    const targetIndex = fullQueue.findIndex((video) => String(video.id) === targetId);
+    if (movingIndex < 0 || targetIndex < 0 || movingIndex === targetIndex) return;
 
-    const item = queue[index];
-    const target = queue[targetIndex];
-    // Pinned requests stay in their own priority group.
-    if (Boolean(item.pinned) !== Boolean(target.pinned)) return;
-
-    const reordered = [...queue];
-    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
-    const updates = reordered.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
-    const orderById = new Map(updates.map((video) => [video.id, video.queueOrder]));
-
-    setSortBy('priority');
-    setVideos((previous) => previous.map((video) => {
-      const nextOrder = orderById.get(video.id);
+    [fullQueue[movingIndex], fullQueue[targetIndex]] = [fullQueue[targetIndex], fullQueue[movingIndex]];
+    const updates = fullQueue.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
+    const orderById = new Map(updates.map((video) => [String(video.id), video.queueOrder]));
+    const nextVideos = videos.map((video) => {
+      const nextOrder = orderById.get(String(video.id));
       return nextOrder === undefined ? video : { ...video, queueOrder: nextOrder };
-    }));
+    });
+    queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
+    setSortBy('priority');
+    setVideos(nextVideos);
 
     if (db && firebaseUser) {
-      void Promise.all(updates.map(async (video) => {
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id));
+      void (async () => {
+        const batch = writeBatch(db);
+        updates.forEach((video) => {
+          const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id));
+          batch.set(itemRef, { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
+        });
         try {
-          await updateDoc(itemRef, { queueOrder: video.queueOrder });
+          await batch.commit();
         } catch (error) {
-          await setDoc(itemRef, { ...video, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
+          console.warn('Atomic queue reorder failed; attempting a merge-write fallback.', error);
+          try {
+            await Promise.all(updates.map((video) => setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            )));
+          } catch (fallbackError) {
+            console.warn('Queue order could not sync to Firebase; the order remains stored locally.', fallbackError);
+            setCloudSynced(false);
+            setSyncStatusText('Queue order saved locally — cloud update failed');
+          }
         }
-      })).catch((error) => {
-        console.warn('Queue order could not sync to Firebase; the updated order remains in this browser.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Queue order saved locally — cloud update failed');
-      });
+      })();
     }
   };
 

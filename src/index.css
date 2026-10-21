@@ -155,7 +155,7 @@ body { min-width: 320px; background: #090308; }
 
 /* TikTok's official player is portrait; keep it portrait and centered in the same deck. */
 .gachi-tiktok-player {
-  width: auto;
+  width: min(100%, calc(100vh * 9 / 16));
   height: 100%;
   max-width: 100%;
   aspect-ratio: 9 / 16;

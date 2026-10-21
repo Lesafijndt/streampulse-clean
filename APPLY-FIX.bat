@@ -1,8 +1,21 @@
 @echo off
 setlocal
-node "%~dp0Apply-YediHub-All-Fixes.cjs"
-set "RESULT=%ERRORLEVEL%"
+cd /d "%~dp0"
+where node >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: Node.js was not found. Install Node.js, then run this again.
+  echo No source files were changed.
+  pause
+  exit /b 1
+)
+node Apply-YediHub-Reliable-Fix.cjs
+if errorlevel 1 (
+  echo.
+  echo Patch stopped. No files were written.
+  echo Do not commit this attempt. Send the complete error message.
+) else (
+  echo.
+  echo Next: run npm run build. Commit/push only if the build succeeds.
+)
 echo.
-if not "%RESULT%"=="0" echo The patch did not complete. Do not commit or push; send the error text instead.
 pause
-exit /b %RESULT%
