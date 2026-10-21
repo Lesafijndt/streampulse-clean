@@ -1810,17 +1810,11 @@ function YediHubAppContent() {
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
+        // Start playback once the official player reports ready. Repeated startup commands
+        // used to override a user's pause/mute action for the first second after loading.
         const playerWindow = getWindow();
         sendCommand('play', playerWindow);
         sendCommand('unMute', playerWindow);
-        [250, 800].forEach((delay) => {
-          retryTimers.push(window.setTimeout(() => {
-            if (!cancelled && getWindow() === playerWindow) {
-              sendCommand('unMute', playerWindow);
-              if (delay === 800) sendCommand('play', playerWindow);
-            }
-          }, delay));
-        });
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -2475,15 +2469,6 @@ function YediHubAppContent() {
                         onLoad={() => {
                           if (currentVideoRef.current?.id !== currentVideo.id) return;
                           setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
-                          const sendAudioCommands = () => {
-                            if (currentVideoRef.current?.id !== currentVideo.id) return;
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) return;
-                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                          };
-                          sendAudioCommands();
-                          [180, 600, 1100].forEach((delay) => window.setTimeout(sendAudioCommands, delay));
                         }}
                         onError={() => {
                           if (currentVideoRef.current?.id !== currentVideo.id) return;
