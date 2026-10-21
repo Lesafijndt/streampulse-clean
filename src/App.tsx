@@ -2073,8 +2073,8 @@ function YediHubAppContent() {
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
-            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
-              <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
+            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Aniki Fight Club">
+              <span className="yedi-soap-mark" role="img" aria-label="Flexing wrestler">💪</span>
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2082,10 +2082,10 @@ function YediHubAppContent() {
                   Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ SVENSK GACHI PIT ♂
+                  ♂ ANIKI WRESTLING FEDERATION ♂
                 </span>
                 <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 SVERIGE • NO MERCY 🧼
+                  🇸🇪 DUNGEON OF SWEAT
                 </span>
               </div>
 
@@ -2203,6 +2203,32 @@ function YediHubAppContent() {
           </div>
         </div>
       </header>
+
+      {/* GACHIMUCHI WRESTLING POSTER / ARENA IDENT */}
+      <section className="gachi-poster-banner" aria-label="Hardcore gachimuchi wrestling arena">
+        <div className="gachi-poster-topline">
+          <span>♂ ANIKI FIGHT CLUB ♂</span>
+          <span>VHS // 1987 // UNCUT ARENA EDITION</span>
+        </div>
+        <div className="gachi-poster-center">
+          <div className="gachi-poster-sidecopy">
+            <span>NO</span><strong>MERCY</strong><span>ONLY</span><strong>MEN</strong>
+          </div>
+          <div className="gachi-poster-title">
+            <div className="gachi-poster-eyebrow">THE SWEDISH BATHHOUSE PRESENTS</div>
+            <h1>GACHIMUCHI <em>WRESTLING</em></h1>
+            <div className="gachi-poster-tagline">SWEAT • STEEL • BROTHERHOOD • ♂</div>
+          </div>
+          <div className="gachi-poster-sidecopy gachi-poster-sidecopy-right">
+            <span>FLEX</span><strong>HARD</strong><span>FIGHT</span><strong>HARDER</strong>
+          </div>
+        </div>
+        <div className="gachi-poster-bottomline">
+          <span>🇸🇪 SVENSK PIT • DUNGEON DIVISION</span>
+          <span>MAIN EVENT: 2O3A</span>
+          <span>NO SKIPS. NO WEAKNESS.</span>
+        </div>
+      </section>
 
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
