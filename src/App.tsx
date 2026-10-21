@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
-  Pause,
-  Volume2,
-  VolumeX,
   SkipForward,
   RotateCcw,
   Clock,
@@ -28,7 +25,6 @@ import {
   Shield,
   Users,
   ThumbsUp,
-  Flame,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -2783,7 +2779,7 @@ function YediHubAppContent() {
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div className={isVerticalMedia(currentVideo)
                       ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
-                      : "absolute inset-0 h-full w-full"}>
+                      : "absolute inset-1 h-[calc(100%-0.5rem)] w-[calc(100%-0.5rem)] overflow-hidden rounded-sm border border-[#5d277d]"}>
                     <iframe
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
@@ -2856,7 +2852,7 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
                     <iframe
                       key={`twitch-${currentVideo.videoId}`}
-                      className="w-full h-full border-0"
+                      className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
                       src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
