@@ -1723,3 +1723,11 @@ body { background: #03070b; }
     min-height: 3.375rem !important;
   }
 }
+
+
+/* Portrait-player letterboxing: keep the space beside Shorts/TikToks black-purple.
+   Do not use the app-wide bg-gradient-to-r utility override here, which is blue/yellow. */
+.gachi-theme .gachi-player-stage .gachi-vertical-letterbox {
+  background: linear-gradient(90deg, #030207 0%, #090511 50%, #030207 100%) !important;
+  opacity: 1 !important;
+}
