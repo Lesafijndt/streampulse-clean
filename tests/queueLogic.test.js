@@ -204,3 +204,37 @@ test('trusted player-reported default-looking lengths are never demoted to fallb
   assert.deepEqual(getDurationEstimate({ platform: 'youtube', duration: '3:45', durationSec: 225, durationSource: 'player' }), { seconds: 225, estimated: false, source: 'player' });
   assert.equal(getDurationLabel({ platform: 'youtube', duration: '03:45', durationSec: 225, durationSource: 'player' }), '3:45');
 });
+
+test('Thumbnail duration always shows a real or clearly approximate value', async () => {
+  const { getThumbnailDurationLabel } = await import('../src/queueLogic.js');
+  assert.equal(getThumbnailDurationLabel({ platform: 'youtube', durationSec: 247, durationSource: 'metadata' }), '4:07');
+  assert.equal(getThumbnailDurationLabel({ platform: 'youtube', url: 'https://www.youtube.com/watch?v=abcdef' }), '~3:00');
+  assert.equal(getThumbnailDurationLabel({ platform: 'youtube', url: 'https://www.youtube.com/shorts/abcdef', isVertical: true }), '~1:00');
+  assert.equal(getThumbnailDurationLabel({ platform: 'tiktok', url: 'https://www.tiktok.com/@viewer/video/123456' }), '~0:45');
+});
+
+test('Duration cache keys are stable and cached actual duration hydrates older queue rows', async () => {
+  const { getDurationCacheKey, applyCachedVideoDurations } = await import('../src/queueLogic.js');
+  const first = { platform: 'youtube', videoId: 'abcdefghijk', url: 'https://youtu.be/abcdefghijk?si=foo' };
+  const second = { platform: 'youtube', videoId: 'abcdefghijk', url: 'https://youtu.be/abcdefghijk?feature=shared' };
+  assert.equal(getDurationCacheKey(first), getDurationCacheKey(second));
+  const hydrated = applyCachedVideoDurations([{ id: '1', ...first, duration: '', durationSource: 'unknown' }], {
+    'youtube:abcdefghijk': { seconds: 247, source: 'metadata', updatedAt: 1 }
+  });
+  assert.equal(hydrated[0].duration, '4:07');
+  assert.equal(hydrated[0].durationSec, 247);
+  assert.equal(hydrated[0].durationSource, 'metadata');
+});
+
+test('Queue runway stats separate known runtime from estimates', async () => {
+  const { buildQueueStatistics } = await import('../src/queueLogic.js');
+  const stats = buildQueueStatistics([
+    { id: 'known', status: 'queue', platform: 'youtube', durationSec: 240, durationSource: 'metadata' },
+    { id: 'unknown', status: 'queue', platform: 'tiktok', duration: '', durationSource: 'unknown' }
+  ], 10_000_000_000);
+  assert.equal(stats.queueKnownCount, 1);
+  assert.equal(stats.queueEstimatedCount, 1);
+  assert.equal(stats.queueKnownDurationSeconds, 240);
+  assert.equal(stats.queueEstimatedDurationSeconds, 45);
+  assert.equal(stats.queueDurationSeconds, 285);
+});

@@ -345,13 +345,20 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
   });
   const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General');
   const queued = items.filter((video) => video?.status === 'queue');
+  const queueDurationEstimates = queued.map((video) => ({ video, ...getDurationEstimate(video) }));
+  const queueEstimatedItems = queueDurationEstimates.filter((entry) => entry.estimated);
+  const queueKnownItems = queueDurationEstimates.filter((entry) => !entry.estimated);
   return {
     totalRequests: items.length,
     totalRequesters: requesters.size,
     requestsLastWindow: requestsRecent.length,
     requestersLastWindow: recentRequesters.size,
     queueCount: queued.length,
-    queueDurationSeconds: queued.reduce((total, video) => total + estimateVideoDurationSeconds(video), 0),
+    queueDurationSeconds: queueDurationEstimates.reduce((total, entry) => total + entry.seconds, 0),
+    queueKnownDurationSeconds: queueKnownItems.reduce((total, entry) => total + entry.seconds, 0),
+    queueEstimatedDurationSeconds: queueEstimatedItems.reduce((total, entry) => total + entry.seconds, 0),
+    queueKnownCount: queueKnownItems.length,
+    queueEstimatedCount: queueEstimatedItems.length,
     watchedLastWindow: watchedRecent.length,
     mostPopularPlatform: platforms[0] || null,
     mostPopularGenre: genres[0] || null,
@@ -412,6 +419,55 @@ export function mergeVideoDurationData(incomingVideos = [], currentVideos = []) 
       duration: localDuration.duration,
       durationSec: localDuration.seconds,
       durationSource: localDuration.durationSource
+    };
+  });
+}
+
+export function getThumbnailDurationLabel(video) {
+  const estimate = getDurationEstimate(video);
+  const label = formatMediaDuration(estimate.seconds);
+  return estimate.estimated ? '~' + (label || '3:00') : (label || '~3:00');
+}
+
+export function getDurationCacheKey(video) {
+  const platform = String(video?.platform || 'external').toLowerCase();
+  const videoId = String(video?.videoId || '').trim();
+  if (videoId) return platform + ':' + videoId;
+  const rawUrl = String(video?.url || '').trim();
+  if (!rawUrl) return '';
+  try {
+    const parsed = new URL(rawUrl);
+    const removeKeys = new Set(['si', 'feature', 'pp', 't', 'start', 'utm_source', 'utm_medium', 'utm_campaign']);
+    [...parsed.searchParams.keys()].forEach((key) => {
+      if (removeKeys.has(key.toLowerCase())) parsed.searchParams.delete(key);
+    });
+    parsed.hash = '';
+    return platform + ':' + parsed.hostname.toLowerCase() + parsed.pathname.replace(/\/+$/, '') + parsed.search;
+  } catch {
+    return platform + ':' + rawUrl.toLowerCase();
+  }
+}
+
+export function applyCachedVideoDurations(videos = [], cache = {}) {
+  if (!Array.isArray(videos) || !cache || typeof cache !== 'object' || Array.isArray(cache)) {
+    return Array.isArray(videos) ? videos : [];
+  }
+  return videos.map((video) => {
+    const key = getDurationCacheKey(video);
+    const entry = key ? cache[key] : null;
+    const seconds = Math.round(Number(entry?.seconds));
+    const source = String(entry?.source || 'metadata');
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400 ||
+        !['metadata', 'player'].includes(source)) return video;
+    const existing = getDurationEstimate(video);
+    const hasTrustedExisting = ['metadata', 'player'].includes(String(video?.durationSource || '')) &&
+      Number(video?.durationSec) > 0;
+    if (hasTrustedExisting || (!existing.estimated && Number(video?.durationSec) > 0)) return video;
+    return {
+      ...video,
+      duration: formatMediaDuration(seconds),
+      durationSec: seconds,
+      durationSource: source
     };
   });
 }

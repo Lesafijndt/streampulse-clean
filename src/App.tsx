@@ -47,7 +47,9 @@ import {
   Activity,
   BarChart3,
   Timer,
-  TrendingUp
+  TrendingUp,
+  ChevronDown,
+  Keyboard
 } from 'lucide-react';
 
 // Firebase imports
@@ -79,9 +81,11 @@ import {
   buildQueueSyncWrites,
   filterVideosForView,
   formatMediaDuration,
-  getDurationLabel,
   getQueueMediaCounts,
   getDurationEstimate,
+  getThumbnailDurationLabel,
+  getDurationCacheKey,
+  applyCachedVideoDurations,
   buildQueueStatistics,
   formatRuntimeHoursMinutes,
   mergeVideoDurationData,
@@ -730,7 +734,8 @@ function YediHubAppContent() {
       const realSavedVideos = saved
         .filter((video) => video && typeof video === 'object' && !String(video.id || '').startsWith('demo-'))
         .map(normalizeLegacyVideoVotes);
-      return dedupeMediaVideos(realSavedVideos).videos;
+      const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
+      return dedupeMediaVideos(applyCachedVideoDurations(realSavedVideos, durationCache)).videos;
     }
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
@@ -742,7 +747,15 @@ function YediHubAppContent() {
   const durationEnrichmentAttemptedRef = useRef(new Set());
   const durationEnrichmentInFlightRef = useRef(new Set());
   const [durationRefreshCount, setDurationRefreshCount] = useState(0);
+  const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
+    const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  });
   const [statsNow, setStatsNow] = useState(() => Date.now());
+  const [statsExpanded, setStatsExpanded] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+  );
+  const [connectionDetailsExpanded, setConnectionDetailsExpanded] = useState(false);
   const restoringBackupRef = useRef(false);
   const backupFileInputRef = useRef(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -765,6 +778,7 @@ function YediHubAppContent() {
   // Player State
   const [simProgress, setSimProgress] = useState(0);
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
+  const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -1124,8 +1138,11 @@ function YediHubAppContent() {
             (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
           const dedupedRoomList = dedupeMediaVideos(rawRoomList);
-          // A cached/older Firestore snapshot must not erase better duration data already found locally.
-          const roomList = mergeVideoDurationData(dedupedRoomList.videos, videosRef.current);
+          // Hydrate confirmed lengths from the browser cache first; older Firestore snapshots
+          // must not erase them when a metadata write is briefly behind.
+          const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
+          const cachedRoomList = applyCachedVideoDurations(dedupedRoomList.videos, durationCache);
+          const roomList = mergeVideoDurationData(cachedRoomList, videosRef.current);
 
           // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
           // so a future refresh or deletion cannot make a duplicate reappear.
@@ -1292,6 +1309,27 @@ function YediHubAppContent() {
     }
   };
 
+  const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
+    const seconds = Math.round(Number(rawDurationSeconds));
+    const key = getDurationCacheKey(video);
+    if (!key || !Number.isFinite(seconds) || seconds <= 0 || seconds > 86400 ||
+        !['metadata', 'player'].includes(source)) return;
+    const cacheKey = roomStorageKey(channelRoom, 'duration-cache');
+    const stored = readStoredValue(cacheKey, {});
+    const cache = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
+    const existing = cache[key];
+    if (existing?.source === 'player' && source !== 'player' && Number(existing.seconds) > 0) return;
+    cache[key] = { seconds, source, updatedAt: Date.now() };
+    const limited = Object.fromEntries(Object.entries(cache)
+      .sort((left, right) => (Number(right[1]?.updatedAt) || 0) - (Number(left[1]?.updatedAt) || 0))
+      .slice(0, 500));
+    writeStoredValue(cacheKey, limited);
+  };
+
+  useEffect(() => {
+    writeStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), durationLookupOutcomes);
+  }, [durationLookupOutcomes, channelRoom]);
+
   const reportPlayerDuration = (videoId, rawDurationSeconds) => {
     const seconds = Math.round(Number(rawDurationSeconds));
     if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) return;
@@ -1302,12 +1340,14 @@ function YediHubAppContent() {
     if (Math.abs(storedSeconds - seconds) <= 1 &&
         String(target.duration || '') === label &&
         ['metadata', 'player'].includes(String(target.durationSource || ''))) return;
+    const source = target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
+      ? 'metadata'
+      : 'player';
+    cacheVideoDuration(target, seconds, source);
     void syncUpdateVideo(String(target.id), {
       duration: label,
       durationSec: seconds,
-      durationSource: target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
-        ? 'metadata'
-        : 'player'
+      durationSource: source
     });
   };
 
@@ -1323,6 +1363,13 @@ function YediHubAppContent() {
           !['youtube', 'tiktok', 'twitch', 'kick'].includes(String(video.platform || '').toLowerCase())) return false;
       const id = String(video.id);
       if (durationEnrichmentAttemptedRef.current.has(id) || durationEnrichmentInFlightRef.current.has(id)) return false;
+      const priorLookup = durationLookupOutcomes[id];
+      const priorStatus = typeof priorLookup === 'string' ? priorLookup : priorLookup?.status;
+      const priorAt = Number(typeof priorLookup === 'object' ? priorLookup?.at : 0) || 0;
+      const failedRecently = ['unavailable', 'error'].includes(priorStatus) &&
+        priorAt > 0 && Date.now() - priorAt < 6 * 60 * 60 * 1000 &&
+        durationRefreshCount === 0;
+      if (failedRecently) return false;
       const seconds = Number(video.durationSec) || 0;
       const label = String(video.duration || '').trim();
       const trustedSource = ['metadata', 'player'].includes(String(video.durationSource || ''));
@@ -1343,6 +1390,12 @@ function YediHubAppContent() {
           return !durationEnrichmentAttemptedRef.current.has(id) && !durationEnrichmentInFlightRef.current.has(id);
         });
         batch.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
+        if (batch.length) setDurationLookupOutcomes((prev) => ({
+          ...prev,
+          ...Object.fromEntries(batch.map((video) => [String(video.id), {
+            status: 'pending', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
+          }]))
+        }));
         await Promise.all(batch.map(async (video) => {
           const id = String(video.id);
           try {
@@ -1351,19 +1404,38 @@ function YediHubAppContent() {
               cache: 'no-store',
               signal: AbortSignal.timeout(8500)
             });
-            if (!response.ok) return;
+            if (!response.ok) {
+              setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
+                status: 'error', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
+              } }));
+              return;
+            }
             const metadata = await response.json().catch(() => null);
             const seconds = Math.round(Number(metadata?.durationSec));
-            if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) return;
+            if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) {
+              setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
+                status: 'unavailable', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
+              } }));
+              return;
+            }
             const current = videosRef.current.find((item) => String(item.id) === id);
-            if (!current || ['metadata', 'player'].includes(String(current.durationSource || ''))) return;
-            void syncUpdateVideo(id, {
-              duration: formatMediaDuration(seconds),
-              durationSec: seconds,
-              durationSource: 'metadata'
-            });
+            if (!current) return;
+            cacheVideoDuration(current, seconds, 'metadata');
+            if (!['metadata', 'player'].includes(String(current.durationSource || ''))) {
+              void syncUpdateVideo(id, {
+                duration: formatMediaDuration(seconds),
+                durationSec: seconds,
+                durationSource: 'metadata'
+              });
+            }
+            setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
+              status: 'found', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
+            } }));
           } catch {
             console.debug('Duration backfill did not return a duration for this item.', id);
+            setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
+              status: 'error', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
+            } }));
           } finally {
             durationEnrichmentAttemptedRef.current.add(id);
             durationEnrichmentInFlightRef.current.delete(id);
@@ -1372,7 +1444,7 @@ function YediHubAppContent() {
       }
     };
     void enrich();
-  }, [durationScanKey, channelRoom, durationRefreshCount]);
+  }, [durationScanKey, channelRoom, durationRefreshCount, durationLookupOutcomes]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setStatsNow(Date.now()), 60_000);
@@ -1701,10 +1773,34 @@ function YediHubAppContent() {
     () => buildQueueStatistics(videos, statsNow),
     [videos, statsNow]
   );
+  const durationLookupStats = useMemo(() => {
+    const currentIds = new Set(videos.map((video) => String(video.id)));
+    const entries = Object.entries(durationLookupOutcomes).filter(([id]) => currentIds.has(String(id)));
+    const statuses = entries.map(([, value]) => typeof value === 'string' ? value : value?.status);
+    const failedByPlatform = {};
+    entries.forEach(([, value]) => {
+      const status = typeof value === 'string' ? value : value?.status;
+      if (!['unavailable', 'error'].includes(status)) return;
+      const platform = String(typeof value === 'object' ? value?.platform : 'external').toLowerCase() || 'external';
+      failedByPlatform[platform] = (failedByPlatform[platform] || 0) + 1;
+    });
+    return {
+      pending: statuses.filter((status) => status === 'pending').length,
+      unavailable: statuses.filter((status) => status === 'unavailable').length,
+      errors: statuses.filter((status) => status === 'error').length,
+      found: statuses.filter((status) => status === 'found').length,
+      failedByPlatform: Object.entries(failedByPlatform)
+        .sort((a, b) => b[1] - a[1])
+        .map(([platform, count]) => platform + ' ' + count)
+    };
+  }, [durationLookupOutcomes, videos]);
 
   const handleRefreshDurations = () => {
     // Keep active lookups marked in-flight to avoid spawning duplicate metadata requests.
     durationEnrichmentAttemptedRef.current.clear();
+    setDurationLookupOutcomes((prev) => Object.fromEntries(
+      Object.entries(prev).filter(([, value]) => (typeof value === 'object' ? value?.status : value) === 'found')
+    ));
     setDurationRefreshCount((count) => count + 1);
   };
 
@@ -2110,19 +2206,49 @@ function YediHubAppContent() {
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
+    if (resolvedDurationSec) cacheVideoDuration(newVideo, resolvedDurationSec, 'metadata');
+    if (needsBasicMetadata) {
+      durationEnrichmentAttemptedRef.current.add(String(newVideo.id));
+      setDurationLookupOutcomes((prev) => ({
+        ...prev,
+        [String(newVideo.id)]: resolvedDurationSec
+          ? { status: 'found', at: Date.now(), platform: parsed.platform }
+          : { status: 'unavailable', at: Date.now(), platform: parsed.platform }
+      }));
+    }
+    if (deferredMetadataPromise) {
+      durationEnrichmentInFlightRef.current.add(String(newVideo.id));
+      setDurationLookupOutcomes((prev) => ({ ...prev, [String(newVideo.id)]: {
+        status: 'pending', at: Date.now(), platform: String(newVideo.platform || 'external').toLowerCase()
+      } }));
+    }
     void syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
 
     if (deferredMetadataPromise) {
+      const newVideoId = String(newVideo.id);
       void deferredMetadataPromise.then((metadata) => {
         const candidateDuration = Number(metadata?.durationSec);
-        if (!Number.isFinite(candidateDuration) || candidateDuration <= 0) return;
-        if (!videosRef.current.some((video) => String(video.id) === String(newVideo.id))) return;
-        void syncUpdateVideo(newVideo.id, {
+        if (!Number.isFinite(candidateDuration) || candidateDuration <= 0 || candidateDuration > 86400) {
+          setDurationLookupOutcomes((prev) => ({ ...prev, [newVideoId]: {
+            status: metadata ? 'unavailable' : 'error', at: Date.now(), platform: parsed.platform
+          } }));
+          return;
+        }
+        const current = videosRef.current.find((video) => String(video.id) === newVideoId);
+        if (!current) return;
+        cacheVideoDuration(current, candidateDuration, 'metadata');
+        void syncUpdateVideo(newVideoId, {
           duration: formatMediaDuration(candidateDuration),
           durationSec: candidateDuration,
           durationSource: 'metadata'
         });
+        setDurationLookupOutcomes((prev) => ({ ...prev, [newVideoId]: {
+          status: 'found', at: Date.now(), platform: parsed.platform
+        } }));
+      }).finally(() => {
+        durationEnrichmentAttemptedRef.current.add(newVideoId);
+        durationEnrichmentInFlightRef.current.delete(newVideoId);
       });
     }
 
@@ -2336,6 +2462,89 @@ function YediHubAppContent() {
       handleSkipNextRef.current?.();
     }
   };
+
+  const togglePlaybackFromKeyboard = () => {
+    const video = currentVideoRef.current || currentVideo;
+    if (!video) return;
+    if (video.platform === 'youtube') {
+      const player = youtubePlayerRef.current;
+      if (!player || typeof player.getPlayerState !== 'function') {
+        addToast('YouTube player is not ready for keyboard controls yet.', 'warning');
+        return;
+      }
+      const state = Number(player.getPlayerState());
+      if (state === 1 || state === 3) {
+        player.pauseVideo?.();
+      } else {
+        player.playVideo?.();
+      }
+      return;
+    }
+    if (video.platform === 'tiktok') {
+      const iframeWindow = tiktokIframeRef.current?.contentWindow;
+      if (!iframeWindow) {
+        addToast('TikTok player is not ready for keyboard controls yet.', 'warning');
+        return;
+      }
+      const sameVideo = keyboardPausedRef.current.videoId === String(video.id);
+      const shouldPause = sameVideo ? !keyboardPausedRef.current.paused : true;
+      keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
+      iframeWindow.postMessage({
+        type: shouldPause ? 'pause' : 'play',
+        value: null,
+        'x-tiktok-player': true
+      }, 'https://www.tiktok.com');
+      return;
+    }
+    addToast('This player does not expose remote play/pause controls. Use its in-player controls.', 'info');
+  };
+
+  const toggleMuteFromKeyboard = () => {
+    const video = currentVideoRef.current || currentVideo;
+    if (!video) return;
+    if (video.platform === 'youtube') {
+      const player = youtubePlayerRef.current;
+      const isMuted = typeof player?.isMuted === 'function'
+        ? player.isMuted()
+        : Boolean(youtubePlaybackInfoRef.current.muted);
+      handleVolumeCommandRef.current?.({ action: isMuted ? 'unmute' : 'mute' }, 'streamer');
+      return;
+    }
+    if (video.platform === 'tiktok') {
+      const muted = tiktokMutePreferenceRef.current.requestId === String(video.id) &&
+        tiktokMutePreferenceRef.current.preference === 'muted';
+      handleVolumeCommandRef.current?.({ action: muted ? 'unmute' : 'mute' }, 'streamer');
+      return;
+    }
+    addToast('This player does not expose a remote mute control. Use its in-player controls.', 'info');
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.isContentEditable ||
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      );
+      if (isTyping || showAuthModal || showSettingsModal || showRequestModal) return;
+      const key = String(event.key || '').toLowerCase();
+      if (event.code === 'Space' || key === ' ') {
+        event.preventDefault();
+        if (!event.repeat) togglePlaybackFromKeyboard();
+      } else if (key === 'm') {
+        if (!event.repeat) toggleMuteFromKeyboard();
+      } else if (isStaff && (key === 'arrowright' || key === 'n')) {
+        event.preventDefault();
+        if (!event.repeat) handleSkipNextRef.current?.();
+      } else if (isStaff && (key === 'arrowleft' || key === 'p')) {
+        event.preventDefault();
+        if (!event.repeat) handlePreviousTrack();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -2903,9 +3112,12 @@ function YediHubAppContent() {
           </div>
 
           {/* Sync & Mode Badges */}
-          <div
-            title={syncStatusText}
-            aria-label={`Cloud sync: ${syncStatusText}`}
+          <button
+            type="button"
+            onClick={() => setConnectionDetailsExpanded((expanded) => !expanded)}
+            title="Show connection details"
+            aria-label={`Connection details: ${syncStatusText}`}
+            aria-expanded={connectionDetailsExpanded}
             className={`flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
           >
             <span className="flex shrink-0 items-center gap-1.5">
@@ -2916,7 +3128,8 @@ function YediHubAppContent() {
             <span className="whitespace-nowrap text-slate-300">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
-          </div>
+            <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />
+          </button>
 
           {/* Right Action Tools */}
           <div className="flex items-center gap-2">
@@ -3001,6 +3214,27 @@ function YediHubAppContent() {
             </button>
           </div>
         </div>
+
+        {connectionDetailsExpanded && (
+          <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-4">
+            <div className="min-w-0">
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
+              <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : 'Reconnecting / offline'}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
+              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69' : 'Offline · chat replies unavailable'}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
+              <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'} · {durationLookupStats.unavailable + durationLookupStats.errors} duration lookup failures</div>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* ==========================================
@@ -3019,13 +3253,16 @@ function YediHubAppContent() {
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <section className="rounded-xl border border-fuchsia-500/20 bg-gradient-to-b from-[#181022] to-[#0e111b] p-3 space-y-3 shadow-lg shadow-fuchsia-950/10">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
+              <button type="button" onClick={() => setStatsExpanded((expanded) => !expanded)} aria-expanded={statsExpanded} className="flex min-w-0 items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200 hover:text-white">
                 <BarChart3 className="h-3.5 w-3.5 text-fuchsia-300" /> STATS BOARD
-              </div>
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${statsExpanded ? 'rotate-180' : ''}`} />
+              </button>
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300">
                 <Activity className="h-2.5 w-2.5" /> Live
               </span>
             </div>
+            {statsExpanded && (
+              <div className="space-y-3">
             <p className="text-[9px] text-slate-500">Recent activity · last 3 hours</p>
 
             <div className="grid grid-cols-2 gap-2">
@@ -3055,6 +3292,9 @@ function YediHubAppContent() {
               <div className="min-w-0">
                 <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Queue runway</div>
                 <div className="mt-0.5 text-sm font-black text-white">{formatRuntimeHoursMinutes(queueStats.queueDurationSeconds)} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div>
+                <div className="mt-1 text-[9px] leading-4 text-slate-500">
+                  {queueStats.queueKnownCount} known lengths · {queueStats.queueEstimatedCount} estimated
+                </div>
               </div>
               <Timer className="h-4 w-4 shrink-0 text-purple-300" />
             </div>
@@ -3106,10 +3346,24 @@ function YediHubAppContent() {
               </div>
             )}
 
+            <div className="rounded-lg border border-white/5 bg-black/20 px-2.5 py-2 space-y-1">
+              <div className="flex items-center justify-between gap-2 text-[9px]">
+                <span className="font-bold uppercase tracking-wide text-slate-500">Duration confidence</span>
+                <span className="font-mono text-slate-200">{queueStats.queueKnownCount} known · {queueStats.queueEstimatedCount} estimated</span>
+              </div>
+              <div className="text-[9px] leading-4 text-slate-500">
+                {durationLookupStats.pending} checks running · {durationLookupStats.unavailable + durationLookupStats.errors} provider lookups unavailable/failed
+                {durationLookupStats.failedByPlatform?.length > 0 && (
+                  <div>By provider: {durationLookupStats.failedByPlatform.join(' · ')}</div>
+                )}
+              </div>
+            </div>
             {isStaff && (
               <button type="button" onClick={handleRefreshDurations} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-[9px] font-bold text-slate-300 transition hover:border-purple-400/50 hover:text-white" title="Retry provider metadata lookups for entries whose duration is still unknown">
                 <RefreshCw className="h-3 w-3" /> Refresh missing durations
               </button>
+            )}
+              </div>
             )}
           </section>
         </aside>
@@ -3123,6 +3377,9 @@ function YediHubAppContent() {
               <div className="flex items-center gap-2 min-w-0">
                 {currentVideo && (
                   <>
+                    <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black tracking-wide border ${currentVideo.status === 'playing' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-purple-500/15 border-purple-500/30 text-purple-200'}`}>
+                      {currentVideo.status === 'playing' ? 'NOW PLAYING' : 'READY TO PLAY'}
+                    </span>
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[getVideoCategory(currentVideo)]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                       {getVideoCategory(currentVideo)}
                     </span>
@@ -3345,6 +3602,11 @@ function YediHubAppContent() {
                       </>
                     )}
                   </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-slate-500">
+                    <Keyboard className="h-3 w-3" />
+                    <span>Shortcuts: Space play/pause · M mute</span>
+                    {isStaff && <span>· ← previous · → next (N/P also work)</span>}
+                  </div>
                 </div>
               </div>
             ) : (
@@ -3482,6 +3744,10 @@ function YediHubAppContent() {
               ) : (
                 filteredVideos.map((video, idx) => {
                   const isCurrent = currentVideo && currentVideo.id === video.id;
+                  const queueRank = queueRankById.get(String(video.id)) ?? (idx + 1);
+                  const queuePositionLabel = activeTab === 'queue' && video.status === 'queue' && queueRank <= 3
+                    ? queueRank === 1 ? 'UP NEXT' : queueRank === 2 ? 'COMING UP' : 'IN ROTATION'
+                    : '';
                   const resolvedCategory = getVideoCategory(video); const catObj = CATEGORY_META[resolvedCategory] || CATEGORY_META.General;
 
                   return (
@@ -3548,8 +3814,12 @@ function YediHubAppContent() {
                               <Play className="w-4 h-4 fill-current ml-0.5" />
                             </div>
                           </div>
-                          <span className="absolute bottom-1 right-1 px-1.5 py-0.2 rounded bg-black/80 text-[10px] font-mono font-bold text-slate-200">
-                            {getDurationLabel(video)}
+                          <span
+                            className={`absolute bottom-1 right-1 px-1.5 py-0.2 rounded bg-black/85 text-[10px] font-mono font-bold text-slate-100 ${getDurationEstimate(video).estimated ? 'border border-amber-300/30 text-amber-100' : ''}`}
+                            title={getDurationEstimate(video).estimated ? 'Approximate duration: the source has not exposed its actual length yet.' : 'Actual video duration'}
+                            aria-label={getDurationEstimate(video).estimated ? 'Approximate duration ' + getThumbnailDurationLabel(video) : 'Video duration ' + getThumbnailDurationLabel(video)}
+                          >
+                            {getThumbnailDurationLabel(video)}
                           </span>
                         </div>
 
@@ -3582,6 +3852,11 @@ function YediHubAppContent() {
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
                               {video.platform}
                             </span>
+                            {queuePositionLabel && (
+                              <span className={`px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide border ${queueRank === 1 ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-purple-500/10 border-purple-500/20 text-purple-200'}`}>
+                                {queuePositionLabel}
+                              </span>
+                            )}
 
                             {video.pinned && (
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
