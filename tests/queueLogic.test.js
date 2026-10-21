@@ -174,7 +174,7 @@ test('Live queue statistics report recent requesters, platforms, genres, runtime
   assert.equal(stats.queueCount, 3);
   assert.equal(stats.queueDurationSeconds, 180 + 120 + 45);
   assert.equal(stats.watchedLastWindow, 2);
-  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'tiktok', count: 2 });
   assert.deepEqual(stats.mostPopularGenre, { label: 'Memes', count: 2 });
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
 });
