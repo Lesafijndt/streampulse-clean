@@ -629,9 +629,13 @@ function YediHubAppContent() {
         setFirebaseLoginToken(customToken);
         if (allowed) {
           const hasWebFirebaseConfig = Boolean(getFirebaseConfig());
-          setSyncStatusText(customToken && hasWebFirebaseConfig
-            ? 'Connecting private cloud sync…'
-            : 'Twitch verified — local save is active');
+          if (!hasWebFirebaseConfig) {
+            setSyncStatusText('Twitch verified — Firebase web config missing');
+          } else if (!customToken || session.firebaseTokenReady !== true) {
+            setSyncStatusText('Twitch verified — Firebase server token unavailable');
+          } else {
+            setSyncStatusText('Connecting private cloud sync…');
+          }
         }
         setTwitchAuth({
           username: allowed ? login : '',
