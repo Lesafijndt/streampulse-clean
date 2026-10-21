@@ -514,12 +514,12 @@ body { background: #03070b; }
   background-color: #030306 !important;
   background-image:
     radial-gradient(ellipse at 50% 0%, rgba(255,35,70,.12), transparent 44%),
-    linear-gradient(180deg, rgba(3,4,8,.52), rgba(2,3,6,.87)),
+    linear-gradient(180deg, rgba(3,4,8,.20) 0%, rgba(2,3,6,.38) 54%, rgba(2,3,6,.59) 100%),
     url('/gachi-arena-bg.svg'),
     radial-gradient(ellipse at 4% 55%, rgba(0,106,167,.14), transparent 34%),
     radial-gradient(ellipse at 96% 25%, rgba(254,204,0,.075), transparent 28%) !important;
   background-size: auto, cover, cover, auto, auto !important;
-  background-position: center top, center, center 13%, 4% 55%, 96% 25% !important;
+  background-position: center top, center, center center, 4% 55%, 96% 25% !important;
   background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat !important;
   background-attachment: scroll, scroll, fixed, scroll, scroll !important;
 }
@@ -712,3 +712,21 @@ body { background: #03070b; }
   .gachi-theme .gachi-poster-eyebrow { letter-spacing: .16em; }
   .gachi-theme .gachi-poster-tagline { letter-spacing: .12em; }
 }
+
+
+/* Technical broadcast identity: let the full-height wrestler artwork read clearly. */
+.gachi-theme {
+  background-attachment: scroll, scroll, fixed, scroll, scroll !important;
+}
+.gachi-theme .gachi-poster-title {
+  background: radial-gradient(ellipse, rgba(5,4,8,.74) 0%, rgba(5,4,8,.40) 60%, transparent 100%) !important;
+}
+.gachi-theme .gachi-poster-banner {
+  border-color: rgba(0,106,167,.8) !important;
+  box-shadow: 0 11px 38px rgba(0,0,0,.65), 0 0 30px rgba(0,106,167,.12), inset 0 0 0 3px rgba(0,0,0,.58) !important;
+}
+.gachi-theme .gachi-poster-topline {
+  border-color: rgba(0,106,167,.8) !important;
+}
+.gachi-theme .gachi-poster-eyebrow { color: #83d5ff !important; }
+.gachi-theme .gachi-poster-tagline { color: #fecc00 !important; }
