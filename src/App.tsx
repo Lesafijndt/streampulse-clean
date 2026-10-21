@@ -1534,15 +1534,21 @@ function YediHubAppContent() {
   };
 
   const syncActivityEventToCloud = async (event) => {
-    if (!db || !firebaseUser || !activityCloudReadyRef.current || !event?.id ||
+    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !event?.id ||
         activityCloudIdsRef.current.has(String(event.id)) ||
-        activitySyncInFlightRef.current.has(String(event.id))) return false;
+        activitySyncInFlightRef.current.has(String(event.id)) || !networkOnline) return false;
     const eventId = String(event.id);
     activitySyncInFlightRef.current.add(eventId);
     try {
-      const eventRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_events', eventId);
-      // No merge: event documents are create-only so append-only rules remain meaningful.
-      await setDoc(eventRef, event);
+      const response = await fetch('/api/activity-log', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, event })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Activity event could not be saved');
       activityCloudIdsRef.current.add(eventId);
       setActivitySyncError(false);
       return true;
@@ -1577,7 +1583,7 @@ function YediHubAppContent() {
   };
 
   const flushPendingActivityEvents = () => {
-    if (!db || !firebaseUser || !activityCloudReadyRef.current || !networkOnline) return;
+    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !networkOnline) return;
     activityEventsRef.current.forEach((event) => {
       if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
     });
@@ -1630,22 +1636,30 @@ function YediHubAppContent() {
   };
 
   useEffect(() => {
-    if (!db || !firebaseUser) {
+    if (!twitchAuth.authenticated) {
       activityCloudReadyRef.current = false;
       activityCloudIdsRef.current = new Set();
       setActivityCloudReady(false);
       return undefined;
     }
+
     let active = true;
+    let loading = false;
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
-    try {
-      const eventsRef = collection(db, 'artifacts', appId, 'public', 'data', 'queue_events');
-      const unsubscribe = onSnapshot(eventsRef, { includeMetadataChanges: true }, (snapshot) => {
-        if (!active) return;
-        const cloudEvents = snapshot.docs
-          .map((entry) => normalizeActivityEvent({ ...entry.data(), id: entry.id }))
-          .filter(Boolean);
+    const loadActivityEvents = async () => {
+      if (!active || loading || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      loading = true;
+      try {
+        const response = await fetch('/api/activity-log?appId=' + encodeURIComponent(appId), {
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !Array.isArray(result.events)) {
+          throw new Error(result.error || 'Activity log sync is unavailable');
+        }
+        const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
         activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
         activityCloudReadyRef.current = true;
         setActivityCloudReady(true);
@@ -1654,34 +1668,34 @@ function YediHubAppContent() {
         activityEventsRef.current = merged;
         setActivityEvents(merged);
         writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-        // Upload local/offline events only after knowing which records already exist in the cloud.
         merged.forEach((event) => {
           if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
         });
-      }, (error) => {
-        console.error('Activity log subscription failed:', error);
-        if (!active) return;
-        activityCloudReadyRef.current = false;
-        setActivityCloudReady(false);
-        setActivitySyncError(true);
-      });
-      return () => { active = false; unsubscribe(); };
-    } catch (error) {
-      console.error('Could not subscribe to the activity log:', error);
-      setActivitySyncError(true);
-      activityCloudReadyRef.current = false;
-      setActivityCloudReady(false);
-      return undefined;
-    }
-  }, [db, firebaseUser, appId, channelRoom, activityReconnectTick]);
+      } catch (error) {
+        if (active) {
+          console.warn('Activity log sync will retry automatically:', error);
+          setActivityCloudReady(false);
+          activityCloudReadyRef.current = false;
+          setActivitySyncError(true);
+        }
+      } finally {
+        loading = false;
+      }
+    };
+    void loadActivityEvents();
+    const interval = window.setInterval(loadActivityEvents, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [twitchAuth.authenticated, appId, channelRoom, activityReconnectTick]);
 
   // Import records for existing saved items which pre-date the event stream.
   // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
   useEffect(() => {
     const normalizedRoom = normalizeRoomName(channelRoom);
-    const localOnlyReady = !db;
-    const cloudReady = Boolean(db && firebaseUser && cloudSynced && activityCloudReady &&
-      initializedCloudRoomsRef.current.has(normalizedRoom));
+    const localOnlyReady = !db || !firebaseUser;
+    const cloudReady = Boolean(db && firebaseUser && cloudSynced && initializedCloudRoomsRef.current.has(normalizedRoom));
     if (!localOnlyReady && !cloudReady) return;
     const existingIds = new Set(activityEventsRef.current
       .filter((event) => event.type === 'request_added' && event.mediaId)
@@ -1969,12 +1983,12 @@ function YediHubAppContent() {
     ? 'Offline · local save'
     : activitySyncError
     ? 'Retry needed'
-    : db && firebaseUser
+    : twitchAuth.authenticated
     ? activityCloudReady ? 'Cloud synced' : 'Connecting'
     : 'Local-only';
   const activitySyncTone = !networkOnline || activitySyncError
     ? 'warning'
-    : db && firebaseUser && activityCloudReady
+    : twitchAuth.authenticated && activityCloudReady
     ? 'success'
     : 'neutral';
   const durationLookupStats = useMemo(() => {
@@ -3494,7 +3508,7 @@ function YediHubAppContent() {
             activitySyncStatus={activitySyncStatus}
             activitySyncTone={activitySyncTone}
             activitySyncError={activitySyncError}
-            canRetryActivitySync={Boolean(db && firebaseUser)}
+            canRetryActivitySync={Boolean(twitchAuth.authenticated)}
             onRetryActivitySync={handleRetryActivitySync}
             networkOnline={networkOnline}
           />
