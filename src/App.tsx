@@ -2082,10 +2082,10 @@ function YediHubAppContent() {
                   Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ GACHI STREAM OPS ♂
+                  ♂ GACHI MODE ♂
                 </span>
-                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-[#006aa7]/20 text-cyan-100 border border-cyan-400/30">
-                  🇸🇪 SE // LIVE NODE
+                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
+                  🇸🇪 SE // LIVE STREAM CONTROL
                 </span>
               </div>
 
@@ -2203,32 +2203,6 @@ function YediHubAppContent() {
           </div>
         </div>
       </header>
-
-      {/* GACHIMUCHI STREAM CONTROL IDENT */}
-      <section className="gachi-poster-banner" aria-label="Hardcore gachimuchi wrestling arena">
-        <div className="gachi-poster-topline">
-          <span>GACHI STREAM SYSTEMS // 2O3A</span>
-          <span>SIGNAL // QUEUE // PLAYBACK</span>
-        </div>
-        <div className="gachi-poster-center">
-          <div className="gachi-poster-sidecopy">
-            <span>LIVE</span><strong>QUEUE</strong><span>INPUT</span><strong>READY</strong>
-          </div>
-          <div className="gachi-poster-title">
-            <div className="gachi-poster-eyebrow">SV-SE // BROADCAST CONTROL</div>
-            <h1>GACHIMUCHI <em>STREAM OPS</em></h1>
-            <div className="gachi-poster-tagline">SIGNAL • QUEUE • PLAYBACK</div>
-          </div>
-          <div className="gachi-poster-sidecopy gachi-poster-sidecopy-right">
-            <span>PARSE</span><strong>PLAY</strong><span>QUEUE</span><strong>NEXT</strong>
-          </div>
-        </div>
-        <div className="gachi-poster-bottomline">
-          <span>🇸🇪 SWEDISH NODE // STREAM CONTROL</span>
-          <span>MAIN EVENT: 2O3A</span>
-          <span>INPUT • DECODE • PLAYBACK</span>
-        </div>
-      </section>
 
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
@@ -2526,9 +2500,9 @@ function YediHubAppContent() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
-                  { id: 'queue', label: 'Fight Card', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
-                  { id: 'watch_later', label: 'Backlog', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
-                  { id: 'watched', label: 'War Stories', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
+                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
+                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
+                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
                 ].map((tab) => {
                   const Icon = tab.icon;
                   const active = activeTab === tab.id;
@@ -2862,7 +2836,7 @@ function YediHubAppContent() {
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">STREAM CONTROL PANEL</h3>
+                  <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
                   <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
                 </div>
               </div>
@@ -3026,7 +3000,7 @@ function YediHubAppContent() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Arena Control Rules</h3>
+                <h3 className="text-base font-bold text-white">Streamer Safety & Queue Rules</h3>
               </div>
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -3038,12 +3012,12 @@ function YediHubAppContent() {
 
             <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
-                <div className="font-bold text-amber-300">OPEN FLOOR • NO MERCY</div>
-                <p className="text-[11px] text-slate-400">Requests hit the queue immediately while the arena is open. Full send, no waiting room. Categories are labels only.</p>
+                <div className="font-bold text-amber-300">Unfiltered media requests</div>
+                <p className="text-[11px] text-slate-400">All platforms and categories are accepted while the queue is open. Categories are labels only; subscriber-only, platform, and stream-mode filters are disabled.</p>
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Arena Open for Requests', desc: 'Allow !assr Twitch requests and web submissions' },
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
                 { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
               ].map((item) => (
                 <label
@@ -3071,7 +3045,7 @@ function YediHubAppContent() {
               <button
                 onClick={() => {
                   setShowSettingsModal(false);
-                  addToast('Arena rules updated!', 'success');
+                  addToast('Streamer Queue Rules updated!', 'success');
                 }}
                 className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
               >
