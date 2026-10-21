@@ -234,8 +234,8 @@ const KNOWN_CHAT_BOTS = new Set([
 // Treat a message consisting of a supported video URL as a request even without !assr.
 function isSupportedMediaUrlMessage(rawText = '') {
   const candidate = String(rawText || '').trim();
-  if (!candidate || /\\s/.test(candidate)) return false;
-  return /^(?:https?:\\/\\/)?(?:www\\.)?(?:youtube\\.com|m\\.youtube\\.com|youtu\\.be|music\\.youtube\\.com|tiktok\\.com|vm\\.tiktok\\.com|vt\\.tiktok\\.com|twitch\\.tv|clips\\.twitch\\.tv|kick\\.com|clip\\.kick\\.com)\\/\\S+$/i.test(candidate);
+  if (!candidate || /\s/.test(candidate)) return false;
+  return /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|m\.youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\/\S+$/i.test(candidate);
 }
 
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
@@ -1279,7 +1279,7 @@ function YediHubAppContent() {
           ? 'subscriber'
           : 'viewer';
         const lowerText = text.toLowerCase();
-        const isRequestCommand = /^!assr(?:\\s|$)/i.test(text);
+        const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
         const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
         const volumeCommand = parseModVolumeCommand(lowerText);
         if (isRequestCommand || isDirectVideoUrl) {
