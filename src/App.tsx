@@ -633,6 +633,9 @@ function YediHubAppContent() {
           const firebaseDiagnosticMessages = {
             missing_service_account: 'Firebase service account missing in Vercel',
             invalid_service_account_json: 'Firebase service-account JSON is invalid',
+            service_account_missing_project_id: 'Firebase service-account JSON is missing project_id',
+            service_account_missing_client_email: 'Firebase service-account JSON is missing client_email',
+            service_account_missing_private_key: 'Firebase service-account JSON is missing private_key',
             invalid_service_account_credentials: 'Firebase service-account key is invalid',
             firebase_admin_sdk_unavailable: 'Firebase Admin SDK failed to load',
             firebase_custom_token_failed: 'Firebase custom-token creation failed',
