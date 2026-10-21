@@ -2927,11 +2927,6 @@ function YediHubAppContent() {
             )}
           </section>
 
-          <div className="gachi-primary-actions grid grid-cols-3 gap-2 sm:gap-3">
-            <button type="button" onClick={handleSkipNext} className="gachi-primary-action"><SkipForward className="w-6 h-6 fill-current" /><span>SKIP</span></button>
-            <button type="button" onClick={() => { const target = currentVideo?.status === 'queue' ? currentVideo : nextQueuedVideo; if (target) void handleUpvote(target.id); else addToast('There is no waiting video to hype yet.', 'warning'); }} disabled={!currentVideo && !nextQueuedVideo} className="gachi-primary-action" title="Hype the active request or the next queued video"><Flame className="w-6 h-6 fill-current" /><span>HYPE</span></button>
-            <button type="button" onClick={() => setShowRequestModal(true)} className="gachi-primary-action"><Plus className="w-6 h-6" /><span>REQUEST</span></button>
-          </div>
         </div>
 
         <div className="gachi-queue-column min-w-0">
