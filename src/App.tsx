@@ -525,13 +525,10 @@ function YediHubAppContent() {
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
-  // If the official player never starts after a queue transition, fall back to TikTok's standard embed.
-  const [tiktokEmbedMode, setTikTokEmbedMode] = useState({ requestId: '', mode: 'player' });
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
   const youtubePlayerContainerRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const tiktokIframeRef = useRef(null);
-  const tiktokEmbedContainerRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
   const handleIncomingChatCommandRef = useRef(null);
@@ -1033,6 +1030,7 @@ function YediHubAppContent() {
   const compareQueueOrder = (a, b) => queueOrderValue(a) - queueOrderValue(b) ||
     (Number(a?.timestamp) || 0) - (Number(b?.timestamp) || 0) || String(a?.id).localeCompare(String(b?.id));
   const queueOrderSequenceRef = useRef(0);
+  const reorderQueueAfterVoteRef = useRef(false);
   const getNextQueueOrder = () => {
     const maxOrder = videos.filter((video) => video.status === 'queue')
       .reduce((max, video) => Math.max(max, queueOrderValue(video)), 0);
@@ -1041,19 +1039,55 @@ function YediHubAppContent() {
     return next;
   };
 
+  useEffect(() => {
+    if (!reorderQueueAfterVoteRef.current) return;
+    reorderQueueAfterVoteRef.current = false;
+    const orderedQueue = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    if (!orderedQueue.length) return;
+    const orderById = new Map(orderedQueue.map((video, index) => [String(video.id), (index + 1) * 1000]));
+    setVideos((previous) => previous.map((video) => {
+      const queueOrder = orderById.get(String(video.id));
+      return queueOrder === undefined ? video : { ...video, queueOrder };
+    }));
+    if (db && firebaseUser) {
+      void (async () => {
+        const batch = writeBatch(db);
+        orderedQueue.forEach((video, index) => {
+          batch.set(
+            doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+            { id: String(video.id), queueOrder: (index + 1) * 1000, channelRoom: normalizeRoomName(channelRoom) },
+            { merge: true }
+          );
+        });
+        try {
+          await batch.commit();
+        } catch (error) {
+          console.warn('Vote-based queue priority could not be saved atomically; retrying merge writes.', error);
+          try {
+            await Promise.all(orderedQueue.map((video, index) => setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+              { id: String(video.id), queueOrder: (index + 1) * 1000, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            )));
+          } catch (fallbackError) {
+            console.warn('Vote-based queue priority could not sync to Firebase.', fallbackError);
+            setCloudSynced(false);
+            setSyncStatusText('Queue priority saved locally — cloud update failed');
+          }
+        }
+      })();
+    }
+  }, [videos, db, firebaseUser, appId, channelRoom]);
+
   const currentVideo = useMemo(() => {
     // Current playing item or top of queue
     const playing = videos.find((v) => v.status === 'playing');
     if (playing) return playing;
-    const queued = videos.filter((v) => v.status === 'queue').sort(compareQueuePriority);
+    const queued = videos.filter((v) => v.status === 'queue').sort(compareQueueOrder);
     return queued[0] || null;
   }, [videos]);
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
-  const currentTikTokMode = currentVideo?.platform === 'tiktok' && tiktokEmbedMode.requestId === currentVideo.id
-    ? tiktokEmbedMode.mode
-    : 'player';
-
   // Older saved queues may have no explicit "playing" status even though their top item is visible.
   // Promote that first item once so vote changes reorder waiting requests, not the video already on screen.
   useEffect(() => {
@@ -1063,7 +1097,7 @@ function YediHubAppContent() {
       return;
     }
     if (activeItems.length === 1) return;
-    const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority)[0];
+    const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0];
     if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false });
   }, [videos]);
 
@@ -1089,6 +1123,8 @@ function YediHubAppContent() {
           String(v.note || '').toLowerCase().includes(q);
       })
       .sort((a, b) => {
+        // Active Queue always shows actual playback order. Other tabs may use their selected sort.
+        if (activeTab === 'queue') return compareQueueOrder(a, b);
         if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
         if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
         return compareQueueOrder(a, b);
@@ -1435,7 +1471,7 @@ function YediHubAppContent() {
     // with zero/two active players; TikTok iframes could then be torn down mid-navigation.
     const nextOne = videos
       .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
-      .sort(compareQueuePriority)[0] || null;
+      .sort(compareQueueOrder)[0] || null;
     const updatesById = new Map();
     videos.filter((video) => video.status === 'playing').forEach((video) => {
       updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now' });
@@ -1593,10 +1629,9 @@ function YediHubAppContent() {
       if (oldPlayer && typeof oldPlayer.destroy === 'function') {
         try { oldPlayer.destroy(); } catch (error) { console.debug('YouTube player was already detached during cleanup.', error); }
       }
-      // The API replaces playerMountNode with its iframe. Remove only the original node if it is still attached.
-      if (playerMountNode && playerMountNode.parentNode === host) {
-        try { host.removeChild(playerMountNode); } catch { /* already detached */ }
-      }
+      // YouTube replaces the imperative mount node with its iframe. The permanent host is not
+      // reconciled by React internally; destroy the API player and safely clear unmanaged children.
+      try { host.replaceChildren(); } catch { /* the host may already be detached */ }
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
@@ -1655,89 +1690,6 @@ function YediHubAppContent() {
 
 
 
-  // TikTok's supported video-embed fallback uses the standard blockquote + embed.js snippet,
-  // rather than an undocumented embed/v2 iframe URL. Rebuild the markup on every track change.
-  useEffect(() => {
-    if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId || currentTikTokMode !== 'classic') return undefined;
-    const container = tiktokEmbedContainerRef.current;
-    if (!container) return undefined;
-
-    let cancelled = false;
-    let markedReady = false;
-    let observer = null;
-    let timeout = null;
-    container.replaceChildren();
-
-    const requestId = currentVideo.id;
-    const videoId = String(currentVideo.videoId);
-    let citeUrl = `https://www.tiktok.com/video/${videoId}`;
-    try {
-      const submitted = new URL(String(currentVideo.url || ''));
-      if ((submitted.hostname === 'tiktok.com' || submitted.hostname.endsWith('.tiktok.com')) &&
-          new RegExp(`/@[^/]+/video/${videoId}(?:$|[/?#])`, 'i').test(submitted.pathname)) {
-        citeUrl = submitted.href;
-      }
-    } catch { /* Use the generated TikTok video URL when no valid canonical URL was saved. */ }
-
-    const markReadyIfEmbedded = () => {
-      if (cancelled || markedReady || currentVideoRef.current?.id !== requestId) return;
-      const embeddedFrame = container.querySelector('iframe');
-      if (!embeddedFrame) return;
-      markedReady = true;
-      embeddedFrame.setAttribute('allow', 'autoplay; encrypted-media; fullscreen; picture-in-picture; web-share');
-      embeddedFrame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
-      embeddedFrame.style.width = '100%';
-      embeddedFrame.style.maxWidth = '100%';
-      embeddedFrame.style.border = '0';
-      setTikTokPlayerState({ requestId, status: 'fallback-ready' });
-    };
-
-    const blockquote = document.createElement('blockquote');
-    blockquote.className = 'tiktok-embed';
-    blockquote.setAttribute('cite', citeUrl);
-    blockquote.setAttribute('data-video-id', videoId);
-    blockquote.setAttribute('data-embed-from', 'oembed');
-    blockquote.style.maxWidth = '605px';
-    blockquote.style.minWidth = '325px';
-    blockquote.style.width = '100%';
-    blockquote.style.margin = '0';
-    const section = document.createElement('section');
-    const anchor = document.createElement('a');
-    anchor.href = citeUrl;
-    anchor.target = '_blank';
-    anchor.rel = 'noopener noreferrer';
-    anchor.textContent = currentVideo.title || 'Watch this video on TikTok';
-    section.appendChild(anchor);
-    blockquote.appendChild(section);
-    container.appendChild(blockquote);
-
-    observer = new MutationObserver(markReadyIfEmbedded);
-    observer.observe(container, { childList: true, subtree: true });
-
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = 'https://www.tiktok.com/embed.js';
-    script.onload = markReadyIfEmbedded;
-    script.onerror = () => {
-      if (!cancelled && currentVideoRef.current?.id === requestId) {
-        setTikTokPlayerState({ requestId, status: 'error' });
-      }
-    };
-    container.appendChild(script);
-
-    timeout = window.setTimeout(() => {
-      if (!cancelled && !markedReady && currentVideoRef.current?.id === requestId) {
-        setTikTokPlayerState({ requestId, status: 'error' });
-      }
-    }, 13000);
-
-    return () => {
-      cancelled = true;
-      if (timeout) window.clearTimeout(timeout);
-      if (observer) observer.disconnect();
-      container.replaceChildren();
-    };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.url, currentVideo?.title, currentVideo?.platform, currentTikTokMode, tiktokFrameReload]);
 
   const handleMoveToWatchLater = (video) => {
     const isNowPlaying = video.status === 'playing';
@@ -1746,7 +1698,7 @@ function YediHubAppContent() {
     if (isNowPlaying) {
       const nextOne = videos
         .filter((item) => item.status === 'queue' && item.id !== video.id)
-        .sort(compareQueuePriority)[0];
+        .sort(compareQueueOrder)[0];
       if (nextOne) {
         syncUpdateVideo(nextOne.id, { status: 'playing', pinned: false });
         addToast(`Saved to Watch Later. Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
@@ -1818,6 +1770,7 @@ function YediHubAppContent() {
 
     // Keep the in-memory guard synchronous so repeated chat lines cannot race React state updates.
     voteAttemptsRef.current.add(voteKey);
+    reorderQueueAfterVoteRef.current = true;
     setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
     await syncIncrementUpvote(videoId, voterLogin);
     addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
@@ -1859,7 +1812,7 @@ function YediHubAppContent() {
     const match = String(rawText || '').trim().toLowerCase().match(/^!bigcock(?:\s+(\d+))?$/);
     if (!match) return;
     const position = Math.max(1, Number(match[1] || 1));
-    const queue = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const target = queue[position - 1];
     if (!target) {
       sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !position to see your requests.`);
@@ -1885,7 +1838,7 @@ function YediHubAppContent() {
 
     const owned = (video) => normalizeTwitchLogin(video.requestedBy) === requester;
     const playing = videos.find((video) => video.status === 'playing');
-    const queued = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const pending = videos.filter((video) => video.status === 'pending' && owned(video));
     const myQueued = queued.map((video, index) => ({ video, position: index + 1 })).filter((item) => owned(item.video));
     const messages = [];
@@ -1933,11 +1886,7 @@ function YediHubAppContent() {
 
     // Recreate the current visual sort over the full queue, then swap the two adjacent visible rows.
     // This also works if search/category filters hide entries between those visible rows.
-    const fullQueue = videos.filter((video) => video.status === 'queue').sort((a, b) => {
-      if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
-      if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
-      return compareQueueOrder(a, b);
-    });
+    const fullQueue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const movingId = String(visibleQueue[visibleIndex].id);
     const targetId = String(visibleQueue[targetVisibleIndex].id);
     const movingIndex = fullQueue.findIndex((video) => String(video.id) === movingId);
@@ -2086,7 +2035,7 @@ function YediHubAppContent() {
           <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">Next Up:</span>
           {counts.queue > 0 ? (
             <span className="text-xs text-slate-200 truncate">
-              {videos.filter((v) => v.status === 'queue').sort(compareQueuePriority)[0]?.title || 'Loading next item...'}
+              {videos.filter((v) => v.status === 'queue').sort(compareQueueOrder)[0]?.title || 'Loading next item...'}
             </span>
           ) : (
             <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
@@ -2293,112 +2242,62 @@ function YediHubAppContent() {
                       : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
                   }`}
                 >
-                  {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
-                    <div key={`youtube-${currentVideo.id}-${currentVideo.videoId}`} ref={youtubePlayerContainerRef} className="w-full h-full" />
-                  ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
+                  <div
+                    ref={youtubePlayerContainerRef}
+                    aria-hidden={currentVideo.platform !== 'youtube' || !currentVideo.videoId}
+                    className={`absolute inset-0 h-full w-full ${currentVideo.platform === 'youtube' && currentVideo.videoId ? '' : 'invisible pointer-events-none'}`}
+                  />
+                  {currentVideo.platform === 'youtube' && currentVideo.videoId ? null
+                  : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
-                      {currentTikTokMode === 'classic' ? (
-                        <div
-                          key={`tiktok-official-embed-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
-                          ref={tiktokEmbedContainerRef}
-                          className="h-full w-full max-w-[405px] overflow-auto bg-black flex items-start justify-center"
-                          aria-label="TikTok official video embed"
-                        />
-                      ) : (
-                        <iframe
-                          key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
-                          ref={tiktokIframeRef}
-                          className="gachi-tiktok-player border-0"
-                          style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                          src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
-                          title={currentVideo.title}
-                          allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                          loading="eager"
-                          referrerPolicy="strict-origin-when-cross-origin"
-                          onLoad={() => {
-                            // Readiness messages can occasionally arrive before the React effect subscribes.
-                            // Send one best-effort play command once this specific iframe document has loaded.
-                            const frameWindow = tiktokIframeRef.current?.contentWindow;
-                            if (frameWindow) {
-                              frameWindow.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            }
-                          }}
-                          onError={() => {
+                      <iframe
+                        key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                        ref={tiktokIframeRef}
+                        className="gachi-tiktok-player border-0"
+                        style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        title={currentVideo.title}
+                        allow="autoplay; encrypted-media; picture-in-picture; web-share"
+                        loading="eager"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        onLoad={() => {
+                          if (currentVideoRef.current?.id !== currentVideo.id) return;
+                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
+                          const sendAudioCommands = () => {
                             if (currentVideoRef.current?.id !== currentVideo.id) return;
-                            setTikTokEmbedMode({ requestId: currentVideo.id, mode: 'classic' });
-                            setTikTokFrameReload((attempt) => attempt + 1);
-                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
-                          }}
-                        />
-                      )}
-                      {currentTikTokMode === 'player' && (
-                        <button
-                          type="button"
-                          onClick={() => {
                             const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) {
-                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
-                              return;
-                            }
-                            // Direct viewer click provides the best chance for browsers to allow audible playback.
+                            if (!frame) return;
                             frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
                             frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            addToast('Requested TikTok playback with sound.', 'info');
-                          }}
-                          className="absolute left-3 top-3 z-30 rounded-lg border border-white/20 bg-black/75 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-lg hover:bg-black/90"
-                        >
-                          Enable sound
-                        </button>
-                      )}
-                      <a
-                        href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || ''))
-                          ? currentVideo.url
-                          : `https://www.tiktok.com/video/${currentVideo.videoId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute right-3 top-3 z-30 rounded-lg border border-white/20 bg-black/70 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-lg hover:bg-black/90"
-                      >
-                        Open TikTok ↗
-                      </a>
+                          };
+                          sendAudioCommands();
+                          [180, 600, 1100].forEach((delay) => window.setTimeout(sendAudioCommands, delay));
+                        }}
+                        onError={() => {
+                          if (currentVideoRef.current?.id !== currentVideo.id) return;
+                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
+                        }}
+                      />
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
-                          <div className="text-base font-black text-white">TikTok embed could not start</div>
-                          <p className="max-w-sm text-sm text-slate-300">TikTok did not start inside the deck. Try the official embed or open the post directly on TikTok.</p>
+                          <div className="text-base font-black text-white">TikTok player could not start</div>
+                          <p className="max-w-sm text-sm text-slate-300">Retry the player or open the post directly on TikTok.</p>
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
                               type="button"
                               onClick={() => {
                                 setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
-                                setTikTokEmbedMode({ requestId: currentVideo.id, mode: currentTikTokMode === 'classic' ? 'player' : 'classic' });
                                 setTikTokFrameReload((attempt) => attempt + 1);
                               }}
                               className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
-                            >
-                              Try alternate embed
-                            </button>
-                            <a href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
-                              Open on TikTok
-                            </a>
+                            >Retry TikTok player</button>
+                            <a
+                              href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                            >Open on TikTok</a>
                           </div>
-                        </div>
-                      )}
-                      {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'loading' && (
-                        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/65 px-3 py-1 text-center text-[11px] text-slate-200">
-                          {currentTikTokMode === 'player' ? 'Starting TikTok player…' : "Loading TikTok's official embed…"}
-                        </div>
-                      )}
-                      {currentTikTokMode === 'classic' && tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'fallback-ready' && (
-                        <div className="absolute bottom-3 left-1/2 z-20 flex max-w-[94%] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-white/15 bg-black/85 px-3 py-2 text-center text-[10px] text-white shadow-xl">
-                          <span>Official TikTok embed loaded. If the video area stays black, open the post directly.</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
-                              setTikTokEmbedMode({ requestId: currentVideo.id, mode: 'player' });
-                              setTikTokFrameReload((attempt) => attempt + 1);
-                            }}
-                            className="rounded-lg border border-white/20 bg-white/10 px-2 py-1 font-bold hover:bg-white/20"
-                          >Retry player</button>
                         </div>
                       )}
                     </>
@@ -2469,6 +2368,29 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {currentVideo.platform === 'tiktok' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const frame = tiktokIframeRef.current?.contentWindow;
+                            if (!frame) {
+                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
+                              return;
+                            }
+                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                          }}
+                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
+                        >Enable TikTok sound</button>
+                        <a
+                          href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold"
+                        >Open TikTok</a>
+                      </>
+                    )}
                     {/* Instant Category Tag Override */}
                     {isStaff && (
                       <div className="flex items-center gap-1.5 bg-[#0e121a] px-2.5 py-1.5 rounded-xl border border-slate-700">
