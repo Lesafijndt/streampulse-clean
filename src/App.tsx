@@ -1381,8 +1381,8 @@ export default function YediHubApp() {
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
   // TikTok's official embedded player sends state, volume, and time updates through postMessage.
-  // Ask the player to unmute after playback begins; browser autoplay policy can still require
-  // one direct user click in the embedded player on some devices/profiles.
+  // Preserve autoplay first: sending unMute before playback starts can cause the browser/player
+  // to reject the initial play request. Only request sound after TikTok confirms it is playing.
   useEffect(() => {
     if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId) return undefined;
 
@@ -1405,7 +1405,7 @@ export default function YediHubApp() {
       );
     };
     const requestUnmute = () => {
-      if (unmuteAttempts >= 2) return;
+      if (!playbackStarted || unmuteAttempts >= 2) return;
       unmuteAttempts += 1;
       sendTikTokCommand('unMute');
     };
@@ -1413,9 +1413,9 @@ export default function YediHubApp() {
       schedule(() => {
         if (reportedMuted === true && !muteNoticeShown) {
           muteNoticeShown = true;
-          addToast('TikTok autoplay is still muted by browser policy. Click the TikTok player’s volume button once to enable sound.', 'info');
+          addToast('TikTok is playing but the browser kept it muted. Click the TikTok player’s volume button once to enable sound.', 'info');
         }
-      }, 1400);
+      }, 1800);
     };
 
     const handleTikTokMessage = (event) => {
@@ -1429,9 +1429,8 @@ export default function YediHubApp() {
       if (!data || data['x-tiktok-player'] !== true) return;
 
       if (data.type === 'onPlayerReady') {
-        // autoplay=1 starts the post; follow up with unMute so sound is requested explicitly.
+        // Let TikTok's autoplay=1 parameter start playback; do not unmute before it has started.
         sendTikTokCommand('play');
-        schedule(requestUnmute, 250);
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -1439,18 +1438,20 @@ export default function YediHubApp() {
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
         if (state === 1) {
+          const firstPlayingEvent = !playbackStarted;
           playbackStarted = true;
-          requestUnmute();
+          // First allow muted autoplay to begin, then request sound without restarting playback.
+          if (firstPlayingEvent) schedule(requestUnmute, 900);
+          else if (reportedMuted === true) schedule(requestUnmute, 500);
           showMutedFallbackIfNeeded();
         } else if (state === 0) {
           handleMediaEndedRef.current?.(currentVideo.id);
         }
       } else if (data.type === 'onMute') {
         reportedMuted = Boolean(data.value);
-        // Some player builds report the initial muted state before the playing event.
-        // Retry once playback is active, but do not keep fighting a browser's autoplay policy.
+        // Only try unmuting after a confirmed playing state, never before autoplay.
         if (reportedMuted && playbackStarted) {
-          requestUnmute();
+          schedule(requestUnmute, 500);
           showMutedFallbackIfNeeded();
         }
       } else if (data.type === 'onPlayerError') {
