@@ -909,7 +909,7 @@ body { background: #03070b; }
   display: flex !important;
   flex-wrap: wrap !important;
   align-items: center !important;
-  justify-content: flex-start !important;
+  justify-content: flex-end !important;
   gap: .55rem !important;
 }
 .gachi-player-controlbar > * {
