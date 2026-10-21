@@ -714,10 +714,9 @@ function YediHubAppContent() {
     return [];
   });
   const videosRef = useRef(videos);
+  // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
+  videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
-  useEffect(() => {
-    videosRef.current = videos;
-  }, [videos]);
 
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
@@ -731,11 +730,7 @@ function YediHubAppContent() {
   // Player State
   const [simProgress, setSimProgress] = useState(0);
   const [isTheatreMode, setIsTheatreMode] = useState(false);
-  const [youtubeVolume, setYoutubeVolume] = useState(100);
-  const [youtubeMuted, setYoutubeMuted] = useState(false);
-  const [youtubePlaybackState, setYoutubePlaybackState] = useState({ requestId: '', isPlaying: true });
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
-  const [tiktokPlaybackState, setTikTokPlaybackState] = useState({ requestId: '', isPlaying: true, isMuted: false });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
   const tiktokMutePreferenceRef = useRef({ requestId: '', preference: 'auto' });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
@@ -1943,14 +1938,12 @@ function YediHubAppContent() {
       else if (volumeCommand.action === 'set') next = volumeCommand.value;
       else if (volumeCommand.action === 'mute') {
         player.mute();
-        setYoutubeMuted(true);
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
         addToast('YouTube player muted by staff command.', 'info');
         return;
       }
       else if (volumeCommand.action === 'unmute') {
         player.unMute();
-        setYoutubeMuted(false);
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
         addToast('YouTube player unmuted by staff command.', 'info');
         return;
@@ -1958,8 +1951,6 @@ function YediHubAppContent() {
       player.setVolume(next);
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
-      setYoutubeVolume(next);
-      setYoutubeMuted(next === 0);
       youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
       addToast(`YouTube volume set to ${next}%.`, 'success');
       return;
@@ -2072,11 +2063,9 @@ function YediHubAppContent() {
     if (!video || video.platform !== 'youtube' || !video.videoId || !iframe) {
       youtubePlayerRef.current = null;
       youtubePlaybackInfoRef.current = { currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 };
-      setYoutubePlaybackState({ requestId: video?.id || '', isPlaying: false });
       return undefined;
     }
 
-    setYoutubePlaybackState({ requestId: video.id, isPlaying: true });
     const playerWindow = iframe.contentWindow;
     if (!playerWindow) return undefined;
     let cancelled = false;
@@ -2131,8 +2120,6 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
-        if (info.volume !== undefined && Number.isFinite(Number(info.volume))) setYoutubeVolume(Math.max(0, Math.min(100, Number(info.volume))));
-        if (info.muted !== undefined) setYoutubeMuted(Boolean(info.muted));
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
         if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
@@ -2141,9 +2128,6 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
-        if ((stateFromEvent === 0 || stateFromEvent === 1 || stateFromEvent === 2) && currentVideoRef.current?.id === video.id) {
-          setYoutubePlaybackState({ requestId: video.id, isPlaying: stateFromEvent === 1 });
-        }
         if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
         if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
           endedHandled = true;
@@ -2180,7 +2164,6 @@ function YediHubAppContent() {
     let startupUnmuteSent = false;
     const retryTimers = [];
     tiktokMutePreferenceRef.current = { requestId: video.id, preference: 'auto' };
-    setTikTokPlaybackState({ requestId: video.id, isPlaying: true, isMuted: false });
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
     const sendCommand = (type, targetWindow = getWindow()) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
@@ -2202,11 +2185,6 @@ function YediHubAppContent() {
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        if (state === 1 || state === 2 || state === 0) {
-          setTikTokPlaybackState((previous) => previous.requestId === video.id
-            ? { ...previous, isPlaying: state === 1 }
-            : previous);
-        }
         // Recover from TikTok's occasional autoplay mute once playback is genuinely running.
         // This is a one-shot startup correction, not a repeating timer; explicit mute wins.
         if (state === 1 && !startupUnmuteSent) {
@@ -2218,17 +2196,6 @@ function YediHubAppContent() {
         }
         // Never auto-unmute again on later pause/resume events.
         if (state === 0) handleMediaEndedRef.current?.(video.id);
-      } else if (data.type === 'onMute') {
-        setTikTokPlaybackState((previous) => previous.requestId === video.id
-          ? { ...previous, isMuted: Boolean(data.value) }
-          : previous);
-      } else if (data.type === 'onVolumeChange') {
-        const volume = Number(data.value);
-        if (Number.isFinite(volume)) {
-          setTikTokPlaybackState((previous) => previous.requestId === video.id
-            ? { ...previous, isMuted: volume <= 0 }
-            : previous);
-        }
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
         addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
