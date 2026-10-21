@@ -1108,6 +1108,15 @@ function YediHubAppContent() {
     };
   }, [videos]);
 
+  // Rank queued items from the same persisted order used by playback.
+  // Keep this map derived from the current queue so cards never reference an undefined variable.
+  const queueRankById = useMemo(() => {
+    const orderedQueue = videos
+      .filter((video) => video.status === 'queue')
+      .sort(compareQueueOrder);
+    return new Map(orderedQueue.map((video, index): [string, number] => [String(video.id), index + 1]));
+  }, [videos]);
+
   const filteredVideos = useMemo(() => {
     return videos
       .filter((v) => v.status === activeTab)
@@ -2635,7 +2644,7 @@ function YediHubAppContent() {
                           {video.pinned ? (
                             <Pin className="w-4 h-4 text-amber-400 fill-current" />
                           ) : (
-                            <span className="text-xs font-mono font-bold text-slate-500">#{queueRankById.get(video.id) ?? (idx + 1)}</span>
+                            <span className="text-xs font-mono font-bold text-slate-500">#{queueRankById.get(String(video.id)) ?? (idx + 1)}</span>
                           )}
                         </div>
 
