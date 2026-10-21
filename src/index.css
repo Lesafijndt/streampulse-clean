@@ -1294,3 +1294,23 @@ body { background: #03070b; }
     width: 4.7rem !important;
   }
 }
+
+
+/* Keep all three dashboard columns aligned to the same top edge; don't sticky-offset the side panels. */
+.gachi-workspace {
+  align-items: start !important;
+}
+.gachi-side-rail,
+.gachi-player-column,
+.gachi-queue-column {
+  align-self: start !important;
+  margin-top: 0 !important;
+}
+.gachi-side-rail,
+.gachi-queue-panel {
+  position: relative !important;
+  top: auto !important;
+}
+.gachi-player-column > section {
+  margin-top: 0 !important;
+}
