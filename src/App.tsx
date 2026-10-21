@@ -346,11 +346,6 @@ function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all'
   if (cleanUrl.includes('clips.twitch.tv') || cleanUrl.includes('/clip/')) {
     return 'Clips';
   }
-  if (cleanUrl.includes('tiktok.com')) {
-    // If stream is Music mode, default to music unless strictly funny
-    return textBlob.includes('music') || textBlob.includes('song') || textBlob.includes('sound') ? 'Music' : 'Memes';
-  }
-
   // 3. Keyword Scoring Heuristics
   let bestCategory = streamMode === 'music_only' ? 'Music' : 'General';
   let highestScore = 0;
@@ -383,29 +378,50 @@ function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all'
 
 // Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
 // The request pipeline enriches URL-only submissions with public oEmbed titles when available.
-function detectMusicType(url = '', title = '', note = '') {
+function detectMusicType(url = '', title = '', note = '', category = '') {
   const parsed = (() => { try { return new URL(String(url || '')); } catch { return null; } })();
-  const host = (parsed?.hostname || '').toLowerCase();
-  const blob = `${String(url || '')} ${String(title || '')} ${String(note || '')}`.toLowerCase();
-  if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') || host.endsWith('.soundcloud.com')) return 'Music';
-  if (/(?:^|[\s#])(?:#music|#song|#songrequest)(?:\b|$)/i.test(blob)) return 'Music';
+  const host = (parsed?.hostname || '').toLowerCase().replace(/^www\./, '');
+  const rawText = [String(title || ''), String(note || '')].join(' ').toLowerCase();
+  const normalizedText = rawText.replace(/[_]+/g, ' ').replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const paddedText = ' ' + normalizedText + ' ';
+  const hasPhrase = (phrase) => paddedText.includes(' ' + phrase.toLowerCase().replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ');
+
+  // Music-first platforms are strong evidence; a TikTok URL alone is not.
+  if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') ||
+      host.endsWith('.soundcloud.com') || host === 'music.apple.com' || host === 'bandcamp.com' ||
+      host.endsWith('.bandcamp.com')) return 'Music';
+  if (String(category || '').trim().toLowerCase() === 'music') return 'Music';
+  if (/(?:^|[\s#])(?:#music|#song|#songrequest|#nowplaying)(?:\b|$)/i.test(rawText)) return 'Music';
+
   const musicSignals = [
-    'official music video', 'official audio', 'music video', 'lyric video', 'lyrics',
-    'soundtrack', 'original soundtrack', 'ost', 'instrumental', 'music', 'song', 'songs',
-    'remix', 'album', 'single', 'lofi', 'synthwave', 'hip hop', 'hip-hop', 'rap', 'beat',
-    'bass boosted', 'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'piano cover',
-    'guitar cover', 'visualizer', 'edm', 'techno', 'house music', 'metal song', 'jazz',
-    'classical music', 'bgm', 'karaoke', 'live performance', 'music mix', 'dj set'
+    ['official music video', 6], ['official audio', 6], ['official lyric video', 6],
+    ['lyric video', 5], ['lyrics video', 5], ['music video', 5], ['visualizer', 5],
+    ['full album', 5], ['full song', 5], ['original soundtrack', 5], ['soundtrack', 4],
+    ['instrumental', 4], ['nightcore', 4], ['vocaloid', 4], ['karaoke', 4],
+    ['bass boosted', 4], ['music mix', 4], ['dj set', 4], ['live session', 3],
+    ['official mv', 4], ['audio only', 3], ['extended mix', 4], ['radio edit', 4],
+    ['remix', 3], ['cover song', 3], ['piano cover', 3], ['guitar cover', 3],
+    ['acoustic version', 3], ['theme song', 4], ['opening theme', 4], ['ending theme', 4],
+    ['lofi', 3], ['lo fi', 3], ['synthwave', 3], ['hip hop', 3], ['rap', 2],
+    ['edm', 3], ['techno', 3], ['house music', 3], ['metal song', 3], ['jazz', 2],
+    ['classical music', 3], ['orchestra', 2], ['bgm', 3], ['beat', 2],
+    ['album', 2], ['single', 2], ['tracklist', 3], ['feat', 2], ['ft', 2],
+    ['prod', 2], ['music', 2], ['song', 2], ['songs', 2]
   ];
   const nonMusicSignals = [
-    'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
-    'tutorial', 'how to', 'review', 'podcast', 'interview', 'documentary', 'vlog',
-    'reaction', 'reacts', 'try not to laugh', 'meme', 'shitpost', 'comedy', 'prank',
-    'fails', 'highlights', 'twitch clip', 'stream highlight', 'news', 'explained'
+    ['gameplay', 4], ['walkthrough', 4], ['speedrun', 4], ['playthrough', 4],
+    ['fragmovie', 4], ['tutorial', 3], ['how to', 3], ['review', 2],
+    ['podcast', 5], ['interview', 4], ['documentary', 4], ['vlog', 3],
+    ['reaction', 3], ['reacts', 3], ['try not to laugh', 5], ['meme', 4],
+    ['shitpost', 5], ['comedy', 4], ['prank', 4], ['fails', 3],
+    ['highlights', 2], ['twitch clip', 5], ['stream highlight', 5],
+    ['news', 3], ['explained', 3], ['short clip', 3], ['funny clip', 4],
+    ['streamer', 2], ['speech', 3], ['debate', 3]
   ];
-  const musicScore = musicSignals.reduce((n, word) => n + (blob.includes(word) ? (['official audio', 'official music video', 'music video', 'soundtrack', 'lyric video'].includes(word) ? 3 : 1) : 0), 0);
-  const nonMusicScore = nonMusicSignals.reduce((n, word) => n + (blob.includes(word) ? 1 : 0), 0);
-  return musicScore > 0 && musicScore >= nonMusicScore ? 'Music' : 'Non-Music';
+  const musicScore = musicSignals.reduce((score, [phrase, weight]) => score + (hasPhrase(phrase) ? weight : 0), 0);
+  const nonMusicScore = nonMusicSignals.reduce((score, [phrase, weight]) => score + (hasPhrase(phrase) ? weight : 0), 0);
+  if (musicScore >= 3 && musicScore > nonMusicScore) return 'Music';
+  return 'Non-Music';
 }
 
 /**
@@ -1309,8 +1325,8 @@ function YediHubAppContent() {
     const queued = videos.filter((video) => video.status === 'queue');
     return {
       queue: queued.length,
-      music: queued.filter((video) => (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music').length,
-      nonMusic: queued.filter((video) => (video.mediaType || detectMusicType(video.url, video.title, video.note)) !== 'Music').length,
+      music: queued.filter((video) => detectMusicType(video.url, video.title, video.note, video.category) === 'Music').length,
+      nonMusic: queued.filter((video) => detectMusicType(video.url, video.title, video.note, video.category) !== 'Music').length,
       watch_later: videos.filter((video) => video.status === 'watch_later').length,
       watched: videos.filter((video) => video.status === 'watched').length,
     };
@@ -1320,6 +1336,16 @@ function YediHubAppContent() {
     () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
     [videos]
   );
+
+  const categoryCounts = useMemo(() => {
+    const counts = { All: videos.filter((video) => video.status === activeTab).length };
+    videos.forEach((video) => {
+      if (video.status !== activeTab) return;
+      const category = CATEGORY_META[video.category] ? video.category : 'General';
+      counts[category] = (counts[category] || 0) + 1;
+    });
+    return counts;
+  }, [videos, activeTab]);
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -1334,7 +1360,7 @@ function YediHubAppContent() {
     return videos
       .filter((v) => v.status === activeTab)
       .filter((v) => (selectedCategory === 'All' ? true : v.category === selectedCategory))
-      .filter((v) => mediaTypeFilter === 'All' || (v.mediaType || detectMusicType(v.url, v.title, v.note)) === mediaTypeFilter)
+      .filter((v) => mediaTypeFilter === 'All' || detectMusicType(v.url, v.title, v.note, v.category) === mediaTypeFilter)
       .filter((v) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
@@ -2427,8 +2453,8 @@ function YediHubAppContent() {
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                   {currentVideo.category}
                 </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                  {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
+                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                  {detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)}
                 </span>
               </div>
               <h2 className="text-lg font-black text-white truncate">{currentVideo.title}</h2>
@@ -2654,8 +2680,8 @@ function YediHubAppContent() {
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                       {currentVideo.category}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                      {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                      {detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)}
                     </span>
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
@@ -2980,9 +3006,9 @@ function YediHubAppContent() {
             </div>
 
             {/* Category Filter Pills & Search */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="gachi-filter-toolbar flex flex-col items-stretch gap-2.5">
               {/* Category Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+              <div className="gachi-category-filter flex flex-wrap items-center gap-1.5">
                 <button
                   onClick={() => { setSelectedCategory('All'); setMediaTypeFilter('All'); }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
@@ -2993,6 +3019,7 @@ function YediHubAppContent() {
                 >
                   <Sparkles className="w-3.5 h-3.5 text-purple-400" />
                   <span>All Categories</span>
+                  <span className="gachi-category-count">{categoryCounts.All || 0}</span>
                 </button>
 
                 {Object.entries(CATEGORY_META).map(([catKey, catData]) => {
@@ -3010,13 +3037,14 @@ function YediHubAppContent() {
                     >
                       <Icon className="w-3.5 h-3.5" style={{ color: catData.colorHex }} />
                       <span>{catData.label}</span>
+                        <span className="gachi-category-count">{categoryCounts[catKey] || 0}</span>
                     </button>
                   );
                 })}
               </div>
 
               {/* Search */}
-              <div className="relative min-w-[220px]">
+              <div className="gachi-category-search relative w-full min-w-0">
                 <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -3119,8 +3147,8 @@ function YediHubAppContent() {
                               </span>
                             )}
 
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                              {video.mediaType || detectMusicType(video.url, video.title, video.note)}
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ detectMusicType(video.url, video.title, video.note, video.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                              {detectMusicType(video.url, video.title, video.note, video.category)}
                             </span>
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
                               {video.platform}
