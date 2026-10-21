@@ -104,3 +104,53 @@ test('Actual media durations are formatted; placeholder estimates are not displa
   assert.equal(getDurationLabel({ platform: 'youtube', duration: '3:45', durationSec: 225, durationSource: 'metadata' }), '3:45');
   assert.equal(getDurationLabel({ platform: 'youtube', duration: '', durationSource: 'unknown' }), '—');
 });
+
+
+test('Queue ETAs use provider durations and flag missing durations as fallback estimates', async () => {
+  const { getDurationEstimate, estimateVideoDurationSeconds } = await import('../src/queueLogic.js');
+  assert.deepEqual(getDurationEstimate({
+    platform: 'tiktok', duration: '2:20', durationSec: 140, durationSource: 'metadata'
+  }), { seconds: 140, estimated: false, source: 'metadata' });
+  assert.deepEqual(getDurationEstimate({
+    platform: 'youtube', duration: '', durationSource: 'unknown', url: 'https://www.youtube.com/shorts/abc'
+  }), { seconds: 60, estimated: true, source: 'fallback' });
+  assert.equal(estimateVideoDurationSeconds({
+    platform: 'youtube', duration: '4:12', durationSec: 252, durationSource: 'metadata'
+  }), 252);
+  assert.deepEqual(getDurationEstimate({
+    platform: 'tiktok', duration: '00:45', durationSec: 45, durationSource: 'unknown'
+  }), { seconds: 45, estimated: true, source: 'fallback' });
+});
+
+test('Queue backup can be created and validated without losing queue or settings', async () => {
+  const { createQueueBackup, validateQueueBackup } = await import('../src/queueLogic.js');
+  const created = createQueueBackup({
+    channelRoom: '2o3a',
+    savedAt: 1234,
+    videos: [{ id: 'one', title: 'Test clip', url: 'https://www.youtube.com/watch?v=abcdefghijk', status: 'queue' }],
+    streamSettings: { queueOpen: false, autoPlayNext: true },
+    votedIds: { 'viewer:one': true }
+  });
+  const checked = validateQueueBackup(created);
+  assert.equal(checked.valid, true);
+  assert.equal(checked.backup.channelRoom, '2o3a');
+  assert.equal(checked.backup.videos.length, 1);
+  assert.equal(checked.backup.streamSettings.queueOpen, false);
+  assert.equal(checked.backup.votedIds['viewer:one'], true);
+});
+
+test('Queue backup validation rejects unsafe URLs, duplicate IDs, and unrelated JSON', async () => {
+  const { validateQueueBackup } = await import('../src/queueLogic.js');
+  assert.equal(validateQueueBackup({}).valid, false);
+  const base = {
+    format: 'whale-cum-backup', version: 1, channelRoom: '2o3a', savedAt: 1,
+    videos: [{ id: 'one', title: 'Bad URL', url: 'javascript:alert(1)', status: 'queue' }],
+    streamSettings: {}, votedIds: {}
+  };
+  assert.equal(validateQueueBackup(base).valid, false);
+  const duplicate = { ...base, videos: [
+    { id: 'same', title: 'One', url: 'https://youtu.be/abcdefghijk', status: 'queue' },
+    { id: 'same', title: 'Two', url: 'https://youtu.be/12345678901', status: 'watched' }
+  ] };
+  assert.equal(validateQueueBackup(duplicate).valid, false);
+});

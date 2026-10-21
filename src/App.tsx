@@ -40,7 +40,10 @@ import {
   Layers,
   HelpCircle,
   Copy,
-  FolderSync
+  FolderSync,
+  Download,
+  Upload,
+  History
 } from 'lucide-react';
 
 // Firebase imports
@@ -62,6 +65,7 @@ import {
   arrayUnion,
   writeBatch,
   deleteDoc,
+  getDocs,
   onSnapshot
 } from 'firebase/firestore';
 import {
@@ -72,7 +76,10 @@ import {
   filterVideosForView,
   formatMediaDuration,
   getDurationLabel,
-  getQueueMediaCounts
+  getQueueMediaCounts,
+  getDurationEstimate,
+  createQueueBackup,
+  validateQueueBackup
 } from './queueLogic.js';
 
 
@@ -198,17 +205,6 @@ function normalizeLegacyVideoVotes(video) {
     upvotes: Math.max(0, hasVoters ? (Number(raw.upvotes) || 0) : ((Number(raw.upvotes) || 0) - 1)),
     voters,
   };
-}
-
-function estimateVideoDurationSeconds(video) {
-  const storedDuration = Number(video?.durationSec);
-  if (video?.platform === 'tiktok' || video?.platform === 'twitch') {
-    return storedDuration > 0 && storedDuration <= 90 ? storedDuration : 45;
-  }
-  if (Number.isFinite(storedDuration) && storedDuration > 0) return storedDuration;
-  const match = String(video?.duration || '').match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
-  if (match) return (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
-  return 225;
 }
 
 function formatQueueWait(seconds) {
@@ -735,6 +731,15 @@ function YediHubAppContent() {
   // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
   videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
+  const restoringBackupRef = useRef(false);
+  const backupFileInputRef = useRef(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
+  const [safetySnapshot, setSafetySnapshot] = useState(() => {
+    const saved = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
+    const validated = validateQueueBackup(saved);
+    return validated.valid ? validated.backup : null;
+  });
 
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
@@ -747,6 +752,7 @@ function YediHubAppContent() {
 
   // Player State
   const [simProgress, setSimProgress] = useState(0);
+  const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -810,6 +816,30 @@ function YediHubAppContent() {
     if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'videos'), videos);
   }, [videos, channelRoom]);
+
+  // Keep a local last-known-good snapshot while the queue has waiting items.
+  // If the queue is accidentally emptied, retain the prior snapshot for recovery.
+  useEffect(() => {
+    const room = normalizeRoomName(channelRoom);
+    if (!room) return;
+    const snapshotKey = roomStorageKey(room, 'safety-snapshot');
+    const previous = validateQueueBackup(readStoredValue(snapshotKey, null));
+    const waitingCount = videos.filter((video) => video.status === 'queue').length;
+    const snapshotVideos = waitingCount > 0
+      ? videos
+      : previous.valid
+      ? previous.backup.videos
+      : videos;
+    if (!snapshotVideos.length) return;
+    const snapshot = createQueueBackup({
+      channelRoom: room,
+      videos: snapshotVideos,
+      streamSettings,
+      votedIds,
+      savedAt: Date.now()
+    });
+    if (writeStoredValue(snapshotKey, snapshot)) setSafetySnapshot(snapshot);
+  }, [videos, streamSettings, votedIds, channelRoom]);
 
   useEffect(() => {
     if (!normalizeRoomName(channelRoom)) return;
@@ -1051,7 +1081,7 @@ function YediHubAppContent() {
         colRef,
         { includeMetadataChanges: true },
         (snapshot) => {
-          if (!active) return;
+          if (!active || restoringBackupRef.current) return;
           const cloudConfirmed = !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites;
           setCloudSynced(cloudConfirmed);
           setSyncStatusText(snapshot.metadata.fromCache
@@ -1316,6 +1346,165 @@ function YediHubAppContent() {
         setSyncStatusText('Cloud delete failed — local save is active');
       }
     }
+  };
+
+  const getSafeBackupSettings = (rawSettings = {}) => {
+    const safe = { ...DEFAULT_STREAM_SETTINGS };
+    Object.entries(DEFAULT_STREAM_SETTINGS).forEach(([key, defaultValue]) => {
+      const value = rawSettings?.[key];
+      if (typeof defaultValue === 'boolean' && typeof value === 'boolean') {
+        safe[key] = value;
+      } else if (typeof defaultValue === 'number' && Number.isFinite(Number(value))) {
+        safe[key] = Math.max(1, Math.min(180, Number(value)));
+      } else if (typeof defaultValue === 'string' && typeof value === 'string') {
+        safe[key] = value.slice(0, 40);
+      }
+    });
+    return safe;
+  };
+
+  const handleDownloadBackup = () => {
+    const backup = createQueueBackup({
+      channelRoom: normalizeRoomName(channelRoom),
+      videos,
+      streamSettings,
+      votedIds,
+      savedAt: Date.now()
+    });
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = 'whale-cum-' + normalizeRoomName(channelRoom) + '-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    setBackupMessage('Backup downloaded: ' + videos.length + ' queue/history items. Twitch login credentials are not included.');
+  };
+
+  const performQueueBackupRestore = async (candidate, sourceLabel = 'backup file') => {
+    const validation = validateQueueBackup(candidate);
+    if (!validation.valid) {
+      setBackupMessage(validation.error);
+      return false;
+    }
+    const backup = validation.backup;
+    const targetRoom = normalizeRoomName(channelRoom);
+    if (normalizeRoomName(backup.channelRoom) !== targetRoom) {
+      setBackupMessage('This backup belongs to #' + backup.channelRoom + ', not #' + targetRoom + '.');
+      return false;
+    }
+    const snapshotDate = backup.savedAt ? new Date(backup.savedAt).toLocaleString() : 'an unknown date';
+    const confirmed = window.confirm(
+      'Restore ' + backup.videos.length + ' queue/history items and settings from ' + sourceLabel +
+      ' (' + snapshotDate + ')? This replaces the current queue and history for #' + targetRoom + '.'
+    );
+    if (!confirmed) return false;
+
+    setBackupBusy(true);
+    setBackupMessage('Restoring queue and settings…');
+    restoringBackupRef.current = true;
+    const restoredSettings = getSafeBackupSettings(backup.streamSettings);
+    const restoredVideos = dedupeMediaVideos(backup.videos.map((video) =>
+      normalizeLegacyVideoVotes({ ...video, channelRoom: targetRoom })
+    )).videos;
+    const restoredVoteIds = Object.fromEntries(
+      Object.entries(backup.votedIds || {})
+        .filter(([key, value]) => typeof key === 'string' && key.length <= 300 && value === true)
+        .slice(0, 20000)
+    );
+    queueOpenRef.current = Boolean(restoredSettings.queueOpen);
+    queueOpenCloudOverrideRef.current = { value: queueOpenRef.current, changedAt: Date.now() };
+    setStreamSettings(restoredSettings);
+    setVotedIds(restoredVoteIds);
+    videosRef.current = restoredVideos;
+    setVideos(restoredVideos);
+
+    try {
+      if (db && firebaseUser) {
+        setSyncStatusText('Restoring backup to cloud…');
+        const cloudSnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
+        const cloudRoomRows = cloudSnapshot.docs
+          .map((entry) => ({ id: entry.id, ...entry.data() }))
+          .filter((video) => normalizeRoomName(video.channelRoom) === targetRoom);
+        const restoredIds = new Set(restoredVideos.map((video) => String(video.id)));
+        const operations = [
+          ...cloudRoomRows.filter((video) => !restoredIds.has(String(video.id)))
+            .map((video) => ({ type: 'delete', id: String(video.id) })),
+          ...restoredVideos.map((video) => ({ type: 'set', id: String(video.id), video }))
+        ];
+        // Firestore caps a batch at 500 writes; keep each restore batch comfortably below that.
+        for (let offset = 0; offset < operations.length; offset += 400) {
+          const batch = writeBatch(db);
+          operations.slice(offset, offset + 400).forEach((operation) => {
+            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', operation.id);
+            if (operation.type === 'delete') batch.delete(itemRef);
+            else batch.set(itemRef, { ...operation.video, channelRoom: targetRoom });
+          });
+          await batch.commit();
+        }
+        await setDoc(
+          doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', targetRoom),
+          { channelRoom: targetRoom, streamSettings: restoredSettings, bridgeAutoConnect: true, updatedAt: Date.now() },
+          { merge: true }
+        );
+        setCloudSynced(true);
+        setSyncStatusText('Backup restored to cloud');
+        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings to cloud sync.');
+      } else {
+        setCloudSynced(false);
+        setSyncStatusText('Backup restored locally — cloud sync unavailable');
+        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings locally. Cloud sync is unavailable.');
+      }
+    } catch (error) {
+      console.error('Queue backup restore could not fully sync to Firestore.', error);
+      setCloudSynced(false);
+      setSyncStatusText('Backup restored locally — cloud restore failed');
+      setBackupMessage('Restored locally, but the cloud update failed. Check the sync status before using another device.');
+      addToast('Backup restored locally; cloud sync failed.', 'warning');
+    } finally {
+      restoringBackupRef.current = false;
+      videosRef.current = restoredVideos;
+      setVideos(restoredVideos);
+      writeStoredValue(roomStorageKey(targetRoom, 'videos'), restoredVideos);
+      writeStoredValue(roomStorageKey(targetRoom, 'settings'), restoredSettings);
+      writeStoredValue(roomStorageKey(targetRoom, 'votes'), restoredVoteIds);
+      setBackupBusy(false);
+    }
+    return true;
+  };
+
+  const handleImportBackupFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setBackupMessage('Backup is too large (10 MB maximum).');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      const validation = validateQueueBackup(parsed);
+      if (!validation.valid) {
+        setBackupMessage(validation.error);
+        return;
+      }
+      await performQueueBackupRestore(validation.backup, 'backup file');
+    } catch (error) {
+      console.warn('Could not read queue backup.', error);
+      setBackupMessage('Could not read that JSON backup file.');
+    }
+  };
+
+  const handleRecoverSafetySnapshot = () => {
+    const stored = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
+    const validation = validateQueueBackup(stored);
+    if (!validation.valid || !validation.backup.videos.length) {
+      setBackupMessage('No recoverable queue snapshot is saved in this browser yet.');
+      return;
+    }
+    void performQueueBackupRestore(validation.backup, 'the last local safety snapshot');
   };
 
   // ==========================================
@@ -2107,8 +2296,9 @@ function YediHubAppContent() {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
-        if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
-          setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
+        if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
+          playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+          if (Number.isFinite(now)) setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
         }
       }
       if (Number.isFinite(stateFromEvent)) {
@@ -2167,7 +2357,12 @@ function YediHubAppContent() {
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
-        if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        if (duration > 0) {
+          if (currentVideoRef.current?.id === video.id) {
+            playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+          }
+          setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        }
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
         // Recover from TikTok's occasional autoplay mute once playback is genuinely running.
@@ -2348,8 +2543,13 @@ function YediHubAppContent() {
     if (playing && owned(playing)) messages.push('one request is playing now');
 
     let secondsAhead = 0;
+    let hasFallbackBeforeQueue = false;
     if (playing) {
-      const duration = estimateVideoDurationSeconds(playing);
+      const knownPlaybackDuration = playbackDurationRef.current.videoId === String(playing.id)
+        ? Number(playbackDurationRef.current.seconds) : 0;
+      const durationEstimate = getDurationEstimate(playing);
+      const duration = knownPlaybackDuration > 0 ? knownPlaybackDuration : durationEstimate.seconds;
+      if (!(knownPlaybackDuration > 0) && durationEstimate.estimated) hasFallbackBeforeQueue = true;
       const progress = currentVideo?.id === playing.id && (playing.platform === 'youtube' || playing.platform === 'tiktok')
         ? Math.max(0, Math.min(100, Number(simProgress) || 0))
         : 0;
@@ -2357,13 +2557,18 @@ function YediHubAppContent() {
     }
     let queuedDurationBefore = 0;
     const etaById = new Map();
-    queued.forEach((video, index) => {
+    const etaFallbackById = new Map();
+    queued.forEach((video) => {
       etaById.set(video.id, secondsAhead + queuedDurationBefore);
-      queuedDurationBefore += estimateVideoDurationSeconds(video);
+      etaFallbackById.set(video.id, hasFallbackBeforeQueue);
+      const estimate = getDurationEstimate(video);
+      queuedDurationBefore += estimate.seconds;
+      if (estimate.estimated) hasFallbackBeforeQueue = true;
     });
 
     myQueued.forEach(({ video, position }) => {
-      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (est. ${formatQueueWait(etaById.get(video.id))})`);
+      const fallbackMark = etaFallbackById.get(video.id) ? '*' : '';
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))}${fallbackMark})`);
     });
 
     if (!messages.length) {
@@ -2371,7 +2576,8 @@ function YediHubAppContent() {
       return;
     }
     const visibleItems = messages.slice(0, 3);
-    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}. Waits are estimates.`);
+    const usesFallback = myQueued.slice(0, 3).some(({ video }) => etaFallbackById.get(video.id));
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}. ETAs are estimates.${usesFallback ? ' * = fallback duration used.' : ''}`);
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
@@ -3505,8 +3711,8 @@ function YediHubAppContent() {
           MODAL 3: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
       {showSettingsModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
+          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
@@ -3555,6 +3761,41 @@ function YediHubAppContent() {
                 </label>
               ))}
 
+              <section className="p-3 rounded-xl bg-[#0b0e15] border border-purple-500/25 space-y-3">
+                <div className="flex items-center gap-2">
+                  <FolderSync className="w-4 h-4 text-purple-300" />
+                  <h4 className="font-black text-white">Queue backup & recovery</h4>
+                </div>
+                <p className="text-[11px] leading-5 text-slate-400">
+                  Backups include queue, history, votes, and stream settings—not Twitch login credentials. A safety snapshot is kept in this browser while there are waiting requests.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleDownloadBackup} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-white">
+                    <Download className="w-3.5 h-3.5" /> Download backup
+                  </button>
+                  <button type="button" onClick={() => backupFileInputRef.current?.click()} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-slate-100">
+                    <Upload className="w-3.5 h-3.5" /> Restore file
+                  </button>
+                  <button type="button" onClick={handleRecoverSafetySnapshot} disabled={backupBusy || !safetySnapshot?.videos?.length} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-3 py-2 text-[11px] font-bold text-slate-100">
+                    <History className="w-3.5 h-3.5" /> Recover last snapshot
+                  </button>
+                </div>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={handleImportBackupFile}
+                  aria-label="Choose a Whale Cum queue backup JSON file"
+                />
+                <p className="text-[10px] text-slate-500">
+                  {safetySnapshot?.videos?.length
+                    ? `Last local snapshot: ${safetySnapshot.videos.length} items · ${safetySnapshot.savedAt ? new Date(safetySnapshot.savedAt).toLocaleString() : 'saved earlier'}`
+                    : 'No local recovery snapshot yet. Download a backup before making major queue changes.'}
+                </p>
+                {backupBusy && <p className="text-[11px] text-amber-200" role="status">Restoring backup…</p>}
+                {backupMessage && <p className="text-[11px] leading-5 text-slate-200 break-words" role="status">{backupMessage}</p>}
+              </section>
             </div>
 
             <div className="flex justify-end">

@@ -171,3 +171,129 @@ export function buildQueueSyncWrites(updatesById, latestVideos, channelRoom) {
     };
   });
 }
+
+
+// Wait-time estimates must distinguish provider-reported durations from fallbacks.
+// The older client wrote 45s / 3:45 placeholders as if they were exact; never treat
+// those known legacy values as genuine durations unless marked as provider metadata.
+export function getDurationEstimate(video) {
+  const platform = String(video?.platform || 'external').toLowerCase();
+  const durationLabel = String(video?.duration || '').trim();
+  const storedSeconds = Number(video?.durationSec);
+  const hasProviderDuration = video?.durationSource === 'metadata' &&
+    Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400;
+
+  if (hasProviderDuration) {
+    return { seconds: Math.round(storedSeconds), estimated: false, source: 'metadata' };
+  }
+
+  const legacyPlaceholder = (
+    storedSeconds === 45 &&
+    durationLabel === '00:45' &&
+    ['tiktok', 'twitch', 'kick'].includes(platform)
+  ) || (
+    storedSeconds === 225 &&
+    ['03:45', '3:45'].includes(durationLabel)
+  );
+
+  if (!legacyPlaceholder && Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400) {
+    return { seconds: Math.round(storedSeconds), estimated: false, source: 'saved' };
+  }
+
+  const match = durationLabel.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (!legacyPlaceholder && match && !['00:45', '03:45'].includes(durationLabel)) {
+    const seconds = (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
+    if (Number.isFinite(seconds) && seconds > 0 && seconds <= 86400) {
+      return { seconds, estimated: false, source: 'saved' };
+    }
+  }
+
+  // Conservative, clearly-estimated defaults for items where the provider hides duration.
+  const isShort = Boolean(video?.isVertical) || /youtube\.com\/shorts\//i.test(String(video?.url || ''));
+  const seconds = isShort ? 60
+    : ['tiktok', 'twitch', 'kick'].includes(platform) ? 45
+    : 180;
+  return { seconds, estimated: true, source: 'fallback' };
+}
+
+export function estimateVideoDurationSeconds(video) {
+  return getDurationEstimate(video).seconds;
+}
+
+export function createQueueBackup({
+  channelRoom,
+  videos = [],
+  streamSettings = {},
+  votedIds = {},
+  savedAt = Date.now()
+} = {}) {
+  const backup = {
+    format: 'whale-cum-backup',
+    version: 1,
+    channelRoom: String(channelRoom || '').trim().toLowerCase().replace(/^#/, ''),
+    savedAt: Number.isFinite(Number(savedAt)) ? Number(savedAt) : Date.now(),
+    videos: Array.isArray(videos) ? videos : [],
+    streamSettings: streamSettings && typeof streamSettings === 'object' && !Array.isArray(streamSettings) ? streamSettings : {},
+    votedIds: votedIds && typeof votedIds === 'object' && !Array.isArray(votedIds) ? votedIds : {}
+  };
+  // Strip undefined values and guarantee the exported object is JSON-downloadable.
+  return JSON.parse(JSON.stringify(backup));
+}
+
+export function validateQueueBackup(value) {
+  const invalid = (error) => ({ valid: false, error });
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid('Backup file must contain a JSON object.');
+  if (value.format !== 'whale-cum-backup' || value.version !== 1) {
+    return invalid('Unsupported backup format or version.');
+  }
+  if (typeof value.channelRoom !== 'string' || !value.channelRoom.trim()) {
+    return invalid('Backup is missing its channel name.');
+  }
+  if (!Array.isArray(value.videos) || value.videos.length > 5000) {
+    return invalid('Backup queue/history must be an array of at most 5,000 items.');
+  }
+  if (!value.streamSettings || typeof value.streamSettings !== 'object' || Array.isArray(value.streamSettings)) {
+    return invalid('Backup is missing valid stream settings.');
+  }
+  const validStatuses = new Set(['queue', 'playing', 'watched', 'watch_later']);
+  const seenIds = new Set();
+  for (const video of value.videos) {
+    if (!video || typeof video !== 'object' || Array.isArray(video)) {
+      return invalid('Backup contains an invalid video entry.');
+    }
+    const id = String(video.id || '').trim();
+    if (!id || id.length > 240 || seenIds.has(id)) {
+      return invalid('Backup contains a missing or duplicate video ID.');
+    }
+    seenIds.add(id);
+    if (typeof video.url !== 'string' || typeof video.title !== 'string' || !validStatuses.has(video.status)) {
+      return invalid('Backup contains an incomplete or unsupported video entry.');
+    }
+    if (video.url.trim()) {
+      try {
+        const url = new URL(video.url);
+        if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
+          return invalid('Backup contains an unsafe video URL.');
+        }
+      } catch {
+        return invalid('Backup contains an invalid video URL.');
+      }
+    }
+  }
+  if (value.votedIds !== undefined && (!value.votedIds || typeof value.votedIds !== 'object' || Array.isArray(value.votedIds))) {
+    return invalid('Backup vote data is invalid.');
+  }
+
+  return {
+    valid: true,
+    backup: {
+      format: 'whale-cum-backup',
+      version: 1,
+      channelRoom: String(value.channelRoom).trim().toLowerCase().replace(/^#/, ''),
+      savedAt: Number.isFinite(Number(value.savedAt)) ? Number(value.savedAt) : 0,
+      videos: value.videos,
+      streamSettings: value.streamSettings,
+      votedIds: value.votedIds && typeof value.votedIds === 'object' && !Array.isArray(value.votedIds) ? value.votedIds : {}
+    }
+  };
+}
