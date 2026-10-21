@@ -3731,6 +3731,57 @@ function YediHubAppContent() {
                   </div>
                   <KeyboardShortcutHint isStaff={isStaff} />
 
+              {
+                </div>
+              </div>
+            ) : (
+              <div className="p-12 text-center space-y-3">
+                <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
+                <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Paste a video URL in Twitch chat, use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code>, or click Request Video above to add media!
+                </p>
+              </div>
+            )}
+          </section>
+
+        </div>
+
+        <div className="gachi-queue-column min-w-0">
+          {/* ==========================================
+              QUEUE MANAGEMENT: TABS, FILTERS & CARDS
+              ========================================== */}
+          <section className="gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
+            {/* Nav Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
+                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
+                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => { setActiveTab(tab.id); if (tab.id !== 'queue') setMediaTypeFilter('All'); }}
+                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                        active
+                          ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
+                          : 'bg-[#151a27] hover:bg-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span>{tab.label}</span>
+                      <span className={`px-1.5 py-0.2 rounded-md text-[11px] font-extrabold ${active ? 'bg-black/30 text-white' : tab.badge}`}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
               {/* Sorter */}
               <select
                 value={activeTab === 'queue' ? 'priority' : activeTab === 'watched' && sortBy === 'priority' ? 'played' : sortBy}
