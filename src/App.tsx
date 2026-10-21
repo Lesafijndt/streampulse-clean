@@ -1283,7 +1283,7 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
+          sendTwitchChatReply('whale cum: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
@@ -1957,7 +1957,7 @@ function YediHubAppContent() {
         lastChatReplyAtRef.current = Date.now();
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
-          console.warn('Yedi Hub could not reply in Twitch chat:', result.error || response.statusText);
+          console.warn('whale cum could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
             addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
@@ -2128,7 +2128,7 @@ function YediHubAppContent() {
     return (
       <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 text-center shadow-2xl">
-          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">whale cum</h1>
           <p className="mt-3 text-sm text-slate-300">Verifying your private Twitch session…</p>
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-purple-500 to-cyan-400" /></div>
         </div>
@@ -2141,7 +2141,7 @@ function YediHubAppContent() {
         <div className="w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 sm:p-10 text-center shadow-2xl">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-4xl">🧼</div>
           <div className="text-[10px] font-black uppercase tracking-[0.35em] text-amber-200">Private streamer deck</div>
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">whale cum</h1>
           <p className="mt-3 text-sm leading-6 text-slate-300">A private request player for <strong className="text-purple-200">twitch.tv/2o3a</strong>. Sign in using one of the two approved Twitch accounts.</p>
           {loginError === 'unauthorized' ? <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">This Twitch account is not on the access list. No site access was granted.</div> : null}
           {loginError && loginError !== 'unauthorized' ? <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-xs text-amber-100">Twitch login returned an error. Please try again.</div> : null}
@@ -2249,7 +2249,7 @@ function YediHubAppContent() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
-                  Yedi Hub
+                  whale cum
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
@@ -2501,7 +2501,7 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so whale cum can extract the post ID.</p>
                       <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
                         Open TikTok <ExternalLink className="h-4 w-4" />
                       </a>
@@ -3325,7 +3325,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('Yedi Hub render failure', error, info);
+    console.error('whale cum render failure', error, info);
     this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
@@ -3334,7 +3334,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">Yedi Hub hit a rendering error</h1>
+            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
             <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
             <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
