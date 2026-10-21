@@ -1247,7 +1247,7 @@ function YediHubAppContent() {
           handleRemoveOwnRequestRef.current?.(voterLogin || username);
         } else if (lowerText === '!queue') {
           handleQueueSummaryRef.current?.(voterLogin || username);
-        } else if (/^!bigcock(?:\\s+\\d+)?$/.test(lowerText)) {
+        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
           sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
