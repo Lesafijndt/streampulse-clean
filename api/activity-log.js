@@ -91,7 +91,9 @@ async function validateStaff(req, res) {
 
 function getAppId(rawValue) {
   const candidate = String(rawValue || DEFAULT_APP_ID).trim();
-  return /^[A-Za-z0-9_-]{1,100}$/.test(candidate) ? candidate : '';
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(candidate)) return '';
+  // The API must not let an approved user use Firebase Admin to read another namespace.
+  return candidate === DEFAULT_APP_ID ? candidate : '';
 }
 
 async function getAdminFirestore() {

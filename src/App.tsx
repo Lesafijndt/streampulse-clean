@@ -3517,7 +3517,7 @@ function YediHubAppContent() {
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
-          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
+          <section className="gachi-panel bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
             {/* Header info strip */}
             <div className="px-4 py-2.5 bg-[#141926] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -3731,7 +3731,6 @@ function YediHubAppContent() {
                   </div>
                   <KeyboardShortcutHint isStaff={isStaff} />
 
-              {
                 </div>
               </div>
             ) : (
@@ -3751,7 +3750,7 @@ function YediHubAppContent() {
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
-          <section className="gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
+          <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
             {/* Nav Tabs */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
