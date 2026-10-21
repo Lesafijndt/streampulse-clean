@@ -1379,14 +1379,15 @@ function YediHubAppContent() {
   );
 
   const categoryCounts = useMemo(() => {
-    // Counts in the category toolbar should describe the same filtered set
-    // that the list below actually renders.
-    const eligibleVideos = videos.filter((video) =>
-      video.status === activeTab &&
-      (mediaTypeFilter === 'All' || getVideoMediaType(video) === mediaTypeFilter)
+    const tabVideos = videos.filter((video) => video.status === activeTab);
+    // "All Categories" reflects the active Music/Non-Music filter, while
+    // each category pill keeps its own actual count so Music doesn't drop to 0
+    // simply because the Non-Music shortcut is selected.
+    const eligibleVideos = tabVideos.filter((video) =>
+      mediaTypeFilter === 'All' || getVideoMediaType(video) === mediaTypeFilter
     );
     const counts = { All: eligibleVideos.length };
-    eligibleVideos.forEach((video) => {
+    tabVideos.forEach((video) => {
       const category = getVideoCategory(video);
       counts[category] = (counts[category] || 0) + 1;
     });
@@ -2781,7 +2782,7 @@ function YediHubAppContent() {
                       <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
                       {/* Keep portrait-video letterboxing black/purple instead of blurring bright thumbnail colors behind it. */}
                       <div className="absolute inset-0 bg-[#05020a]/80 backdrop-blur-sm" />
-                      <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-transparent to-[#10051b]/40" />
+                      <div className="gachi-vertical-letterbox absolute inset-0" />
                     </div>
                   )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
