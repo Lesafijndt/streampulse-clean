@@ -699,7 +699,7 @@ function YediHubAppContent() {
         if (!user) {
           setFirebaseUser(null);
           setCloudSynced(false);
-          setSyncStatusText('Cloud login required');
+          setSyncStatusText(ALLOWED_TWITCH_USERS.has(String(authorizedLoginRef.current || '').toLowerCase()) ? 'Connecting private cloud sync…' : 'Waiting for approved Twitch login…');
           return;
         }
         try {
@@ -2085,7 +2085,7 @@ function YediHubAppContent() {
                   ♂ GACHI MODE ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 TOTALLY NORMAL STREAM
+                  TOTALLY NORMAL STREAM
                 </span>
               </div>
 
@@ -2106,16 +2106,6 @@ function YediHubAppContent() {
 
             <span className="text-slate-600">|</span>
 
-            {/* Stream Mode Indicator */}
-            <span className="flex items-center gap-1 text-slate-400">
-              <span>Mode:</span>
-              <strong className="text-purple-300 capitalize">
-                '🌐 All Media (Unfiltered)'
-              </strong>
-            </span>
-
-            <span className="text-slate-600">|</span>
-
             <span className="text-slate-400">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
@@ -2132,6 +2122,18 @@ function YediHubAppContent() {
               <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
               <span>OBS Deck</span>
             </button>
+
+            {/* Queue settings: keep the close/open switch one click away for staff. */}
+            {isStaff && (
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold transition-colors"
+                title="Queue settings — close or reopen requests and configure playback"
+              >
+                <Settings className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Settings</span>
+              </button>
+            )}
 
             {/* User Profile / Login Modal Trigger */}
             <button
