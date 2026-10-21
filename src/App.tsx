@@ -2073,8 +2073,8 @@ function YediHubAppContent() {
         <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
-            <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Aniki Fight Club">
-              <span className="yedi-soap-mark" role="img" aria-label="Flexing wrestler">💪</span>
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-purple-600/30" title="Yedi Hub">
+              <Tv className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2082,10 +2082,10 @@ function YediHubAppContent() {
                   Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ ANIKI WRESTLING FEDERATION ♂
+                  ♂ GACHI STREAM OPS ♂
                 </span>
-                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 DUNGEON OF SWEAT
+                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-[#006aa7]/20 text-cyan-100 border border-cyan-400/30">
+                  🇸🇪 SE // LIVE NODE
                 </span>
               </div>
 
@@ -2204,29 +2204,29 @@ function YediHubAppContent() {
         </div>
       </header>
 
-      {/* GACHIMUCHI WRESTLING POSTER / ARENA IDENT */}
+      {/* GACHIMUCHI STREAM CONTROL IDENT */}
       <section className="gachi-poster-banner" aria-label="Hardcore gachimuchi wrestling arena">
         <div className="gachi-poster-topline">
-          <span>♂ ANIKI FIGHT CLUB ♂</span>
-          <span>VHS // 1987 // UNCUT ARENA EDITION</span>
+          <span>GACHI STREAM SYSTEMS // 2O3A</span>
+          <span>SIGNAL // QUEUE // PLAYBACK</span>
         </div>
         <div className="gachi-poster-center">
           <div className="gachi-poster-sidecopy">
-            <span>NO</span><strong>MERCY</strong><span>ONLY</span><strong>MEN</strong>
+            <span>LIVE</span><strong>QUEUE</strong><span>INPUT</span><strong>READY</strong>
           </div>
           <div className="gachi-poster-title">
-            <div className="gachi-poster-eyebrow">THE SWEDISH BATHHOUSE PRESENTS</div>
-            <h1>GACHIMUCHI <em>WRESTLING</em></h1>
-            <div className="gachi-poster-tagline">SWEAT • STEEL • BROTHERHOOD • ♂</div>
+            <div className="gachi-poster-eyebrow">SV-SE // BROADCAST CONTROL</div>
+            <h1>GACHIMUCHI <em>STREAM OPS</em></h1>
+            <div className="gachi-poster-tagline">SIGNAL • QUEUE • PLAYBACK</div>
           </div>
           <div className="gachi-poster-sidecopy gachi-poster-sidecopy-right">
-            <span>FLEX</span><strong>HARD</strong><span>FIGHT</span><strong>HARDER</strong>
+            <span>PARSE</span><strong>PLAY</strong><span>QUEUE</span><strong>NEXT</strong>
           </div>
         </div>
         <div className="gachi-poster-bottomline">
-          <span>🇸🇪 SVENSK PIT • DUNGEON DIVISION</span>
+          <span>🇸🇪 SWEDISH NODE // STREAM CONTROL</span>
           <span>MAIN EVENT: 2O3A</span>
-          <span>NO SKIPS. NO WEAKNESS.</span>
+          <span>INPUT • DECODE • PLAYBACK</span>
         </div>
       </section>
 
@@ -2862,7 +2862,7 @@ function YediHubAppContent() {
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">ENTER THE SVENSK GACHI PIT</h3>
+                  <h3 className="text-base font-bold text-white">STREAM CONTROL PANEL</h3>
                   <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
                 </div>
               </div>
