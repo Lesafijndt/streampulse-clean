@@ -1,72 +1,80 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 440" width="1920" height="440">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
 <defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08070a"/><stop offset=".42" stop-color="#18070d"/><stop offset=".75" stop-color="#07131b"/><stop offset="1" stop-color="#050608"/></linearGradient>
-  <linearGradient id="skin" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#f6c9a3"/><stop offset=".42" stop-color="#bd775d"/><stop offset=".72" stop-color="#8d4d42"/><stop offset="1" stop-color="#4e2e32"/></linearGradient>
-  <linearGradient id="skin2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f3be91"/><stop offset=".48" stop-color="#a85c4c"/><stop offset="1" stop-color="#4c2b30"/></linearGradient>
-  <linearGradient id="trunks" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#252832"/><stop offset="1" stop-color="#08090d"/></linearGradient>
-  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#b37e00"/><stop offset=".5" stop-color="#ffe66b"/><stop offset="1" stop-color="#9a6c00"/></linearGradient>
-  <radialGradient id="spot"><stop stop-color="#e92a51" stop-opacity=".42"/><stop offset="1" stop-color="#e92a51" stop-opacity="0"/></radialGradient>
-  <radialGradient id="spot2"><stop stop-color="#087eb9" stop-opacity=".48"/><stop offset="1" stop-color="#087eb9" stop-opacity="0"/></radialGradient>
-  <pattern id="scan" width="4" height="5" patternUnits="userSpaceOnUse"><path d="M0 0H4" stroke="#fff" stroke-opacity=".04"/></pattern>
-  <filter id="glow"><feGaussianBlur stdDeviation="9"/></filter>
+  <linearGradient id="night" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#05060a"/><stop offset=".35" stop-color="#160712"/><stop offset=".68" stop-color="#08121b"/><stop offset="1" stop-color="#06070b"/></linearGradient>
+  <linearGradient id="skin" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#ffdbba"/><stop offset=".35" stop-color="#d99976"/><stop offset=".72" stop-color="#a45b4b"/><stop offset="1" stop-color="#512d35"/></linearGradient>
+  <linearGradient id="skin2" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#f4c29d"/><stop offset=".38" stop-color="#b9735d"/><stop offset=".76" stop-color="#80464a"/><stop offset="1" stop-color="#2a202e"/></linearGradient>
+  <linearGradient id="skin3" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe0c2"/><stop offset=".4" stop-color="#c48367"/><stop offset=".78" stop-color="#885052"/><stop offset="1" stop-color="#37232c"/></linearGradient>
+  <linearGradient id="trunks" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#252a38"/><stop offset=".5" stop-color="#0c111c"/><stop offset="1" stop-color="#030408"/></linearGradient>
+  <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#37b5ee"/><stop offset="1" stop-color="#06426e"/></linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#9b6900"/><stop offset=".48" stop-color="#ffdf52"/><stop offset="1" stop-color="#9b6900"/></linearGradient>
+  <radialGradient id="redGlow"><stop stop-color="#f32654" stop-opacity=".46"/><stop offset="1" stop-color="#f32654" stop-opacity="0"/></radialGradient>
+  <radialGradient id="blueGlow"><stop stop-color="#0787cf" stop-opacity=".43"/><stop offset="1" stop-color="#0787cf" stop-opacity="0"/></radialGradient>
+  <pattern id="scan" width="4" height="5" patternUnits="userSpaceOnUse"><path d="M0 0H4" stroke="#fff" stroke-opacity=".055"/></pattern>
+  <pattern id="mesh" width="50" height="50" patternUnits="userSpaceOnUse"><path d="M0 0L50 50M50 0L0 50" stroke="#88b4d4" stroke-opacity=".09" stroke-width="1"/></pattern>
+  <filter id="soft"><feGaussianBlur stdDeviation="30"/></filter>
+  <g id="aniki" stroke="#21151a" stroke-width="8" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Arms flexed at shoulder height -->
+    <path d="M105 150C82 139 64 119 63 98C62 82 73 72 86 83C101 96 106 118 124 129L137 169Z" fill="url(#skin)"/>
+    <path d="M86 83C97 65 113 72 116 91C119 106 110 123 99 133" fill="none" stroke="#f6c49e" stroke-width="10"/>
+    <path d="M215 150C238 139 256 119 257 98C258 82 247 72 234 83C219 96 214 118 196 129L183 169Z" fill="url(#skin)"/>
+    <path d="M234 83C223 65 207 72 204 91C201 106 210 123 221 133" fill="none" stroke="#f6c49e" stroke-width="10"/>
+    <!-- Head, old-school wrestler hair and moustache -->
+    <path d="M127 50C128 25 144 15 162 17C184 18 197 34 194 59L187 91C182 111 143 111 135 91Z" fill="url(#skin)"/>
+    <path d="M126 55C113 31 132 7 159 7C184 6 202 24 195 50L186 43C171 50 150 45 136 58L135 73Z" fill="#17131a"/>
+    <path d="M137 77L151 79M172 79L185 77" stroke="#1a1218" stroke-width="5"/>
+    <path d="M153 92C160 97 167 97 173 91" fill="none" stroke="#713c3e" stroke-width="4"/>
+    <path d="M144 94C151 89 155 91 161 95C167 91 174 89 181 94C175 107 151 108 144 94Z" fill="#241820"/>
+    <!-- Neck, huge shoulders, chest and taper -->
+    <path d="M143 102L141 128L180 128L178 102Z" fill="url(#skin2)"/>
+    <path d="M137 122C119 118 99 127 89 146C78 166 90 201 103 224L119 290L132 350L188 350L201 290L217 224C230 201 242 166 231 146C221 127 201 118 183 122C168 130 151 130 137 122Z" fill="url(#skin)"/>
+    <path d="M101 151C119 136 144 142 158 162C149 184 130 196 109 182Z" fill="url(#skin3)"/>
+    <path d="M217 151C199 136 174 142 160 162C169 184 188 196 209 182Z" fill="url(#skin2)"/>
+    <path d="M160 162L160 198" fill="none" stroke="#773c3a" stroke-width="5"/>
+    <path d="M124 207C138 196 151 200 158 211C149 224 137 228 125 222Z" fill="#bc7965" stroke="none"/>
+    <path d="M196 207C182 196 169 200 162 211C171 224 183 228 195 222Z" fill="#a96256" stroke="none"/>
+    <!-- Deep-cut ab definition -->
+    <path d="M133 228C143 220 153 224 158 233L156 252L133 252Z" fill="#d99575" stroke="none"/>
+    <path d="M187 228C177 220 167 224 162 233L164 252L187 252Z" fill="#99584d" stroke="none"/>
+    <path d="M133 260L157 260L157 280L137 282Z" fill="#c68166" stroke="none"/>
+    <path d="M187 260L163 260L163 280L183 282Z" fill="#9e5e51" stroke="none"/>
+    <path d="M137 290L157 288L157 309L143 316Z" fill="#bc765e" stroke="none"/>
+    <path d="M183 290L163 288L163 309L177 316Z" fill="#8f504b" stroke="none"/>
+    <path d="M160 232V316M132 256L158 256M162 256L188 256M135 285L157 285M163 285L185 285" fill="none" stroke="#492d32" stroke-width="4"/>
+    <!-- Thick trunks with Swedish blue/yellow signal stripes -->
+    <path d="M119 333C137 342 183 342 201 333L211 388L190 421L130 421L109 388Z" fill="url(#trunks)"/>
+    <path d="M116 345C142 355 178 355 204 345L207 360C181 371 139 371 113 360Z" fill="url(#blue)" stroke="#11151c" stroke-width="4"/>
+    <path d="M115 363C141 373 179 373 205 363L207 371C180 382 140 382 113 371Z" fill="url(#gold)" stroke="none"/>
+    <path d="M159 376V418" fill="none" stroke="#6e7789" stroke-width="4"/>
+    <!-- Powerful thighs and calves -->
+    <path d="M126 407C130 431 115 462 119 493L130 549C136 569 151 574 157 557L161 425Z" fill="url(#skin2)"/>
+    <path d="M194 407C190 431 205 462 201 493L190 549C184 569 169 574 163 557L159 425Z" fill="url(#skin)"/>
+    <path d="M122 458C137 450 148 459 154 478M198 458C183 450 172 459 166 478" fill="none" stroke="#f1bb91" stroke-width="9"/>
+    <path d="M130 548L127 589C127 600 143 607 155 598L160 560M190 548L193 589C193 600 177 607 165 598L160 560" fill="url(#skin2)"/>
+    <path d="M128 589C116 590 109 601 115 610L157 610L160 598M192 589C204 590 211 601 205 610L163 610L160 598" fill="#15131c"/>
+  </g>
 </defs>
-<rect width="1920" height="440" fill="url(#bg)"/>
-<ellipse cx="330" cy="210" rx="410" ry="310" fill="url(#spot)"/>
-<ellipse cx="1600" cy="180" rx="480" ry="330" fill="url(#spot2)"/>
-<path d="M0 0H440L260 440H0ZM1920 0H1480L1660 440H1920Z" fill="#000" opacity=".22"/>
-<g opacity=".4" stroke="#fecc00" stroke-width="3"><path d="M0 34H1920"/><path d="M0 404H1920"/></g>
-<g opacity=".38" stroke="#006aa7" stroke-width="3"><path d="M0 42H1920"/><path d="M0 396H1920"/></g>
-<!-- steel cage / ring ropes -->
-<g fill="none" stroke-linecap="round">
-  <path d="M0 235L1920 170" stroke="#006aa7" stroke-width="11" opacity=".7"/>
-  <path d="M0 240L1920 175" stroke="#f4f3ed" stroke-width="2" opacity=".5"/>
-  <path d="M0 316L1920 255" stroke="#b51f3c" stroke-width="10" opacity=".8"/>
-  <path d="M0 320L1920 259" stroke="#ffc85b" stroke-width="2" opacity=".8"/>
+<rect width="1920" height="1080" fill="url(#night)"/>
+<ellipse cx="250" cy="220" rx="520" ry="450" fill="url(#redGlow)"/>
+<ellipse cx="970" cy="470" rx="700" ry="620" fill="url(#blueGlow)"/>
+<ellipse cx="1740" cy="180" rx="500" ry="420" fill="url(#redGlow)"/>
+<rect width="1920" height="1080" fill="url(#mesh)" opacity=".65"/>
+<!-- Six larger-than-life, fully-clothed wrestlers form a continuous gachi poster wall. -->
+<g opacity=".88" transform="translate(-65 94) scale(1.35)"><use href="#aniki"/></g>
+<g opacity=".82" transform="translate(238 15) scale(1.57)"><use href="#aniki" transform="translate(320 0) scale(-1 1)"/></g>
+<g opacity=".72" transform="translate(540 170) scale(1.23)"><use href="#aniki"/></g>
+<g opacity=".84" transform="translate(820 -8) scale(1.67)"><use href="#aniki" transform="translate(320 0) scale(-1 1)"/></g>
+<g opacity=".78" transform="translate(1205 65) scale(1.42)"><use href="#aniki"/></g>
+<g opacity=".74" transform="translate(1530 175) scale(1.18)"><use href="#aniki" transform="translate(320 0) scale(-1 1)"/></g>
+<!-- Steel cage, ring ropes, broadcast scan lines and Swedish signal accents -->
+<g fill="none" stroke-linecap="square">
+  <path d="M0 145H1920M0 915H1920" stroke="#006aa7" stroke-width="5" opacity=".6"/>
+  <path d="M0 152H1920M0 908H1920" stroke="#fecc00" stroke-width="2" opacity=".72"/>
+  <path d="M0 405L1920 347M0 628L1920 575M0 840L1920 790" stroke="#05060b" stroke-width="18" opacity=".78"/>
+  <path d="M0 399L1920 341M0 622L1920 569M0 834L1920 784" stroke="#006aa7" stroke-width="5" opacity=".78"/>
+  <path d="M0 410L1920 352M0 633L1920 580M0 845L1920 795" stroke="#fecc00" stroke-width="2" opacity=".8"/>
+  <path d="M0 0L1920 1080M1920 0L0 1080" stroke="#fff" stroke-width="1" stroke-opacity=".035"/>
 </g>
-<!-- Left ANIKI: illustrated, fully clothed wrestling trunks -->
-<g stroke="#211317" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
-  <path d="M264 170C225 151 198 126 178 101C160 78 132 82 118 103C100 129 120 160 151 176L220 219Z" fill="url(#skin)"/>
-  <ellipse cx="151" cy="111" rx="35" ry="43" fill="url(#skin)"/>
-  <path d="M126 88C120 59 148 42 179 60C194 69 198 86 188 99C170 83 151 81 126 88Z" fill="#171117"/>
-  <path d="M190 92C220 71 247 92 248 119C251 151 222 180 195 167C176 157 170 136 181 119Z" fill="url(#skin2)"/>
-  <path d="M208 114L225 109M211 132L226 130" stroke="#171015" stroke-width="7"/>
-  <path d="M241 167C267 143 298 144 330 160C360 175 377 202 379 238L366 348L244 348L223 233Z" fill="url(#skin)"/>
-  <path d="M239 176C216 158 193 171 183 193C169 224 190 253 222 253L254 224Z" fill="url(#skin2)"/>
-  <path d="M232 194C212 190 203 211 214 227C225 242 244 236 254 221" fill="none" stroke="#f4bd97" stroke-width="13"/>
-  <path d="M319 166C343 146 374 157 385 182C397 209 382 230 359 236L331 215Z" fill="url(#skin2)"/>
-  <path d="M359 188C378 168 402 180 408 199C417 224 398 240 375 235L353 220Z" fill="url(#skin)"/>
-  <path d="M247 219C273 203 305 203 333 222L347 265L329 305L264 305L239 265Z" fill="url(#skin2)"/>
-  <path d="M257 232L282 245L268 261M298 231L287 254L312 267M268 279L286 273L304 282" fill="none" stroke="#f3c4a0" stroke-width="7"/>
-  <path d="M231 301L347 301L365 367L335 425L239 425L218 367Z" fill="url(#trunks)"/>
-  <path d="M231 309L350 309L355 331L225 331Z" fill="url(#gold)" stroke="#25180a" stroke-width="5"/>
-  <path d="M282 333L278 389M302 334L310 389" stroke="#77717a" stroke-width="4"/>
-</g>
-<!-- Right ANIKI, mirrored pose -->
-<g transform="translate(1920 0) scale(-1 1)" stroke="#211317" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
-  <path d="M264 170C225 151 198 126 178 101C160 78 132 82 118 103C100 129 120 160 151 176L220 219Z" fill="url(#skin2)"/>
-  <ellipse cx="151" cy="111" rx="35" ry="43" fill="url(#skin2)"/>
-  <path d="M126 88C120 59 148 42 179 60C194 69 198 86 188 99C170 83 151 81 126 88Z" fill="#11151b"/>
-  <path d="M190 92C220 71 247 92 248 119C251 151 222 180 195 167C176 157 170 136 181 119Z" fill="url(#skin)"/>
-  <path d="M208 114L225 109M211 132L226 130" stroke="#171015" stroke-width="7"/>
-  <path d="M241 167C267 143 298 144 330 160C360 175 377 202 379 238L366 348L244 348L223 233Z" fill="url(#skin2)"/>
-  <path d="M239 176C216 158 193 171 183 193C169 224 190 253 222 253L254 224Z" fill="url(#skin)"/>
-  <path d="M232 194C212 190 203 211 214 227C225 242 244 236 254 221" fill="none" stroke="#f4bd97" stroke-width="13"/>
-  <path d="M319 166C343 146 374 157 385 182C397 209 382 230 359 236L331 215Z" fill="url(#skin)"/>
-  <path d="M359 188C378 168 402 180 408 199C417 224 398 240 375 235L353 220Z" fill="url(#skin2)"/>
-  <path d="M247 219C273 203 305 203 333 222L347 265L329 305L264 305L239 265Z" fill="url(#skin)"/>
-  <path d="M257 232L282 245L268 261M298 231L287 254L312 267M268 279L286 273L304 282" fill="none" stroke="#f3c4a0" stroke-width="7"/>
-  <path d="M231 301L347 301L365 367L335 425L239 425L218 367Z" fill="url(#trunks)"/>
-  <path d="M231 309L350 309L355 331L225 331Z" fill="url(#gold)" stroke="#25180a" stroke-width="5"/>
-  <path d="M282 333L278 389M302 334L310 389" stroke="#77717a" stroke-width="4"/>
-</g>
-<!-- VHS-title ghosting and distressed diagonal marks -->
-<g opacity=".8" fill="none" stroke-linecap="square">
-  <path d="M590 145L650 145M1270 145L1330 145" stroke="#fecc00" stroke-width="4"/>
-  <path d="M620 160L660 160M1260 160L1300 160" stroke="#006aa7" stroke-width="3"/>
-  <path d="M720 210H1200" stroke="#fff" stroke-opacity=".12" stroke-width="1"/>
-  <path d="M780 280H1140" stroke="#ff315f" stroke-opacity=".22" stroke-width="2"/>
-</g>
-<rect width="1920" height="440" fill="url(#scan)" opacity=".7"/>
-<g stroke="#fff" stroke-opacity=".1" stroke-width="1"><path d="M0 12L1920 12M0 426L1920 426"/><path d="M20 0V440M1900 0V440"/></g>
-<g fill="#fecc00"><path d="M35 28h70v5H35zM35 37h42v3H35zM1815 28h70v5h-70zM1843 37h42v3h-42z"/></g>
+<rect width="1920" height="1080" fill="url(#scan)" opacity=".7"/>
+<rect x="14" y="14" width="1892" height="1052" fill="none" stroke="#ff315f" stroke-opacity=".42" stroke-width="3"/>
+<path d="M24 34H175M1745 34H1896M24 1046H175M1745 1046H1896" stroke="#fecc00" stroke-width="5" opacity=".8"/>
 </svg>
