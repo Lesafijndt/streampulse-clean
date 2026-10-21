@@ -155,7 +155,7 @@ body { min-width: 320px; background: #090308; }
 
 /* TikTok's official player is portrait; keep it portrait and centered in the same deck. */
 .gachi-tiktok-player {
-  width: min(100%, calc(100vh * 9 / 16));
+  width: auto;
   height: 100%;
   max-width: 100%;
   aspect-ratio: 9 / 16;
@@ -163,9 +163,10 @@ body { min-width: 320px; background: #090308; }
   position: relative;
   z-index: 1;
   isolation: isolate;
-  border-radius: 12px;
+  border: 0;
+  border-radius: 0;
   background: #000;
-  box-shadow: 0 0 0 1px rgba(255, 44, 89, .42), 0 0 26px rgba(255, 22, 75, .14);
+  box-shadow: none;
 }
 
 .gachi-overlay { border-color: rgba(255, 40, 88, .8) !important; }
@@ -343,3 +344,6 @@ body { overflow-x: hidden; }
   .gachi-theme main { padding-left: .8rem !important; padding-right: .8rem !important; }
   .gachi-theme .gachi-tiktok-player { border-radius: 12px !important; }
 }
+
+/* YEDI_ALL_FIXES_V1: TikTok clean frame */
+.gachi-theme .gachi-tiktok-player { border-radius: 0 !important; box-shadow: none !important; }

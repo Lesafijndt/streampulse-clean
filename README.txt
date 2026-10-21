@@ -1,21 +1,23 @@
-YEDI HUB — SEAMLESS TIKTOK TRANSITION PATCH
+YEDI HUB — COMBINED PLAYER / QUEUE / AUDIO / VIDEO-ONLY PATCH
 
-This is a targeted in-place patch. It does not replace the project or any Twitch login/API files.
+Included changes:
+- Fixes the React removeChild crash by making the YouTube IFrame API replace a dynamically-created child inside a stable React-owned host.
+- Replaces timestamp swaps in the queue arrows with stable queueOrder values, local reorder, and Firebase persistence when configured.
+- Sends TikTok play + unMute when the player reports ready, retries unMute once shortly afterward, and sends another unMute when playback starts.
+- Applies video-only TikTok embed settings: disables player controls, progress, play/volume/fullscreen buttons, timestamps, descriptions, music info, captions and the native context menu where supported by TikTok's player.
+- Makes the video stage larger in cinema/theatre mode.
+- Suppresses routine success/information toast popups while leaving actionable warnings and errors visible.
+- Leaves existing authentication/API files untouched.
 
-APPLY
-1. Extract this ZIP into the root of your existing Yedi Hub repository (the folder containing package.json).
-2. Double-click APPLY-FIX.bat and read the PowerShell result.
-3. The script backs up src/App.tsx to your Windows TEMP folder before editing. It modifies only src/App.tsx.
-4. Delete APPLY-FIX.bat, Apply-Yedi-TikTok-BlackScreen-Fix.ps1, and README.txt from the repository root after it has run successfully.
-5. Review src/App.tsx in GitHub Desktop, commit, and Push origin. After Vercel deploys, hard-refresh the site with Ctrl+F5.
+Install:
+1. Extract this ZIP into the existing repository root (the same folder as package.json).
+2. Double-click APPLY-FIX.bat. The patch uses Node.js, which is the runtime used by this Vite project.
+3. If it reports success, open GitHub Desktop and review the changes to src/App.tsx and src/index.css.
+4. From the repo root, run `npm run build`. Commit and push only if the build succeeds.
 
-CHANGES
-- Attempts to exit fullscreen before Play Now / Skip Next transitions.
-- Disables TikTok's fullscreen button and removes fullscreen permission from the TikTok iframe.
-- Gives each queued request a fresh iframe identity to avoid reusing a stale embed.
-- Hides optional TikTok description, music metadata, and timestamp while keeping player controls enabled.
-- Suppresses routine success/info toast popups; warning/error messages remain so genuine failures aren't silent.
-- Adds a top-level React error boundary that displays a recovery screen if a React render/lifecycle error occurs, instead of leaving a blank app.
+The patcher creates backups of both modified files in the Windows TEMP folder. It validates the edits before writing and refuses ambiguous source matches.
 
-LIMITATIONS
-This is a best-effort fix, not a guarantee. TikTok owns the cross-origin iframe; this site cannot remove TikTok-controlled prompts, required notices, policy messages, blocked-video screens, or other content rendered inside that iframe. TikTok's supported player parameters only hide specific controls/metadata. A browser/GPU/renderer crash is not catchable by React's error boundary. Test after deployment.
+Limits:
+- Browser autoplay policy may still require one manual click before audio is allowed. The patch retries unmute, but cannot override a browser's sound-autoplay policy.
+- TikTok may still draw creator/social overlays that its embed settings do not expose for removal.
+- This patch preserves existing chat-command code; it does not add a separate Twitch chat-send/OAuth endpoint. A working `!help` response in chat depends on the bot-send integration already being present in your current project.

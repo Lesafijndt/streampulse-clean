@@ -1023,6 +1023,21 @@ function YediHubAppContent() {
   // ==========================================
   // DERIVED DATA & ACTIVE PLAYING ITEM
   // ==========================================
+  // YEDI_ALL_FIXES_V1: stable FIFO priority order; older saved entries fall back to timestamp.
+  const queueOrderValue = (video) => {
+    const savedOrder = Number(video?.queueOrder);
+    if (Number.isFinite(savedOrder) && savedOrder > 0) return savedOrder;
+    const oldTimestamp = Number(video?.timestamp);
+    return Number.isFinite(oldTimestamp) ? oldTimestamp : 0;
+  };
+  const compareQueueOrder = (a, b) => {
+    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+    return queueOrderValue(a) - queueOrderValue(b) || String(a.id).localeCompare(String(b.id));
+  };
+  const getNextQueueOrder = () => videos
+    .filter((video) => video.status === 'queue')
+    .reduce((maxOrder, video) => Math.max(maxOrder, queueOrderValue(video)), 0) + 1000;
+
   const currentVideo = useMemo(() => {
     // Current playing item or top of queue
     const playing = videos.find((v) => v.status === 'playing');
@@ -1367,6 +1382,7 @@ function YediHubAppContent() {
       voters: [],
       pinned: false,
       addedAt: 'Just now',
+      queueOrder: getNextQueueOrder(),
       timestamp: Date.now(),
       note: note || `Added to ${channelRoom} deck`,
       thumbnail: parsed.thumbnail
@@ -1538,7 +1554,10 @@ function YediHubAppContent() {
     let player = null;
     loadYouTubeIframeApi().then((YT) => {
       if (cancelled || !youtubePlayerContainerRef.current) return;
-      player = new YT.Player(youtubePlayerContainerRef.current, {
+      const playerMountNode = document.createElement('div');
+      playerMountNode.className = 'w-full h-full';
+      youtubePlayerContainerRef.current.appendChild(playerMountNode);
+      player = new YT.Player(playerMountNode, {
         width: '100%',
         height: '100%',
         videoId: video.videoId,
@@ -1646,8 +1665,19 @@ function YediHubAppContent() {
       if (!data || data['x-tiktok-player'] !== true) return;
 
       if (data.type === 'onPlayerReady') {
-        // Do not spam player commands. Start once when TikTok announces readiness.
-        postTikTokCommand('play');
+
+        const playerWindow = tiktokIframeRef.current?.contentWindow;
+        if (playerWindow) {
+          const sendTikTokCommand = (type) => playerWindow.postMessage(
+            { type, value: null, 'x-tiktok-player': true },
+            'https://www.tiktok.com'
+          );
+          sendTikTokCommand('unMute');
+          sendTikTokCommand('play');
+          window.setTimeout(() => {
+            if (tiktokIframeRef.current?.contentWindow === playerWindow) sendTikTokCommand('unMute');
+          }, 350);
+        }
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -1659,6 +1689,7 @@ function YediHubAppContent() {
         if (currentTime > 0.15) markPlaybackStarted();
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
+        if (state === 1) tiktokIframeRef.current?.contentWindow?.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
         if (state === 1) {
           playerPaused = false;
           lastMediaAdvanceAt = Date.now();
@@ -1811,13 +1842,14 @@ function YediHubAppContent() {
   };
 
   const handleApprovePending = (video) => {
-    syncUpdateVideo(video.id, { status: 'queue' });
+    syncUpdateVideo(video.id, { status: 'queue', queueOrder: getNextQueueOrder() });
     addToast(`Approved request from @${video.requestedBy}!`, 'success');
   };
 
   const handleRequeue = (video) => {
     syncUpdateVideo(video.id, {
       status: 'queue',
+      queueOrder: getNextQueueOrder(),
       timestamp: Date.now(),
       addedAt: 'Re-queued'
     });
@@ -1967,17 +1999,45 @@ function YediHubAppContent() {
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
   const handleMoveOrder = (videoId, direction) => {
-    const list = filteredVideos;
-    const index = list.findIndex((v) => v.id === videoId);
-    if (index === -1) return;
-    const targetIdx = direction === 'up' ? index - 1 : index + 1;
-    if (targetIdx < 0 || targetIdx >= list.length) return;
+    if (!isStaff) return;
 
-    const itemA = list[index];
-    const itemB = list[targetIdx];
+    // Use explicit order values so quick consecutive arrow clicks cannot collide.
+    const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
+    const index = queue.findIndex((video) => video.id === videoId);
+    if (index < 0) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= queue.length) return;
 
-    syncUpdateVideo(itemA.id, { timestamp: itemB.timestamp });
-    syncUpdateVideo(itemB.id, { timestamp: itemA.timestamp });
+    const item = queue[index];
+    const target = queue[targetIndex];
+    // Pinned requests stay in their own priority group.
+    if (Boolean(item.pinned) !== Boolean(target.pinned)) return;
+
+    const reordered = [...queue];
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+    const updates = reordered.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
+    const orderById = new Map(updates.map((video) => [video.id, video.queueOrder]));
+
+    setSortBy('priority');
+    setVideos((previous) => previous.map((video) => {
+      const nextOrder = orderById.get(video.id);
+      return nextOrder === undefined ? video : { ...video, queueOrder: nextOrder };
+    }));
+
+    if (db && firebaseUser) {
+      void Promise.all(updates.map(async (video) => {
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id));
+        try {
+          await updateDoc(itemRef, { queueOrder: video.queueOrder });
+        } catch (error) {
+          await setDoc(itemRef, { ...video, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
+        }
+      })).catch((error) => {
+        console.warn('Queue order could not sync to Firebase; the updated order remains in this browser.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Queue order saved locally — cloud update failed');
+      });
+    }
   };
 
   // Room switching is disabled: this site is dedicated to Twitch channel 2o3a.
@@ -2287,12 +2347,12 @@ function YediHubAppContent() {
                 <div
                   className={`relative w-full bg-black flex items-center justify-center transition-all ${
                     currentVideo.platform === 'tiktok'
-                      ? (isTheatreMode ? 'h-[76vh] min-h-[600px] max-h-[980px]' : 'h-[62vh] min-h-[500px] max-h-[820px]')
+                      ? (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[900px]' : 'h-[55vh] min-h-[460px] max-h-[700px]')
                       : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
                   }`}
                 >
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
-                    <div ref={youtubePlayerContainerRef} className="w-full h-full" />
+                    <div key={`youtube-${currentVideo.id}-${currentVideo.videoId}`} ref={youtubePlayerContainerRef} className="w-full h-full" />
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
                       {currentTikTokMode === 'classic' ? (
@@ -2308,7 +2368,7 @@ function YediHubAppContent() {
                           ref={tiktokIframeRef}
                           className="gachi-tiktok-player border-0"
                           style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                          src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&fullscreen_button=0&progress_bar=1&play_button=1&volume_control=1&timestamp=0&description=0&music_info=0&rel=0`}
+                          src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
                           title={currentVideo.title}
                           allow="autoplay; encrypted-media; picture-in-picture; web-share"
                           loading="eager"
