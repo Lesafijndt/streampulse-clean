@@ -1,0 +1,24 @@
+YEDI HUB — TWITCH LOGIN LOOP PATCH
+
+This is an API-only overlay. It does NOT replace src/App.tsx, src/index.css, player code, queue code, chat commands, Firebase rules, or environment files.
+
+Included files:
+  api/twitch/login.js
+  api/twitch/callback.js
+  api/twitch/session.js
+  api/twitch/logout.js
+
+Changes:
+- Uses a short-lived SameSite=None; Secure OAuth state cookie over HTTPS to avoid browsers dropping state during cross-site redirect chains. HTTP localhost keeps Lax.
+- Keeps persistent Twitch access/refresh cookies HttpOnly + SameSite=Lax, Secure over HTTPS.
+- Prevents caching of OAuth/session endpoints.
+- Makes /api/twitch/session return a safe authDiagnostic code when it cannot authenticate (no tokens/secrets are exposed).
+
+Install:
+1. Extract this ZIP.
+2. Copy the included api folder into the root of your EXISTING streampulse-clean repository and merge/replace matching files.
+3. Do not replace src/, package.json, .env files, or .git.
+4. Commit and push using GitHub Desktop; let Vercel deploy.
+5. Try signing in once. Then, if it still returns to login, open https://streampulse-clean.vercel.app/api/twitch/session in the same browser tab/session and inspect the JSON `authDiagnostic` field. You can share that field only; do not share cookies, tokens, or secrets.
+
+Note: a 302 from /api/twitch/callback to / is expected. The diagnostic endpoint distinguishes whether the session cookie is missing, invalid, associated with a different Twitch app, or rejected by the allowlist.

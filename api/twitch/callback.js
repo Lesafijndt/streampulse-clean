@@ -1,11 +1,9 @@
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
-const CHAT_BOT_LOGIN = 'gachibot69';
 
 function parseCookies(header = '') {
-  return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
-    const index = value.indexOf('=');
-    try { return [value.slice(0, index), decodeURIComponent(value.slice(index + 1))]; }
-    catch { return [value.slice(0, index), '']; }
+  return Object.fromEntries(header.split(';').map(v => v.trim()).filter(Boolean).map(v => {
+    const i = v.indexOf('=');
+    try { return [v.slice(0, i), decodeURIComponent(v.slice(i + 1))]; } catch { return [v.slice(0, i), '']; }
   }));
 }
 function appendCookie(res, cookieValue) {
@@ -13,29 +11,31 @@ function appendCookie(res, cookieValue) {
   const current = previous ? (Array.isArray(previous) ? previous : [previous]) : [];
   res.setHeader('Set-Cookie', [...current, cookieValue]);
 }
-function setCookie(res, name, value, maxAge) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  appendCookie(res, `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`);
+function isHttpsRequest(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  return process.env.NODE_ENV === 'production' || forwardedProto === 'https' || host.endsWith('.vercel.app');
 }
-function clearCookies(res, names) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  for (const name of names) appendCookie(res, `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+function setCookie(res, req, name, value, maxAge, sameSite = 'Lax') {
+  const secure = isHttpsRequest(req);
+  const site = sameSite === 'None' && !secure ? 'Lax' : sameSite;
+  const secureAttribute = secure ? '; Secure' : '';
+  appendCookie(res, `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=${site}; Max-Age=${maxAge}${secureAttribute}`);
+}
+function clearAuthCookies(res, req) {
+  const secure = isHttpsRequest(req) ? '; Secure' : '';
+  appendCookie(res, `yedi_twitch_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+  appendCookie(res, `yedi_twitch_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (req.method !== 'GET') return res.status(405).send('Method not allowed');
   const cookies = parseCookies(req.headers.cookie);
   const state = String(req.query.state || '');
-  const isBotFlow = Boolean(state && state === cookies.yedi_twitch_bot_oauth_state);
-  const isStaffFlow = Boolean(state && state === cookies.yedi_twitch_oauth_state);
-  if (!isBotFlow && !isStaffFlow) return res.status(400).send('OAuth state check failed. Please retry login.');
-  clearCookies(res, [isBotFlow ? 'yedi_twitch_bot_oauth_state' : 'yedi_twitch_oauth_state']);
-
-  if (req.query.error) {
-    return res.redirect(302, isBotFlow
-      ? `/?bot_error=${encodeURIComponent(String(req.query.error))}`
-      : `/?twitch_error=${encodeURIComponent(String(req.query.error))}`);
-  }
+  if (!state || state !== cookies.yedi_twitch_oauth_state) return res.status(400).send('OAuth state check failed. Please retry login.');
+  setCookie(res, req, 'yedi_twitch_oauth_state', '', 0, 'None');
+  if (req.query.error) return res.redirect(302, `/?twitch_error=${encodeURIComponent(String(req.query.error))}`);
 
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
@@ -52,27 +52,6 @@ export default async function handler(req, res) {
     const token = await tokenResponse.json();
     if (!tokenResponse.ok || !token.access_token) return res.status(502).send('Twitch token exchange failed. Check the Twitch redirect URL and client secret.');
 
-    // Bot and staff credentials are stored independently; logging the bot in never elevates its dashboard access.
-    if (isBotFlow) {
-      const validationResponse = await fetch('https://id.twitch.tv/oauth2/validate', {
-        headers: { Authorization: `OAuth ${token.access_token}` }
-      });
-      const validation = validationResponse.ok ? await validationResponse.json() : null;
-      const login = String(validation?.login || '').toLowerCase();
-      if (!validation || validation.client_id !== clientId || login !== CHAT_BOT_LOGIN) {
-        clearCookies(res, ['yedi_twitch_bot_access', 'yedi_twitch_bot_refresh']);
-        return res.redirect(302, '/?bot_error=wrong_account');
-      }
-      if (!Array.isArray(validation.scopes) || !validation.scopes.includes('user:write:chat')) {
-        clearCookies(res, ['yedi_twitch_bot_access', 'yedi_twitch_bot_refresh']);
-        return res.redirect(302, '/?bot_error=missing_scope');
-      }
-      setCookie(res, 'yedi_twitch_bot_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-      if (token.refresh_token) setCookie(res, 'yedi_twitch_bot_refresh', token.refresh_token, 60 * 60 * 24 * 30);
-      else setCookie(res, 'yedi_twitch_bot_refresh', '', 0);
-      return res.redirect(302, '/?bot_connected=1');
-    }
-
     const meResponse = await fetch('https://api.twitch.tv/helix/users', {
       headers: { 'Client-Id': clientId, Authorization: `Bearer ${token.access_token}` }
     });
@@ -80,19 +59,17 @@ export default async function handler(req, res) {
     const me = (await meResponse.json()).data?.[0];
     const login = String(me?.login || '').toLowerCase();
     if (!me || !Object.hasOwn(ALLOWED_ROLES, login)) {
-      clearCookies(res, ['yedi_twitch_access', 'yedi_twitch_refresh']);
+      clearAuthCookies(res, req);
       return res.redirect(302, '/?twitch_error=unauthorized');
     }
 
-    setCookie(res, 'yedi_twitch_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-    if (token.refresh_token) setCookie(res, 'yedi_twitch_refresh', token.refresh_token, 60 * 60 * 24 * 30);
-    else setCookie(res, 'yedi_twitch_refresh', '', 0);
+    setCookie(res, req, 'yedi_twitch_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
+    if (token.refresh_token) setCookie(res, req, 'yedi_twitch_refresh', token.refresh_token, 60 * 60 * 24 * 30);
+    else setCookie(res, req, 'yedi_twitch_refresh', '', 0);
     return res.redirect(302, '/');
   } catch (error) {
     console.error('Twitch OAuth callback failed:', error);
-    clearCookies(res, isBotFlow
-      ? ['yedi_twitch_bot_access', 'yedi_twitch_bot_refresh']
-      : ['yedi_twitch_access', 'yedi_twitch_refresh']);
+    clearAuthCookies(res);
     return res.status(502).send('Could not connect to Twitch. Please try signing in again.');
   }
 }

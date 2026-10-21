@@ -23,8 +23,10 @@ function clearAuthCookies(res) {
   appendCookie(res, `yedi_twitch_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
   appendCookie(res, `yedi_twitch_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
-function unauthenticated(res) {
-  return res.status(200).json({ authenticated: false, role: 'viewer', user: null });
+function unauthenticated(res, reason = 'not_authenticated') {
+  // Safe diagnostic only: never return tokens, cookie values, client secrets, or Twitch responses.
+  res.setHeader('X-Yedi-Auth-Diagnostic', reason);
+  return res.status(200).json({ authenticated: false, role: 'viewer', user: null, authDiagnostic: reason });
 }
 function getFirebaseAdminAuth() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -45,7 +47,8 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const cookies = parseCookies(req.headers.cookie);
   const clientId = process.env.TWITCH_CLIENT_ID;
-  if (!clientId || !cookies.yedi_twitch_access) return unauthenticated(res);
+  if (!clientId) return unauthenticated(res, 'missing_twitch_client_id');
+  if (!cookies.yedi_twitch_access) return unauthenticated(res, 'missing_access_cookie');
 
   try {
     let accessToken = cookies.yedi_twitch_access;
@@ -61,7 +64,7 @@ export default async function handler(req, res) {
       const refreshed = await refreshResponse.json();
       if (!refreshResponse.ok || !refreshed.access_token) {
         clearAuthCookies(res);
-        return unauthenticated(res);
+        return unauthenticated(res, 'refresh_token_rejected');
       }
       accessToken = refreshed.access_token;
       setCookie(res, 'yedi_twitch_access', refreshed.access_token, Math.min(Number(refreshed.expires_in) || 14400, 14400));
@@ -72,21 +75,21 @@ export default async function handler(req, res) {
 
     if (!validation.ok || !validationBody?.login) {
       clearAuthCookies(res);
-      return unauthenticated(res);
+      return unauthenticated(res, 'twitch_access_token_invalid');
     }
     if (validationBody.client_id !== clientId) {
       clearAuthCookies(res);
-      return unauthenticated(res);
+      return unauthenticated(res, 'token_client_id_mismatch');
     }
 
     const meResponse = await fetch('https://api.twitch.tv/helix/users', { headers: { 'Client-Id': clientId, Authorization: `Bearer ${accessToken}` } });
-    if (!meResponse.ok) return unauthenticated(res);
+    if (!meResponse.ok) return unauthenticated(res, 'twitch_user_lookup_failed');
     const me = (await meResponse.json()).data?.[0];
     const login = String(me?.login || '').toLowerCase();
     const role = ALLOWED_ROLES[login];
     if (!me || !role || String(validationBody.login).toLowerCase() !== login || String(validationBody.user_id) !== String(me.id)) {
       clearAuthCookies(res);
-      return unauthenticated(res);
+      return unauthenticated(res, 'account_not_allowlisted_or_token_identity_mismatch');
     }
 
     let firebaseCustomToken = '';
@@ -113,6 +116,6 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('Twitch session verification failed:', error?.message || error);
-    return unauthenticated(res);
+    return unauthenticated(res, 'session_verification_exception');
   }
 }
