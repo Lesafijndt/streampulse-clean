@@ -69,7 +69,7 @@ export default async function handler(req, res) {
     return res.redirect(302, '/');
   } catch (error) {
     console.error('Twitch OAuth callback failed:', error);
-    clearAuthCookies(res);
+    clearAuthCookies(res, req);
     return res.status(502).send('Could not connect to Twitch. Please try signing in again.');
   }
 }
