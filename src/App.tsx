@@ -3072,7 +3072,7 @@ function YediHubAppContent() {
                         queueOpenCloudOverrideRef.current = { value, changedAt: Date.now() };
                       }
                       setStreamSettings((current) => ({ ...current, [item.key]: value }));
-                    }
+                    }}
                     className="w-4 h-4 accent-purple-600 rounded"
                   />
                 </label>
