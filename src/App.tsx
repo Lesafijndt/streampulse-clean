@@ -643,7 +643,11 @@ function YediHubAppContent() {
           if (!hasWebFirebaseConfig) {
             setSyncStatusText('Twitch verified — Firebase web config missing');
           } else if (!customToken || session.firebaseTokenReady !== true) {
-            const reason = firebaseDiagnosticMessages[firebaseDiagnostic] || 'Firebase server token unavailable';
+            const diagnosticCode = String(session.firebaseDiagnosticCode || '').trim();
+            const reason = firebaseDiagnosticMessages[firebaseDiagnostic]
+              || (firebaseDiagnostic === 'firebase_custom_token_failed' && diagnosticCode
+                ? `Firebase custom-token creation failed (${diagnosticCode})`
+                : 'Firebase server token unavailable');
             setSyncStatusText(`Twitch verified — ${reason}`);
           } else {
             setSyncStatusText('Connecting private cloud sync…');
