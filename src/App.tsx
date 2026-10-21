@@ -92,6 +92,11 @@ import {
   createQueueBackup,
   validateQueueBackup
 } from './queueLogic.js';
+import StatsBoard from './components/StatsBoard';
+import TransportNavigation from './components/TransportNavigation';
+import KeyboardShortcutHint from './components/KeyboardShortcutHint';
+import { createActivityEvent, mergeActivityEvents, buildActivityStatistics, normalizeActivityEvent } from './activityLog.js';
+import { postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
 
 
 
@@ -686,6 +691,9 @@ function YediHubAppContent() {
   const [auth, setAuth] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
+  const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
+  const [cloudReconnectTick, setCloudReconnectTick] = useState(0);
+  const [activityReconnectTick, setActivityReconnectTick] = useState(0);
   const [syncStatusText, setSyncStatusText] = useState('Initializing cloud sync...');
   const [roomConfigLoadedFor, setRoomConfigLoadedFor] = useState('');
 
@@ -751,6 +759,28 @@ function YediHubAppContent() {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
     return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
   });
+  const [activityEvents, setActivityEvents] = useState(() => {
+    const stored = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
+    return Array.isArray(stored) ? mergeActivityEvents(stored) : [];
+  });
+  const activityEventsRef = useRef(activityEvents);
+  activityEventsRef.current = activityEvents;
+  const activityCloudIdsRef = useRef(new Set());
+  const activityCloudReadyRef = useRef(false);
+  const activitySyncInFlightRef = useRef(new Set());
+  const [activityCloudReady, setActivityCloudReady] = useState(false);
+  const [activitySyncError, setActivitySyncError] = useState(false);
+  const activitySessionIdRef = useRef('');
+  if (!activitySessionIdRef.current) {
+    const sessionKey = roomStorageKey(channelRoom, 'activity-session');
+    let sessionId = '';
+    try { sessionId = window.sessionStorage.getItem(sessionKey) || ''; } catch { /* Storage can be blocked. */ }
+    if (!sessionId) {
+      sessionId = 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      try { window.sessionStorage.setItem(sessionKey, sessionId); } catch { /* Session tracking remains in memory. */ }
+    }
+    activitySessionIdRef.current = sessionId;
+  }
   const [statsNow, setStatsNow] = useState(() => Date.now());
   const [statsExpanded, setStatsExpanded] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
@@ -1228,7 +1258,7 @@ function YediHubAppContent() {
       setCloudSynced(false);
       setSyncStatusText('Cloud unavailable — local save is active');
     }
-  }, [db, firebaseUser, channelRoom, appId]);
+  }, [db, firebaseUser, channelRoom, appId, cloudReconnectTick];
 
   // Persist the channel's moderation settings in Firestore so they follow the broadcaster
   // across browsers/devices. The room name itself is also carried in the ?channel= URL.
@@ -1503,11 +1533,68 @@ function YediHubAppContent() {
     }
   };
 
+  const syncActivityEventToCloud = async (event) => {
+    if (!db || !firebaseUser || !activityCloudReadyRef.current || !event?.id ||
+        activityCloudIdsRef.current.has(String(event.id)) ||
+        activitySyncInFlightRef.current.has(String(event.id))) return false;
+    const eventId = String(event.id);
+    activitySyncInFlightRef.current.add(eventId);
+    try {
+      const eventRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_events', eventId);
+      // No merge: event documents are create-only so append-only rules remain meaningful.
+      await setDoc(eventRef, event);
+      activityCloudIdsRef.current.add(eventId);
+      setActivitySyncError(false);
+      return true;
+    } catch (error) {
+      console.warn('Activity event remains saved locally; cloud retry is pending.', error);
+      setActivitySyncError(true);
+      return false;
+    } finally {
+      activitySyncInFlightRef.current.delete(eventId);
+    }
+  };
+
+  const recordActivity = (type, video = {}, options = {}) => {
+    const source = options.source || (String(video?.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard');
+    const event = createActivityEvent({
+      id: options.id,
+      type,
+      room: normalizeRoomName(channelRoom) || PRIVATE_CHANNEL,
+      at: options.at || Date.now(),
+      sessionId: activitySessionIdRef.current,
+      video,
+      actor: options.actor || video?.requestedBy || twitchAuth.username || '',
+      source
+    });
+    if (!event) return null;
+    const merged = mergeActivityEvents(activityEventsRef.current, [event]);
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
+    return event;
+  };
+
+  const flushPendingActivityEvents = () => {
+    if (!db || !firebaseUser || !activityCloudReadyRef.current || !networkOnline) return;
+    activityEventsRef.current.forEach((event) => {
+      if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
+    });
+  };
+
+  const handleRetryActivitySync = () => {
+    setActivityReconnectTick((tick) => tick + 1);
+    setCloudReconnectTick((tick) => tick + 1);
+    flushPendingActivityEvents();
+  };
+
   const syncAddVideo = async (videoObj) => {
     const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
     // Update the ref synchronously so back-to-back chat messages see the new item immediately.
     videosRef.current = [localItem, ...videosRef.current];
     setVideos((prev) => [localItem, ...prev]);
+    recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
 
     if (db && firebaseUser) {
       try {
@@ -1521,7 +1608,12 @@ function YediHubAppContent() {
     }
   };
 
-  const syncDeleteVideo = async (videoId) => {
+  const syncDeleteVideo = async (videoId, options = {}) => {
+    const removedItem = videosRef.current.find((video) => String(video.id) === String(videoId));
+    if (removedItem) recordActivity('request_removed', removedItem, {
+      actor: options.actor || twitchAuth.username || removedItem.requestedBy,
+      source: options.source || 'dashboard'
+    });
     videosRef.current = videosRef.current.filter((v) => v.id !== videoId);
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
 
@@ -1536,6 +1628,88 @@ function YediHubAppContent() {
       }
     }
   };
+
+  useEffect(() => {
+    if (!db || !firebaseUser) {
+      activityCloudReadyRef.current = false;
+      activityCloudIdsRef.current = new Set();
+      setActivityCloudReady(false);
+      return undefined;
+    }
+    let active = true;
+    activityCloudReadyRef.current = false;
+    setActivityCloudReady(false);
+    try {
+      const eventsRef = collection(db, 'artifacts', appId, 'public', 'data', 'queue_events');
+      const unsubscribe = onSnapshot(eventsRef, { includeMetadataChanges: true }, (snapshot) => {
+        if (!active) return;
+        const cloudEvents = snapshot.docs
+          .map((entry) => normalizeActivityEvent({ ...entry.data(), id: entry.id }))
+          .filter(Boolean);
+        activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
+        activityCloudReadyRef.current = true;
+        setActivityCloudReady(true);
+        setActivitySyncError(false);
+        const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
+        activityEventsRef.current = merged;
+        setActivityEvents(merged);
+        writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+        // Upload local/offline events only after knowing which records already exist in the cloud.
+        merged.forEach((event) => {
+          if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
+        });
+      }, (error) => {
+        console.error('Activity log subscription failed:', error);
+        if (!active) return;
+        activityCloudReadyRef.current = false;
+        setActivityCloudReady(false);
+        setActivitySyncError(true);
+      });
+      return () => { active = false; unsubscribe(); };
+    } catch (error) {
+      console.error('Could not subscribe to the activity log:', error);
+      setActivitySyncError(true);
+      activityCloudReadyRef.current = false;
+      setActivityCloudReady(false);
+      return undefined;
+    }
+  }, [db, firebaseUser, appId, channelRoom, activityReconnectTick]);
+
+  // Import records for existing saved items which pre-date the event stream.
+  // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
+  useEffect(() => {
+    const normalizedRoom = normalizeRoomName(channelRoom);
+    const localOnlyReady = !db;
+    const cloudReady = Boolean(db && firebaseUser && cloudSynced && activityCloudReady &&
+      initializedCloudRoomsRef.current.has(normalizedRoom));
+    if (!localOnlyReady && !cloudReady) return;
+    const existingIds = new Set(activityEventsRef.current
+      .filter((event) => event.type === 'request_added' && event.mediaId)
+      .map((event) => String(event.mediaId)));
+    const missing = videosRef.current.filter((video) =>
+      video && typeof video === 'object' && !String(video.id || '').startsWith('demo-') &&
+      !existingIds.has(String(video.id)));
+    if (!missing.length) return;
+    const legacyEvents = missing.map((video) => {
+      const safeId = String(video.id || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 90);
+      return createActivityEvent({
+        id: 'legacy-request-' + safeId,
+        type: 'request_added',
+        at: Number(video.timestamp) > 0 ? Number(video.timestamp) : Date.now(),
+        room: normalizedRoom || PRIVATE_CHANNEL,
+        sessionId: 'legacy-import',
+        video,
+        actor: video.requestedBy || 'unknown',
+        source: 'legacy_import'
+      });
+    }).filter(Boolean);
+    if (!legacyEvents.length) return;
+    const merged = mergeActivityEvents(activityEventsRef.current, legacyEvents);
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    if (activityCloudReadyRef.current) legacyEvents.forEach((event) => void syncActivityEventToCloud(event));
+  }, [db, firebaseUser, cloudSynced, activityCloudReady, videos, activityEvents, channelRoom]);
 
   const getSafeBackupSettings = (rawSettings = {}) => {
     const safe = { ...DEFAULT_STREAM_SETTINGS };
@@ -1790,6 +1964,19 @@ function YediHubAppContent() {
     () => buildQueueStatistics(videos, statsNow),
     [videos, statsNow]
   );
+  const activityStats = useMemo(() => buildActivityStatistics(activityEvents), [activityEvents]);
+  const activitySyncStatus = !networkOnline
+    ? 'Offline · local save'
+    : activitySyncError
+    ? 'Retry needed'
+    : db && firebaseUser
+    ? activityCloudReady ? 'Cloud synced' : 'Connecting'
+    : 'Local-only';
+  const activitySyncTone = !networkOnline || activitySyncError
+    ? 'warning'
+    : db && firebaseUser && activityCloudReady
+    ? 'success'
+    : 'neutral';
   const durationLookupStats = useMemo(() => {
     const currentIds = new Set(videos.map((video) => String(video.id)));
     const entries = Object.entries(durationLookupOutcomes).filter(([id]) => currentIds.has(String(id)));
@@ -2011,6 +2198,32 @@ function YediHubAppContent() {
     };
     // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [twitchAuth.authenticated]);
+
+  useEffect(() => {
+    const reconnectWhenAvailable = () => {
+      const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+      setNetworkOnline(online);
+      if (!online) return;
+      setCloudReconnectTick((tick) => tick + 1);
+      setActivityReconnectTick((tick) => tick + 1);
+      if (twitchAuth.authenticated && shouldReconnectIrcRef.current) {
+        const socket = ircSocketRef.current;
+        if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+          connectTwitchIrc(ircTargetRef.current || PRIVATE_CHANNEL, { silent: true });
+        }
+      }
+    };
+    const onOffline = () => setNetworkOnline(false);
+    const onVisibility = () => { if (document.visibilityState === 'visible') reconnectWhenAvailable(); };
+    window.addEventListener('online', reconnectWhenAvailable);
+    window.addEventListener('offline', onOffline);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('online', reconnectWhenAvailable);
+      window.removeEventListener('offline', onOffline);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [twitchAuth.authenticated]);
 
     // ==========================================
@@ -2294,6 +2507,10 @@ function YediHubAppContent() {
     }
   };
   const handlePlayNow = (video) => {
+    const previousPlaying = (videosRef.current || videos).find((item) => item.status === 'playing' && String(item.id) !== String(video.id));
+    if (previousPlaying) recordActivity('track_skipped', previousPlaying, { actor: twitchAuth.username, source: 'play-now' });
+    const alreadyPlaying = (videosRef.current || videos).some((item) => item.status === 'playing' && String(item.id) === String(video.id));
+    if (!alreadyPlaying) recordActivity('play_started', video, { actor: twitchAuth.username, source: 'dashboard' });
     exitTikTokFullscreenBeforeTrackChange();
     const latestVideos = videosRef.current || videos;
     const now = Date.now();
@@ -2344,7 +2561,7 @@ function YediHubAppContent() {
     addToast(`Now Playing: ${String(video.title || 'video').slice(0, 32)}...`, 'info');
   };
 
-  const handleSkipNext = () => {
+  const handleSkipNext = (reason = 'skipped') => {
     exitTikTokFullscreenBeforeTrackChange();
     const latestVideos = videosRef.current || videos;
     const outgoing = currentVideoRef.current ||
@@ -2353,8 +2570,12 @@ function YediHubAppContent() {
       null;
     if (!outgoing) return;
 
+    if (reason === 'completed') recordActivity('playback_completed', outgoing, { source: 'player-ended' });
+    else recordActivity('track_skipped', outgoing, { actor: twitchAuth.username, source: 'dashboard' });
+
     const transition = buildNextTrackTransition(latestVideos, outgoing, compareQueueOrder);
     const { updatesById, nextVideos, nextOne } = transition;
+    if (nextOne) recordActivity('play_started', nextOne, { actor: twitchAuth.username, source: reason === 'completed' ? 'auto-next' : 'next-track' });
     videosRef.current = nextVideos;
     setVideos(nextVideos);
     currentVideoRef.current = nextOne
@@ -2423,7 +2644,7 @@ function YediHubAppContent() {
       const shouldMute = volumeCommand.action === 'mute' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
       tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: shouldMute ? 'muted' : 'unmuted' };
       const messageType = shouldMute ? 'mute' : 'unMute';
-      iframeWindow.postMessage({ type: messageType, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+      postTikTokPlayerCommand(iframeWindow, messageType, null);
       addToast(shouldMute ? 'TikTok audio muted by staff command.' : 'TikTok audio unmuted by staff command. Use the in-player slider for incremental volume changes.', 'info');
       return;
     }
@@ -2447,6 +2668,7 @@ function YediHubAppContent() {
 
     const transition = buildPreviousTrackTransition(latestVideos, outgoing);
     const { previouslyPlayed, updates, nextVideos } = transition;
+    if (previouslyPlayed) recordActivity('track_replayed', previouslyPlayed, { actor: twitchAuth.username, source: 'dashboard' });
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
@@ -2474,10 +2696,10 @@ function YediHubAppContent() {
   handleSkipNextRef.current = handleSkipNext;  handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
-    if (!currentVideo || currentVideo.id !== videoId) return;
-    if (streamSettings.autoPlayNext) {
-      handleSkipNextRef.current?.();
-    }
+    const playing = currentVideoRef.current || currentVideo;
+    if (!playing || String(playing.id) !== String(videoId)) return;
+    if (streamSettings.autoPlayNext) handleSkipNextRef.current?.('completed');
+    else recordActivity('playback_completed', playing, { source: 'player-ended' });
   };
 
   const togglePlaybackFromKeyboard = () => {
@@ -2506,11 +2728,7 @@ function YediHubAppContent() {
       const sameVideo = keyboardPausedRef.current.videoId === String(video.id);
       const shouldPause = sameVideo ? !keyboardPausedRef.current.paused : true;
       keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
-      iframeWindow.postMessage({
-        type: shouldPause ? 'pause' : 'play',
-        value: null,
-        'x-tiktok-player': true
-      }, 'https://www.tiktok.com');
+      postTikTokPlayerCommand(iframeWindow, shouldPause ? 'pause' : 'play', null);
       return;
     }
     addToast('This player does not expose remote play/pause controls. Use its in-player controls.', 'info');
@@ -2583,7 +2801,7 @@ function YediHubAppContent() {
     const postCommand = (func, args = []) => {
       if (cancelled) return;
       try {
-        playerWindow.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
+        postYouTubePlayerCommand(playerWindow, func, args);
       } catch (error) {
         console.debug('YouTube command could not be sent.', error);
       }
@@ -2805,6 +3023,7 @@ function YediHubAppContent() {
     reorderQueueAfterVoteRef.current = true;
     setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
     await syncIncrementUpvote(videoId, voterLogin);
+    recordActivity('vote_cast', target, { actor: voterLogin, source: 'twitch-chat-or-dashboard' });
     addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
     return { ok: true, video: target };
   };
@@ -3264,121 +3483,21 @@ function YediHubAppContent() {
 
       <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
-          <section className="rounded-xl border border-fuchsia-500/20 bg-gradient-to-b from-[#181022] to-[#0e111b] p-3 space-y-3 shadow-lg shadow-fuchsia-950/10">
-            <div className="flex items-center justify-between gap-2">
-              <button type="button" onClick={() => setStatsExpanded((expanded) => !expanded)} aria-expanded={statsExpanded} className="flex min-w-0 items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200 hover:text-white">
-                <BarChart3 className="h-3.5 w-3.5 text-fuchsia-300" /> STATS BOARD
-                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${statsExpanded ? 'rotate-180' : ''}`} />
-              </button>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300">
-                <Activity className="h-2.5 w-2.5" /> Live
-              </span>
-            </div>
-            {statsExpanded && (
-              <div className="space-y-3">
-            <p className="text-[9px] text-slate-500">Current snapshot · all retained queue/history items</p>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
-                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><Users className="h-3 w-3" /> People</div>
-                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequesters}</div>
-                <div className="mt-1 text-[9px] text-slate-500">unique requesters in retained items</div>
-              </div>
-              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
-                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><TrendingUp className="h-3 w-3" /> Requests</div>
-                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequests}</div>
-                <div className="mt-1 text-[9px] text-slate-500">items currently saved</div>
-              </div>
-              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
-                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><ListVideo className="h-3 w-3" /> Waiting</div>
-                <div className="mt-1 text-xl font-black leading-none text-purple-200">{queueStats.queueCount}</div>
-                <div className="mt-1 text-[9px] text-slate-500">queued videos</div>
-              </div>
-              <div className="rounded-lg border border-white/5 bg-black/20 p-2">
-                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><CheckCircle2 className="h-3 w-3" /> Moved to history</div>
-                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.historyCount}</div>
-                <div className="mt-1 text-[9px] text-slate-500">currently retained history items</div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-2.5 py-2">
-              <div className="min-w-0">
-                <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Queue runway</div>
-                <div className="mt-0.5 text-sm font-black text-white">{formatRuntimeHoursMinutes(queueStats.queueDurationSeconds)} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div>
-                <div className="mt-1 text-[9px] leading-4 text-slate-500">
-                  {queueStats.queueKnownCount} known lengths · {queueStats.queueEstimatedCount} estimated
-                </div>
-              </div>
-              <Timer className="h-4 w-4 shrink-0 text-purple-300" />
-            </div>
-
-            <div className="space-y-2.5">
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px]">
-                  <span className="font-bold uppercase tracking-wide text-slate-400">Top platform</span>
-                  <span className="truncate font-black capitalize text-cyan-200">{queueStats.mostPopularPlatform?.label || '—'}</span>
-                </div>
-                <div className="space-y-1.5">
-                  {queueStats.platforms.length ? queueStats.platforms.slice(0, 3).map((item) => (
-                    <div key={item.label}>
-                      <div className="mb-0.5 flex justify-between gap-2 text-[9px] text-slate-400">
-                        <span className="capitalize">{item.label}</span><span className="font-mono text-slate-300">{item.count}</span>
-                      </div>
-                      <div className="h-1 overflow-hidden rounded-full bg-slate-800">
-                        <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-purple-500" style={{ width: (Math.max(7, Math.round((item.count / Math.max(1, queueStats.platforms[0]?.count || 1)) * 100))) + '%' }} />
-                      </div>
-                    </div>
-                  )) : <p className="text-[10px] text-slate-600">No requests yet</p>}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px]">
-                  <span className="font-bold uppercase tracking-wide text-slate-400">Top genre</span>
-                  <span className="truncate font-black text-amber-200">{queueStats.mostPopularGenre?.label || '—'}</span>
-                </div>
-                <div className="space-y-1.5">
-                  {queueStats.genres.length ? queueStats.genres.slice(0, 3).map((item) => (
-                    <div key={item.label}>
-                      <div className="mb-0.5 flex justify-between gap-2 text-[9px] text-slate-400">
-                        <span className="truncate">{item.label}</span><span className="font-mono text-slate-300">{item.count}</span>
-                      </div>
-                      <div className="h-1 overflow-hidden rounded-full bg-slate-800">
-                        <div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-rose-500" style={{ width: (Math.max(7, Math.round((item.count / Math.max(1, queueStats.genres[0]?.count || 1)) * 100))) + '%' }} />
-                      </div>
-                    </div>
-                  )) : <p className="text-[10px] text-slate-600">No retained requests yet</p>}
-                </div>
-              </div>
-            </div>
-
-            {queueStats.mostActiveRequester && (
-              <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[9px]">
-                <span className="text-slate-500">Top requester · saved items</span>
-                <span className="max-w-[130px] truncate font-bold text-fuchsia-200">@{queueStats.mostActiveRequester.label} · {queueStats.mostActiveRequester.count}</span>
-              </div>
-            )}
-
-            <div className="rounded-lg border border-white/5 bg-black/20 px-2.5 py-2 space-y-1">
-              <div className="flex items-center justify-between gap-2 text-[9px]">
-                <span className="font-bold uppercase tracking-wide text-slate-500">Duration confidence</span>
-                <span className="font-mono text-slate-200">{queueStats.queueKnownCount} known · {queueStats.queueEstimatedCount} estimated</span>
-              </div>
-              <div className="text-[9px] leading-4 text-slate-500">
-                {durationLookupStats.pending} checks running · {durationLookupStats.unavailable + durationLookupStats.errors} provider lookups unavailable/failed
-                {durationLookupStats.failedByPlatform?.length > 0 && (
-                  <div>By provider: {durationLookupStats.failedByPlatform.join(' · ')}</div>
-                )}
-              </div>
-            </div>
-            {isStaff && (
-              <button type="button" onClick={handleRefreshDurations} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-[9px] font-bold text-slate-300 transition hover:border-purple-400/50 hover:text-white" title="Retry provider metadata lookups for entries whose duration is still unknown">
-                <RefreshCw className="h-3 w-3" /> Refresh missing durations
-              </button>
-            )}
-              </div>
-            )}
-          </section>
+          <StatsBoard
+            queueStats={queueStats}
+            activityStats={activityStats}
+            statsExpanded={statsExpanded}
+            onToggle={() => setStatsExpanded((expanded) => !expanded)}
+            durationLookupStats={durationLookupStats}
+            onRefreshDurations={handleRefreshDurations}
+            isStaff={isStaff}
+            activitySyncStatus={activitySyncStatus}
+            activitySyncTone={activitySyncTone}
+            activitySyncError={activitySyncError}
+            canRetryActivitySync={Boolean(db && firebaseUser)}
+            onRetryActivitySync={handleRetryActivitySync}
+            networkOnline={networkOnline}
+          />
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
           {/* ==========================================
@@ -3594,80 +3713,9 @@ function YediHubAppContent() {
                       <span>Watch Later</span>
                     </button>
 
-                    {/* Previous / Skip / Next Track */}
-                    {isStaff && (
-                      <>
-                      <button
-                        onClick={handlePreviousTrack}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all active:scale-95"
-                        title="Return to the most recently played video"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                        <span>Previous</span>
-                      </button>
-                      <button
-                        onClick={handleSkipNext}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
-                      >
-                        <SkipForward className="w-4 h-4" />
-                        <span>Next Track</span>
-                      </button>
-                      </>
-                    )}
+                    <TransportNavigation isStaff={isStaff} onPrevious={handlePreviousTrack} onNext={handleSkipNext} />
                   </div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-slate-500">
-                    <Keyboard className="h-3 w-3" />
-                    <span>Keyboard: Space play/pause · M mute{isStaff ? ' · ← / P previous · → / N next' : ''}</span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-12 text-center space-y-3">
-                <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
-                <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Paste a video URL in Twitch chat, use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code>, or click Request Video above to add media!
-                </p>
-              </div>
-            )}
-          </section>
-
-        </div>
-
-        <div className="gachi-queue-column min-w-0">
-          {/* ==========================================
-              QUEUE MANAGEMENT: TABS, FILTERS & CARDS
-              ========================================== */}
-          <section className="gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
-            {/* Nav Tabs */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
-                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
-                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
-                ].map((tab) => {
-                  const Icon = tab.icon;
-                  const active = activeTab === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => { setActiveTab(tab.id); if (tab.id !== 'queue') setMediaTypeFilter('All'); }}
-                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                        active
-                          ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                          : 'bg-[#151a27] hover:bg-slate-800 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span>{tab.label}</span>
-                      <span className={`px-1.5 py-0.2 rounded-md text-[11px] font-extrabold ${active ? 'bg-black/30 text-white' : tab.badge}`}>
-                        {tab.count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                  <KeyboardShortcutHint isStaff={isStaff} />
 
               {/* Sorter */}
               <select
