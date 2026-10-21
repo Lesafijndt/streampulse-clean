@@ -864,14 +864,12 @@ body { background: #03070b; }
 /* Very wide browser viewports commonly come from large desktop displays. Scale rem-based
    typography and controls with the page so its proportions remain close to the supplied 1536px mockup. */
 @media (min-width: 2400px) {
-  html { font-size: 200%; }
   .gachi-workspace {
     grid-template-columns: minmax(0, 18.5vw) minmax(0, 1fr) minmax(0, 29vw) !important;
-    gap: 1rem !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
+    gap: .75rem !important;
+    padding-left: .75rem !important;
+    padding-right: .75rem !important;
   }
-  .gachi-masthead > div.relative { padding-left: 2rem; padding-right: 2rem; }
 }
 @media (max-width: 1023px) {
   .gachi-workspace { grid-template-columns: minmax(0,1fr) !important; }
@@ -1054,4 +1052,70 @@ body { background: #03070b; }
     padding: 0 !important;
   }
   .gachi-queue-actions button { width: auto; }
+}
+
+
+/* Match the reference at browser zoom levels like 80%: do not double the root font size. */
+.gachi-masthead {
+  min-height: clamp(104px, 13vh, 180px) !important;
+}
+.gachi-masthead > div.relative {
+  min-height: inherit;
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+.gachi-masthead-title {
+  font-size: clamp(2rem, 3.8vw, 4.1rem) !important;
+  line-height: .98 !important;
+  letter-spacing: -.045em;
+}
+.gachi-workspace {
+  grid-template-columns: minmax(220px, 19vw) minmax(0, 1fr) minmax(330px, 28vw) !important;
+  gap: .75rem !important;
+  padding: .75rem !important;
+}
+.gachi-player-footer {
+  padding: .85rem 1rem !important;
+  gap: .65rem !important;
+}
+.gachi-player-controlbar {
+  gap: .4rem !important;
+}
+.gachi-player-controlbar button,
+.gachi-player-controlbar select {
+  font-size: .68rem !important;
+  padding: .4rem .6rem !important;
+}
+.gachi-queue-panel {
+  padding: .65rem !important;
+}
+.gachi-queue-item {
+  min-height: 66px !important;
+  padding: .4rem !important;
+  gap: .4rem !important;
+}
+.gachi-queue-thumbnail {
+  flex-basis: 2.7rem !important;
+  width: 2.7rem !important;
+  height: 2.7rem !important;
+}
+.gachi-queue-actions {
+  flex-basis: 116px !important;
+  width: 116px !important;
+  min-width: 116px !important;
+  gap: .2rem !important;
+}
+.gachi-queue-actions button {
+  height: 1.4rem !important;
+  font-size: .55rem !important;
+}
+.gachi-queue-actions button svg {
+  width: .7rem !important;
+  height: .7rem !important;
+}
+@media (min-width: 2400px) {
+  .gachi-workspace {
+    grid-template-columns: minmax(0, 18.5vw) minmax(0, 1fr) minmax(0, 28vw) !important;
+    gap: .8rem !important;
+  }
 }
