@@ -231,6 +231,13 @@ const KNOWN_CHAT_BOTS = new Set([
   'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
+// Treat a message consisting of a supported video URL as a request even without !assr.
+function isSupportedMediaUrlMessage(rawText = '') {
+  const candidate = String(rawText || '').trim();
+  if (!candidate || /\\s/.test(candidate)) return false;
+  return /^(?:https?:\\/\\/)?(?:www\\.)?(?:youtube\\.com|m\\.youtube\\.com|youtu\\.be|music\\.youtube\\.com|tiktok\\.com|vm\\.tiktok\\.com|vt\\.tiktok\\.com|twitch\\.tv|clips\\.twitch\\.tv|kick\\.com|clip\\.kick\\.com)\\/\\S+$/i.test(candidate);
+}
+
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
 function parseModVolumeCommand(rawText) {
   const command = String(rawText || '').trim().toLowerCase();
@@ -1272,9 +1279,10 @@ function YediHubAppContent() {
           ? 'subscriber'
           : 'viewer';
         const lowerText = text.toLowerCase();
-        const isRequestCommand = lowerText.startsWith('!assr ');
+        const isRequestCommand = /^!assr(?:\\s|$)/i.test(text);
+        const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
         const volumeCommand = parseModVolumeCommand(lowerText);
-        if (isRequestCommand) {
+        if (isRequestCommand || isDirectVideoUrl) {
           handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
         } else if (lowerText === '!remove' || lowerText === '!unrequest') {
           handleRemoveOwnRequestRef.current?.(voterLogin || username);
@@ -1283,7 +1291,7 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('whale cum: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
+          sendTwitchChatReply('whale cum: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
@@ -1356,7 +1364,7 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
     if (!requestText) {
-      sendTwitchChatReply(`@${requester} use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
+      sendTwitchChatReply(`@${requester} paste a video URL directly, or use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
       return;
     }
     if (!queueOpenRef.current) {
@@ -2224,7 +2232,7 @@ function YediHubAppContent() {
               {videos.filter((v) => v.status === 'queue').sort(compareQueueOrder)[0]?.title || 'Loading next item...'}
             </span>
           ) : (
-            <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
+            <span className="text-xs text-slate-400">Queue is empty. Paste a video URL in Twitch chat or use !assr &lt;url&gt;!</span>
           )}
         </div>
       </div>
@@ -2703,7 +2711,7 @@ function YediHubAppContent() {
                 <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
                 <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
+                  Paste a video URL in Twitch chat, use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code>, or click Request Video above to add media!
                 </p>
               </div>
             )}
@@ -3247,7 +3255,7 @@ function YediHubAppContent() {
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow direct video links, !assr Twitch requests, and web submissions' },
                 { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
               ].map((item) => (
                 <label
