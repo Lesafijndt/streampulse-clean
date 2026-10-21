@@ -2016,7 +2016,7 @@ function YediHubAppContent() {
   };
   handleQueueSummaryRef.current = handleQueueSummary;
 
-  const handleMoveOrder =  const handleMoveOrder = (videoId, direction) => {
+  const handleMoveOrder = (videoId, direction) => {
     if (!isStaff || activeTab !== 'queue') return;
     const visibleQueue = filteredVideos.filter((video) => video.status === 'queue');
     const visibleIndex = visibleQueue.findIndex((video) => String(video.id) === String(videoId));
