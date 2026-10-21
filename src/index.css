@@ -1314,3 +1314,142 @@ body { background: #03070b; }
 .gachi-player-column > section {
   margin-top: 0 !important;
 }
+
+
+/* Gachi arena category deck: every category is visible and clickable without horizontal scrolling. */
+.gachi-filter-toolbar {
+  width: 100%;
+  min-width: 0;
+  padding: .55rem;
+  border: 1px solid rgba(255, 45, 94, .28);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(35, 8, 25, .52), rgba(5, 6, 13, .75)),
+    repeating-linear-gradient(135deg, rgba(255, 49, 95, .035) 0 1px, transparent 1px 9px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 7px 20px rgba(0,0,0,.18);
+}
+.gachi-category-filter {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  min-width: 0;
+  align-items: stretch !important;
+  gap: .38rem !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+.gachi-category-filter > button {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: .35rem !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 34px;
+  padding: .35rem .48rem !important;
+  border: 1px solid rgba(255,255,255,.1) !important;
+  border-radius: 7px !important;
+  background: linear-gradient(130deg, rgba(22,16,28,.95), rgba(6,8,14,.96)) !important;
+  color: #aeb7c9 !important;
+  font-size: .69rem !important;
+  line-height: 1.15 !important;
+  text-align: left;
+  white-space: nowrap !important;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+  transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.gachi-category-filter > button > svg {
+  flex: 0 0 auto;
+  width: .92rem !important;
+  height: .92rem !important;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+.gachi-category-filter > button > span:first-of-type {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gachi-category-filter > button:hover,
+.gachi-category-filter > button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 49, 95, .7) !important;
+  background: linear-gradient(120deg, rgba(106, 15, 49, .65), rgba(31, 10, 35, .93)) !important;
+  color: white !important;
+  box-shadow: 0 0 12px rgba(255, 49, 95, .12);
+}
+.gachi-category-filter > button[class*="border-purple-500"],
+.gachi-category-filter > button[class*="bg-white/10"] {
+  border-color: #ff315f !important;
+  background: linear-gradient(120deg, rgba(195, 23, 70, .7), rgba(89, 16, 93, .7)) !important;
+  color: #fff !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 83, 127, .17), 0 0 13px rgba(255, 49, 95, .15);
+}
+.gachi-category-filter > button > .gachi-category-count {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 1.15rem;
+  height: 1.05rem;
+  padding: 0 .25rem;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 4px;
+  background: rgba(0,0,0,.32);
+  color: #b9c3d7;
+  font-size: .59rem !important;
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.gachi-category-filter > button[class*="border-purple-500"] > .gachi-category-count,
+.gachi-category-filter > button[class*="bg-white/10"] > .gachi-category-count {
+  color: #fff;
+  background: rgba(0,0,0,.24);
+  border-color: rgba(255,255,255,.17);
+}
+.gachi-category-search {
+  width: 100%;
+  min-width: 0;
+}
+.gachi-category-search input {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 2.2rem;
+  background: rgba(2,5,10,.82) !important;
+  border-color: rgba(255,49,95,.27) !important;
+  border-radius: 8px !important;
+  font-size: .72rem !important;
+}
+.gachi-category-search input:focus {
+  border-color: #ff315f !important;
+  box-shadow: 0 0 0 2px rgba(255,49,95,.09), 0 0 16px rgba(255,49,95,.08);
+}
+.gachi-queue-panel .gachi-queue-stat {
+  border-color: rgba(255,49,95,.18);
+}
+.gachi-queue-panel .gachi-queue-stat:hover,
+.gachi-queue-panel .gachi-queue-stat.gachi-stat-active {
+  border-color: rgba(255,49,95,.84) !important;
+  background: linear-gradient(110deg, rgba(151, 15, 57, .34), rgba(31, 8, 28, .72)) !important;
+  box-shadow: inset 3px 0 0 #ff315f, 0 0 14px rgba(255,49,95,.1);
+}
+.gachi-queue-panel .gachi-queue-stat .gachi-stat-icon {
+  background: linear-gradient(135deg, #ff315f, #a21887);
+}
+@media (min-width: 1750px) {
+  .gachi-category-filter { gap: .45rem !important; }
+  .gachi-category-filter > button {
+    min-height: 36px;
+    font-size: .72rem !important;
+    padding: .4rem .55rem !important;
+  }
+}
+@media (max-width: 1550px) {
+  .gachi-category-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .gachi-category-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
