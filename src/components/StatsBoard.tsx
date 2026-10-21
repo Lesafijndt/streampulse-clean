@@ -11,12 +11,15 @@ function Metric({ icon: Icon, label, value, detail }) {
 }
 
 function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
+  const displayLabel = (label) => kind === 'category'
+    ? ({ Gaming: 'Blind Playthroughs', Memes: 'Shitposts' }[label] || label)
+    : label;
   const topCount = Math.max(1, items[0]?.count || 1);
   return <div className="gachi-inset-card min-w-0 rounded-xl border p-3">
-    <div className="mb-2 flex items-center justify-between gap-2 text-[10px]"><span className="font-bold uppercase tracking-wide text-slate-400">{title}</span><span className="truncate font-black text-white">{leader || '—'}</span></div>
+    <div className="mb-2 flex items-center justify-between gap-2 text-[10px]"><span className="font-bold uppercase tracking-wide text-slate-400">{title}</span><span className="truncate font-black text-white">{leader ? displayLabel(leader) : '—'}</span></div>
     <div className="space-y-2">
       {items.length ? items.slice(0, 3).map((item) => <div key={item.label}>
-        <div className="mb-1 flex justify-between gap-2 text-[9px] text-slate-400"><span className={kind === 'platform' ? 'capitalize' : 'truncate'}>{item.label}</span><span className="font-mono text-slate-200">{item.count}</span></div>
+        <div className="mb-1 flex justify-between gap-2 text-[9px] text-slate-400"><span className={kind === 'platform' ? 'capitalize' : 'truncate'}>{displayLabel(item.label)}</span><span className="font-mono text-slate-200">{item.count}</span></div>
         <div className="gachi-chart-track h-1.5 overflow-hidden rounded-full"><div className="h-full rounded-full" style={{ width: `${Math.max(6, Math.round(item.count / topCount * 100))}%` }} /></div>
       </div>) : <p className="text-[10px] text-slate-600">{emptyLabel}</p>}
     </div>
