@@ -23,15 +23,18 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Run regression tests
         run: npm test
-      - name: Install browser regression runtime
+      - name: Install Playwright package
         run: |
-          npm install --no-save --package-lock=false playwright
+          timeout 180s npm install --no-save --package-lock=false playwright
+          npx playwright --version
+      - name: Configure headless browser
+        run: |
           BROWSER_PATH="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           if [ -n "$BROWSER_PATH" ]; then
             echo "CHROME_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
             echo "Using runner browser: $BROWSER_PATH"
           else
-            npx playwright install chromium
+            timeout 180s npx playwright install chromium
           fi
       - name: Run browser regression tests
         run: |
