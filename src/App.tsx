@@ -437,6 +437,12 @@ function getMediaIdentityKey(platform = '', videoId = '', rawUrl = '') {
   }
 }
 
+function isVerticalMedia(video) {
+  if (!video) return false;
+  if (video.platform === 'tiktok' || video.isVertical === true) return true;
+  return String(video.url || '').toLowerCase().includes('youtube.com/shorts/');
+}
+
 function parseMediaUrl(rawUrl = '') {
   const url = (rawUrl || '').trim();
   if (!url) return { platform: 'web', videoId: null, thumbnail: null };
@@ -1509,15 +1515,18 @@ function YediHubAppContent() {
     // while metadata/TikTok resolution is still running.
     pendingMediaRequestKeysRef.current.add(identityKey);
 
-    // Fetch public oEmbed titles for URL-only submissions so Music/Non-Music classification
-    // has real title text rather than only a video ID. Failure is non-fatal.
+    // Fetch public oEmbed metadata for titles and backdrop thumbnails when available.
     let resolvedTitle = String(title || '').trim();
-    if (!resolvedTitle) {
+    let resolvedThumbnail = parsed.thumbnail || '';
+    if (!resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co')) {
       try {
         const metadataResponse = await fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`);
         if (metadataResponse.ok) {
           const metadata = await metadataResponse.json().catch(() => ({}));
-          if (typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+          if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+          if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
+            resolvedThumbnail = metadata.thumbnailUrl;
+          }
         }
       } catch (error) {
         console.warn('Media metadata lookup failed; using URL-based category detection.', error);
@@ -1568,7 +1577,8 @@ function YediHubAppContent() {
       queueOrder: getNextQueueOrder(),
       timestamp: Date.now(),
       note: note || `Added to ${channelRoom} deck`,
-      thumbnail: parsed.thumbnail
+      thumbnail: resolvedThumbnail || parsed.thumbnail,
+      isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
     syncAddVideo(newVideo);
@@ -2501,13 +2511,26 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
-                  className={`relative w-full bg-black flex items-center justify-center transition-all ${
-                    currentVideo.platform === 'tiktok'
+                  className={`relative w-full bg-black flex items-center justify-center overflow-hidden transition-all ${
+                    isVerticalMedia(currentVideo)
                       ? (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[900px]' : 'h-[55vh] min-h-[460px] max-h-[700px]')
                       : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
                   }`}
                 >
+                  {isVerticalMedia(currentVideo) && (
+                    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
+                      <div className="absolute inset-0 bg-gradient-to-br from-[#111827] via-[#312e81] to-[#164e63]" />
+                      {currentVideo.thumbnail && !String(currentVideo.thumbnail).toLowerCase().includes('placehold.co') && (
+                        <img src={currentVideo.thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-55 blur-3xl" />
+                      )}
+                      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                      <div className="absolute inset-0 bg-gradient-to-r from-black/25 via-transparent to-black/25" />
+                    </div>
+                  )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
+                    <div className={isVerticalMedia(currentVideo)
+                      ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
+                      : "absolute inset-0 h-full w-full"}>
                     <iframe
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
@@ -2531,6 +2554,7 @@ function YediHubAppContent() {
                         send('playVideo');
                       }}
                     />
+                    </div>
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
                       <iframe
