@@ -1798,77 +1798,132 @@ function YediHubAppContent() {
   };
   const handlePlayNow = (video) => {
     exitTikTokFullscreenBeforeTrackChange();
-    // Keep real playback chronology separate from the time a viewer requested the video.
-    const playedAt = Date.now();
-    videos.forEach((v) => {
-      if (v.status === 'playing' && v.id !== video.id) {
-        syncUpdateVideo(v.id, {
+    const latestVideos = videosRef.current || videos;
+    const now = Date.now();
+    const updatesById = new Map();
+
+    latestVideos.forEach((item) => {
+      if (item.status === 'playing' && String(item.id) !== String(video.id)) {
+        updatesById.set(String(item.id), {
           status: 'watched',
           watchedAt: 'Just now',
-          ...(Number(v.playedAt) > 0 ? {} : { playedAt: Number(v.timestamp) || playedAt - 1 })
+          playedAt: now,
+          nextTrackOverrideId: null,
         });
       }
     });
-    syncUpdateVideo(video.id, { status: 'playing', pinned: false, playedAt });
-    setSimProgress(0);
-    addToast(`Now Playing: ${video.title.slice(0, 32)}...`, 'info');
-  };
-
-  const handleSkipNext = () => {
-    exitTikTokFullscreenBeforeTrackChange();
-    const outgoing = currentVideo;
-    if (!outgoing) return;
-
-    // Pick the next item first, then change every local status in a single state update.
-    // Updating the current and next Firestore documents separately caused transient snapshots
-    // with zero/two active players; TikTok iframes could then be torn down mid-navigation.
-    const nextOne = videos
-      .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
-      .sort(compareQueueOrder)[0] || null;
-    const updatesById = new Map();
-    const nextPlayedAt = Date.now();
-    videos.filter((video) => video.status === 'playing').forEach((video) => {
-      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now', ...(Number(video.playedAt) > 0 ? {} : { playedAt: Number(video.timestamp) || nextPlayedAt - 1 }) });
+    updatesById.set(String(video.id), {
+      status: 'playing',
+      pinned: false,
+      playedAt: now + 1,
+      nextTrackOverrideId: null,
     });
-    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now', ...(Number(outgoing.playedAt) > 0 ? {} : { playedAt: Number(outgoing.timestamp) || nextPlayedAt - 1 }) });
-    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false, playedAt: nextPlayedAt });
 
-    setVideos((previous) => previous.map((video) => {
-      const updates = updatesById.get(video.id);
-      return updates ? { ...video, ...updates } : video;
-    }));
+    const nextVideos = latestVideos.map((item) => {
+      const updates = updatesById.get(String(item.id));
+      return updates ? { ...item, ...updates } : item;
+    });
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextVideos.find((item) => String(item.id) === String(video.id)) || null;
     setSimProgress(0);
 
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updatesById.forEach((updates, videoId) => {
-        batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId), updates);
+      updatesById.forEach((updates, id) => {
+        const item = latestVideos.find((entry) => String(entry.id) === id) || { id };
+        batch.set(
+          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
+          { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
+          { merge: true }
+        );
       });
-      batch.commit().catch(async (error) => {
-        // In case a locally-created document is missing in Firestore, fall back to merge writes.
-        console.warn('Atomic queue advance failed; retrying as merge writes.', error);
-        try {
-          await Promise.all(Array.from(updatesById.entries()).map(([videoId, updates]) => {
-            const item = videos.find((video) => video.id === videoId) || { id: videoId };
-            return setDoc(
-              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId),
-              { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
-              { merge: true }
-            );
-          }));
-        } catch (fallbackError) {
-          console.warn('Queue advance could not sync to Firestore; the local transition remains active.', fallbackError);
-          setCloudSynced(false);
-          setSyncStatusText('Queue advance saved locally — cloud sync failed');
-        }
+      batch.commit().catch((error) => {
+        console.warn('Play-now transition could not sync to Firestore.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Playback changed locally — cloud sync failed');
+      });
+    }
+    addToast(`Now Playing: ${String(video.title || 'video').slice(0, 32)}...`, 'info');
+  };
+
+  const handleSkipNext = () => {
+    exitTikTokFullscreenBeforeTrackChange();
+    const latestVideos = videosRef.current || videos;
+    const outgoing = currentVideoRef.current ||
+      latestVideos.find((video) => video.status === 'playing') ||
+      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
+      null;
+    if (!outgoing) return;
+
+    const queuedItems = latestVideos.filter((video) =>
+      video.status === 'queue' && String(video.id) !== String(outgoing.id)
+    );
+    // Previous stores an explicit forward target. Honor it before normal queue order so
+    // Previous -> Next always returns to the track that was just left.
+    const returnTargetId = String(outgoing.nextTrackOverrideId || '');
+    const nextOne = (returnTargetId && queuedItems.find((video) => String(video.id) === returnTargetId)) ||
+      queuedItems.sort(compareQueueOrder)[0] ||
+      null;
+
+    const transitionAt = Date.now();
+    const updatesById = new Map();
+    latestVideos.forEach((video) => {
+      if (video.status === 'playing') {
+        updatesById.set(String(video.id), {
+          status: 'watched',
+          watchedAt: 'Just now',
+          playedAt: transitionAt,
+          nextTrackOverrideId: null,
+        });
+      }
+    });
+    // Clear the return target when it is consumed (or if its target was deleted).
+    updatesById.set(String(outgoing.id), {
+      status: 'watched',
+      watchedAt: 'Just now',
+      playedAt: transitionAt,
+      nextTrackOverrideId: null,
+    });
+    if (nextOne) {
+      updatesById.set(String(nextOne.id), {
+        status: 'playing',
+        pinned: false,
+        playedAt: transitionAt + 1,
+        nextTrackOverrideId: null,
       });
     }
 
-    if (nextOne) {
-      addToast(`Skipped! Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
-    } else {
-      addToast('Reached end of queue.', 'info');
+    const nextVideos = latestVideos.map((video) => {
+      const updates = updatesById.get(String(video.id));
+      return updates ? { ...video, ...updates } : video;
+    });
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextOne
+      ? nextVideos.find((video) => String(video.id) === String(nextOne.id)) || null
+      : null;
+    setSimProgress(0);
+
+    if (db && firebaseUser) {
+      const batch = writeBatch(db);
+      updatesById.forEach((updates, id) => {
+        const item = latestVideos.find((video) => String(video.id) === id) || { id };
+        batch.set(
+          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
+          { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
+          { merge: true }
+        );
+      });
+      batch.commit().catch((error) => {
+        console.warn('Next-track transition could not sync to Firestore.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Next track changed locally — cloud sync failed');
+      });
     }
+
+    if (nextOne) addToast(`Now playing: ${String(nextOne.title || 'video').slice(0, 32)}...`, 'info');
+    else addToast('Reached end of queue.', 'info');
   };
 
   // Moderator/broadcaster volume controls use each platform's supported embed API.
@@ -1935,45 +1990,68 @@ function YediHubAppContent() {
 
   const handlePreviousTrack = () => {
     exitTikTokFullscreenBeforeTrackChange();
-    const outgoing = currentVideoRef.current;
+    const latestVideos = videosRef.current || videos;
+    const outgoing = currentVideoRef.current ||
+      latestVideos.find((video) => video.status === 'playing') ||
+      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
+      null;
     if (!outgoing) return;
-    const previouslyPlayed = videos
-      .filter((video) => video.status === 'watched' && video.id !== outgoing.id)
-      // Newer records use the time playback actually ended; timestamp is only a legacy fallback.
+
+    const previouslyPlayed = latestVideos
+      .filter((video) => video.status === 'watched' && String(video.id) !== String(outgoing.id))
       .sort((a, b) =>
         (Number(b.playedAt) || Number(b.timestamp) || 0) -
-        (Number(a.playedAt) || Number(a.timestamp) || 0)
+        (Number(a.playedAt) || Number(a.timestamp) || 0) ||
+        String(b.id || '').localeCompare(String(a.id || ''))
       )[0];
+
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
     }
-    const updates = new Map();
-    // Returning to the previous track should make the outgoing track the very next
-    // item in line, so pressing Next immediately returns to the track we just left.
-    const remainingQueued = videos.filter((video) => video.status === 'queue' && video.id !== outgoing.id);
-    const earliestQueuedOrder = remainingQueued.length
-      ? Math.min(...remainingQueued.map(queueOrderValue))
-      : queueOrderValue(outgoing);
-    updates.set(outgoing.id, { status: 'queue', queueOrder: earliestQueuedOrder - 1000, pinned: false });
-    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false, playedAt: Date.now() });
-    setVideos((previous) => previous.map((video) => {
-      const change = updates.get(video.id);
+
+    const now = Date.now();
+    const updates = new Map([
+      [String(outgoing.id), {
+        status: 'queue',
+        pinned: false,
+        nextTrackOverrideId: null,
+      }],
+      [String(previouslyPlayed.id), {
+        status: 'playing',
+        pinned: false,
+        playedAt: now,
+        // This persistent ID guarantees the next button returns to the exact track left here.
+        nextTrackOverrideId: String(outgoing.id),
+      }],
+    ]);
+
+    const nextVideos = latestVideos.map((video) => {
+      const change = updates.get(String(video.id));
       return change ? { ...video, ...change } : video;
-    }));
+    });
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextVideos.find((video) => String(video.id) === String(previouslyPlayed.id)) || null;
     setSimProgress(0);
+
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updates.forEach((change, id) => batch.set(
-        doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(id)),
-        change, { merge: true }
-      ));
+      updates.forEach((change, id) => {
+        const item = latestVideos.find((video) => String(video.id) === id) || { id };
+        batch.set(
+          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
+          { ...item, ...change, channelRoom: normalizeRoomName(channelRoom) },
+          { merge: true }
+        );
+      });
       batch.commit().catch((error) => {
         console.warn('Previous-track transition could not sync to Firestore.', error);
         setCloudSynced(false);
         setSyncStatusText('Previous track changed locally — cloud sync failed');
       });
     }
+    addToast(`Previous: ${String(previouslyPlayed.title || 'video').slice(0, 32)}...`, 'info');
   };
 
   // Player and bridge callbacks always use current handlers and queue state.
@@ -2867,79 +2945,22 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center gap-2">
-                    {currentVideo.platform === 'youtube' && (
-                      <div className="gachi-media-controls flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] p-2">
-                        <button type="button" onClick={() => {
-                          const player = youtubePlayerRef.current;
-                          if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; }
-                          const isPlaying = youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true;
-                          const nextIsPlaying = !isPlaying;
-                          if (nextIsPlaying) player.playVideo(); else player.pauseVideo();
-                          youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, playerState: nextIsPlaying ? 1 : 2 };
-                          setYoutubePlaybackState({ requestId: currentVideo.id, isPlaying: nextIsPlaying });
-                        }} className="gachi-sound-action gachi-sound-action-primary" title={(youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true) ? 'Pause YouTube video' : 'Play YouTube video'}>
-                          {(youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true)
-                            ? <><Pause className="w-3.5 h-3.5 fill-current" /> Pause</>
-                            : <><Play className="w-3.5 h-3.5 fill-current" /> Play</>}
-                        </button>
-                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.mute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true }; setYoutubeMuted(true); }} className="gachi-sound-action" title="Mute YouTube sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
-                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50; player.setVolume(nextVolume); player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false }; setYoutubeVolume(nextVolume); setYoutubeMuted(false); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable YouTube sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
-                        <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5">
-                          <input type="range" min="0" max="100" step="1" value={youtubeVolume} onChange={(e) => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = Math.max(0, Math.min(100, Number(e.target.value) || 0)); player.setVolume(nextVolume); if (nextVolume === 0) player.mute(); else player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: nextVolume === 0 }; setYoutubeVolume(nextVolume); setYoutubeMuted(nextVolume === 0); }} className="w-20 cursor-pointer accent-rose-500" title="Set YouTube volume" aria-label="YouTube volume" />
-                          <span className="min-w-9 text-right text-[10px] font-bold tabular-nums text-slate-300">{youtubeMuted ? 'Muted' : String(youtubeVolume) + '%'}</span>
-                        </div>
-                      </div>
-                    )}
-                    {currentVideo.platform === 'tiktok' && (
-                      <div className="gachi-media-controls flex flex-wrap items-center gap-2">
-                        <button type="button" onClick={() => {
-                          const frame = tiktokIframeRef.current?.contentWindow;
-                          if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; }
-                          const isPlaying = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true;
-                          const nextIsPlaying = !isPlaying;
-                          frame.postMessage({ type: nextIsPlaying ? 'play' : 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                          setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: nextIsPlaying, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false }));
-                        }} className="gachi-sound-action gachi-sound-action-primary" title={(tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true) ? 'Pause TikTok video' : 'Play TikTok video'}>
-                          {(tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true)
-                            ? <><Pause className="w-3.5 h-3.5 fill-current" /> Pause</>
-                            : <><Play className="w-3.5 h-3.5 fill-current" /> Play</>}
-                        </button>
-                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'muted' }; frame.postMessage({ type: 'mute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: previous.requestId === currentVideo.id ? previous.isPlaying : true, isMuted: true })); }} className="gachi-sound-action" title="Mute TikTok sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
-                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'unmuted' }; frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false }); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable TikTok sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
-                      </div>
-                    )}
-                    {/* Instant Category Tag Override */}
-                    {isStaff && (
-                      <div className="flex items-center gap-1.5 bg-[#0e121a] px-2.5 py-1.5 rounded-xl border border-slate-700">
-                        <span className="text-[10px] uppercase font-bold text-slate-400">Category:</span>
-                        <select
-                          value={getVideoCategory(currentVideo)}
-                          onChange={(e) => handleCategoryChange(currentVideo.id, e.target.value)}
-                          className="bg-transparent text-xs font-bold text-purple-300 focus:outline-none cursor-pointer"
-                        >
-                          {Object.keys(CATEGORY_META).map((cat) => (
-                            <option key={cat} value={cat} className="bg-[#141926] text-white">
-                              {cat}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
-                    <button
-                      onClick={() => handleUpvote(currentVideo.id)}
-                      disabled={currentVideo.status !== 'queue' || normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
-                      title={currentVideo.status === 'playing' ? 'This video is already playing' : normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                        votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
-                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                          : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
-                      }`}
-                    >
-                      <Flame className="w-4 h-4 text-amber-400" />
-                      <span>{currentVideo.status === 'playing' ? 'Playing' : `Upvote (${currentVideo.upvotes || 0})`}</span>
-                    </button>
+                    {currentVideo.status !== 'playing' && (
+                      <button
+                        onClick={() => handleUpvote(currentVideo.id)}
+                        disabled={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
+                        title={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                          votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
+                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                            : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
+                        }`}
+                      >
+                        <ThumbsUp className="w-4 h-4" />
+                        <span>Upvote ({currentVideo.upvotes || 0})</span>
+                      </button>
+                    )}
 
                     {/* Watch Later Quick Stash */}
                     <button
