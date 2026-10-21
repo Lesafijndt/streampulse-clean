@@ -31,6 +31,7 @@ jobs:
         run: |
           npm run dev -- --host 127.0.0.1 > /tmp/whale-cum-vite.log 2>&1 &
           echo $! > /tmp/whale-cum-vite.pid
+          trap 'echo "--- Vite server diagnostics ---"; tail -n 120 /tmp/whale-cum-vite.log' EXIT
           for attempt in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:5173/ >/dev/null; then break; fi
             sleep 1

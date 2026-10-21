@@ -11,7 +11,7 @@ test('dashboard mounts in desktop and mobile browser viewports without crashing'
   page.on('pageerror',(error)=>pageErrors.push(error.stack||error.message));
   page.on('console',(message)=>{if(message.type()==='error')consoleErrors.push(message.text());});
   page.on('requestfailed',(request)=>failedRequests.push({url:request.url(),error:request.failure()?.errorText}));
-  page.on('response',(response)=>{if(response.status()>=400)badResponses.push({url:response.url(),status:response.status()});});
+  page.on('response',async(response)=>{if(response.status()>=400){const body=await response.text().catch(()=> '');badResponses.push({url:response.url(),status:response.status(),body:body.slice(0,5000)});}});
   await page.goto(baseUrl,{waitUntil:'domcontentloaded'});
   await page.waitForTimeout(2000);
   const desktop=await page.locator('#root').evaluate(node=>({childCount:node.childElementCount,textLength:(node.innerText||'').trim().length,html:node.innerHTML.slice(0,1600)}));
