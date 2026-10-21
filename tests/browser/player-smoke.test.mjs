@@ -7,16 +7,20 @@ test('dashboard mounts in desktop and mobile browser viewports without crashing'
  const browser=await chromium.launch({headless:true});
  try{
   const page=await browser.newPage({viewport:{width:1365,height:900}});
-  const pageErrors=[];page.on('pageerror',(error)=>pageErrors.push(error.message));
+  const pageErrors=[],consoleErrors=[],failedRequests=[],badResponses=[];
+  page.on('pageerror',(error)=>pageErrors.push(error.stack||error.message));
+  page.on('console',(message)=>{if(message.type()==='error')consoleErrors.push(message.text());});
+  page.on('requestfailed',(request)=>failedRequests.push({url:request.url(),error:request.failure()?.errorText}));
+  page.on('response',(response)=>{if(response.status()>=400)badResponses.push({url:response.url(),status:response.status()});});
   await page.goto(baseUrl,{waitUntil:'domcontentloaded'});
-  await page.waitForSelector('#root > *',{timeout:15000});await page.waitForTimeout(500);
-  const desktop=await page.locator('#root').evaluate(node=>({childCount:node.childElementCount,textLength:(node.innerText||'').trim().length}));
-  assert.ok(desktop.childCount>0,'React should mount a visible application shell');
-  assert.ok(desktop.textLength>0,'the application shell should not be blank');
+  await page.waitForTimeout(2000);
+  const desktop=await page.locator('#root').evaluate(node=>({childCount:node.childElementCount,textLength:(node.innerText||'').trim().length,html:node.innerHTML.slice(0,1600)}));
+  assert.ok(desktop.childCount>0&&desktop.textLength>0,
+    'React should mount a visible application shell. ' + JSON.stringify({desktop,pageErrors,consoleErrors,failedRequests,badResponses}));
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(150);
   const mobile=await page.locator('#root').evaluate(node=>({width:node.getBoundingClientRect().width,viewport:window.innerWidth}));
   assert.ok(mobile.width<=mobile.viewport+1,'root should fit a phone viewport');
-  assert.deepEqual(pageErrors,[],'the dashboard should not throw uncaught browser exceptions');
+  assert.deepEqual(pageErrors,[],'the dashboard should not throw uncaught browser exceptions: '+JSON.stringify({consoleErrors,badResponses}));
  }finally{await browser.close();}
 });
 
