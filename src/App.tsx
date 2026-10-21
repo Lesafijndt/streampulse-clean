@@ -499,6 +499,13 @@ function YediHubAppContent() {
     return { ...DEFAULT_STREAM_SETTINGS, ...compatibleSaved };
   });
 
+  // Keep queue closure synchronous so incoming Twitch messages cannot read a stale render state.
+  const queueOpenRef = useRef(Boolean(streamSettings.queueOpen));
+  const queueOpenCloudOverrideRef = useRef(null);
+  useEffect(() => {
+    queueOpenRef.current = Boolean(streamSettings.queueOpen);
+  }, [streamSettings.queueOpen]);
+
   // Videos master state. Persist locally even when Firebase is not configured or is offline.
   const [videos, setVideos] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
@@ -890,6 +897,15 @@ function YediHubAppContent() {
         const cloudConfig = snapshot.data() || {};
         if (cloudConfig.streamSettings && typeof cloudConfig.streamSettings === 'object') {
           const merged = { ...DEFAULT_STREAM_SETTINGS, ...cloudConfig.streamSettings };
+          // If the user just changed queueOpen locally, don't let a stale cloud snapshot reopen it.
+          const localQueueOverride = queueOpenCloudOverrideRef.current;
+          if (localQueueOverride && Boolean(merged.queueOpen) !== localQueueOverride.value) {
+            merged.queueOpen = localQueueOverride.value;
+          } else if (localQueueOverride) {
+            // The cloud has acknowledged the local queue setting.
+            queueOpenCloudOverrideRef.current = null;
+          }
+          queueOpenRef.current = Boolean(merged.queueOpen);
           setStreamSettings((current) => JSON.stringify(current) === JSON.stringify(merged) ? current : merged);
         }
         setRoomConfigLoadedFor(normalizedRoom);
@@ -1331,8 +1347,10 @@ function YediHubAppContent() {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
       return false;
     }
-    const requesterIsStaff = userRole === 'streamer' || userRole === 'moderator';
-    if (!streamSettings.queueOpen && !requesterIsStaff) {
+    // A closed queue blocks every new request, including requests sent by staff. Staff can
+    // still manage/play items already in the queue. Use a ref so Twitch IRC callbacks see the
+    // latest setting, not the value captured by an older render.
+    if (!queueOpenRef.current) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
       return false;
     }
@@ -1375,6 +1393,12 @@ function YediHubAppContent() {
       } catch (error) {
         console.warn('Media metadata lookup failed; using URL-based category detection.', error);
       }
+    }
+
+    // Re-check after async URL/title resolution in case the streamer closed the queue mid-request.
+    if (!queueOpenRef.current) {
+      addToast('The media request queue is currently closed by the streamer.', 'warning');
+      return false;
     }
 
     const cleanTitle = resolvedTitle ||
@@ -2091,8 +2115,8 @@ function YediHubAppContent() {
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
                 </span>
-                <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  TOTALLY NORMAL STREAM
+                <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
+                  fitta javla fih
                 </span>
               </div>
 
@@ -3040,8 +3064,14 @@ function YediHubAppContent() {
                   <input
                     type="checkbox"
                     checked={streamSettings[item.key]}
-                    onChange={(e) =>
-                      setStreamSettings({ ...streamSettings, [item.key]: e.target.checked })
+                    onChange={(e) => {
+                      const value = e.target.checked;
+                      if (item.key === 'queueOpen') {
+                        // Flip the gate immediately before React or Firestore has a chance to rerender.
+                        queueOpenRef.current = value;
+                        queueOpenCloudOverrideRef.current = { value, changedAt: Date.now() };
+                      }
+                      setStreamSettings((current) => ({ ...current, [item.key]: value }));
                     }
                     className="w-4 h-4 accent-purple-600 rounded"
                   />
