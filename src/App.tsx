@@ -1247,10 +1247,10 @@ function YediHubAppContent() {
           handleRemoveOwnRequestRef.current?.(voterLogin || username);
         } else if (lowerText === '!queue') {
           handleQueueSummaryRef.current?.(voterLogin || username);
-        } else if (/^!bigcock        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
+        } else if (/^!bigcock(?:\\s+\\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.'');
+          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
