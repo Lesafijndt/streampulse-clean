@@ -461,7 +461,12 @@ function getVideoMediaType(video = {}) {
 function getVideoCategory(video = {}) {
   const category = CATEGORY_META[video.category] ? video.category : 'General';
   if (video.categoryManuallySet === true) return category;
-  return getVideoMediaType(video) === 'Music' ? 'Music' : category;
+
+  // Keep auto-detected category and media-type filters mutually consistent.
+  // Older requests can still carry a stale "Music" category even when the
+  // stronger media-type detector identifies them as non-music.
+  if (getVideoMediaType(video) === 'Music') return 'Music';
+  return category === 'Music' ? 'General' : category;
 }
 
 /**
@@ -1361,8 +1366,8 @@ function YediHubAppContent() {
     const queued = videos.filter((video) => video.status === 'queue');
     return {
       queue: queued.length,
-      music: queued.filter((video) => getVideoCategory(video) === 'Music').length,
-      nonMusic: queued.filter((video) => getVideoCategory(video) !== 'Music').length,
+      music: queued.filter((video) => getVideoMediaType(video) === 'Music').length,
+      nonMusic: queued.filter((video) => getVideoMediaType(video) === 'Non-Music').length,
       watch_later: videos.filter((video) => video.status === 'watch_later').length,
       watched: videos.filter((video) => video.status === 'watched').length,
     };
@@ -1374,14 +1379,19 @@ function YediHubAppContent() {
   );
 
   const categoryCounts = useMemo(() => {
-    const counts = { All: videos.filter((video) => video.status === activeTab).length };
-    videos.forEach((video) => {
-      if (video.status !== activeTab) return;
+    // Counts in the category toolbar should describe the same filtered set
+    // that the list below actually renders.
+    const eligibleVideos = videos.filter((video) =>
+      video.status === activeTab &&
+      (mediaTypeFilter === 'All' || getVideoMediaType(video) === mediaTypeFilter)
+    );
+    const counts = { All: eligibleVideos.length };
+    eligibleVideos.forEach((video) => {
       const category = getVideoCategory(video);
       counts[category] = (counts[category] || 0) + 1;
     });
     return counts;
-  }, [videos, activeTab]);
+  }, [videos, activeTab, mediaTypeFilter]);
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -2719,7 +2729,7 @@ function YediHubAppContent() {
           <div className="space-y-2.5">
             <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE</div>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory(selectedCategory === 'Music' && activeTab === 'queue' ? 'All' : 'Music'); setMediaTypeFilter('All'); }} aria-pressed={selectedCategory === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${selectedCategory === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
-            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
+            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter('Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
           </div>
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
@@ -2769,10 +2779,8 @@ function YediHubAppContent() {
                   {isVerticalMedia(currentVideo) && (
                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
                       <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
-                      {currentVideo.thumbnail && !String(currentVideo.thumbnail).toLowerCase().includes('placehold.co') && (
-                        <img src={currentVideo.thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-3xl" />
-                      )}
-                      <div className="absolute inset-0 bg-[#05020a]/65 backdrop-blur-sm" />
+                      {/* Keep portrait-video letterboxing black/purple instead of blurring bright thumbnail colors behind it. */}
+                      <div className="absolute inset-0 bg-[#05020a]/80 backdrop-blur-sm" />
                       <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-transparent to-[#10051b]/40" />
                     </div>
                   )}
@@ -3315,10 +3323,11 @@ function YediHubAppContent() {
                                 {video.status === 'watched' && (
                                   <button
                                     onClick={() => handleRequeue(video)}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
+                                    title="Re-queue this video"
+                                    aria-label="Re-queue this video"
                                   >
-                                    <RotateCcw className="w-3 h-3" />
-                                    <span>Re-Queue</span>
+                                    <RotateCcw className="w-3.5 h-3.5" />
                                   </button>
                                 )}
 
