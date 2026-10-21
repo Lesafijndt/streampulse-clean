@@ -147,6 +147,18 @@ function normalizeLegacyVideoVotes(video) {
   const voters = hasVoters
     ? raw.voters.map((item) => typeof item === 'string' || typeof item === 'number' ? String(item) : '').filter(Boolean)
     : [];
+  const rawCategory = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : 'General';
+  const categoryManuallySet = raw.categoryManuallySet === true;
+  const normalizedBase = {
+    ...raw,
+    url: typeof raw.url === 'string' ? raw.url : '',
+    title,
+    note: typeof raw.note === 'string' ? raw.note : '',
+    category: rawCategory,
+    categoryManuallySet,
+  };
+  const normalizedCategory = getVideoCategory(normalizedBase);
+  const mediaType = getVideoMediaType({ ...normalizedBase, category: normalizedCategory });
 
   return {
     ...raw,
@@ -155,14 +167,10 @@ function normalizeLegacyVideoVotes(video) {
     url: typeof raw.url === 'string' ? raw.url : '',
     platform: validPlatforms.has(raw.platform) ? raw.platform : 'external',
     videoId: raw.videoId === undefined || raw.videoId === null ? '' : String(raw.videoId),
-    category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : 'General',
-    // Recompute this from normalized metadata instead of trusting outdated saved labels.
-    mediaType: detectMusicType(
-      typeof raw.url === 'string' ? raw.url : '',
-      title,
-      typeof raw.note === 'string' ? raw.note : '',
-      typeof raw.category === 'string' ? raw.category : ''
-    ),
+    category: normalizedCategory,
+    categoryManuallySet,
+    // One resolved media type drives counters, filters, and the labels shown in the queue.
+    mediaType,
     requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
     status: validStatuses.has(raw.status) ? raw.status : 'queue',
     duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
@@ -445,6 +453,21 @@ function detectMusicType(url = '', title = '', note = '', category = '') {
   return 'Non-Music';
 }
 
+// A staff-selected category is authoritative. Otherwise, strong music detection resolves
+// both the category label and the Music/Non-Music badge so every part of the UI agrees.
+function getVideoMediaType(video = {}) {
+  if (video.categoryManuallySet === true) {
+    return String(video.category || '').trim() === 'Music' ? 'Music' : 'Non-Music';
+  }
+  return detectMusicType(video.url || '', video.title || '', video.note || '', video.category || '');
+}
+
+function getVideoCategory(video = {}) {
+  const category = CATEGORY_META[video.category] ? video.category : 'General';
+  if (video.categoryManuallySet === true) return category;
+  return getVideoMediaType(video) === 'Music' ? 'Music' : category;
+}
+
 /**
  * Standardize media platform parsing
  */
@@ -710,6 +733,7 @@ function YediHubAppContent() {
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [youtubeVolume, setYoutubeVolume] = useState(100);
   const [youtubeMuted, setYoutubeMuted] = useState(false);
+  const [youtubePlaybackState, setYoutubePlaybackState] = useState({ requestId: '', isPlaying: true });
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [tiktokPlaybackState, setTikTokPlaybackState] = useState({ requestId: '', isPlaying: true, isMuted: false });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -1008,7 +1032,6 @@ function YediHubAppContent() {
             const normalized = {
               ...normalizeLegacyVideoVotes(data),
               id: d.id,
-              mediaType: detectMusicType(data.url, data.title, data.note, data.category),
             };
             if (!Array.isArray(data.voters) && !legacyVoteMigrationRef.current.has(d.id)) {
               legacyVoteMigrationRef.current.add(d.id);
@@ -1347,8 +1370,8 @@ function YediHubAppContent() {
     const queued = videos.filter((video) => video.status === 'queue');
     return {
       queue: queued.length,
-      music: queued.filter((video) => detectMusicType(video.url, video.title, video.note, video.category) === 'Music').length,
-      nonMusic: queued.filter((video) => detectMusicType(video.url, video.title, video.note, video.category) !== 'Music').length,
+      music: queued.filter((video) => getVideoCategory(video) === 'Music').length,
+      nonMusic: queued.filter((video) => getVideoCategory(video) !== 'Music').length,
       watch_later: videos.filter((video) => video.status === 'watch_later').length,
       watched: videos.filter((video) => video.status === 'watched').length,
     };
@@ -1363,7 +1386,7 @@ function YediHubAppContent() {
     const counts = { All: videos.filter((video) => video.status === activeTab).length };
     videos.forEach((video) => {
       if (video.status !== activeTab) return;
-      const category = CATEGORY_META[video.category] ? video.category : 'General';
+      const category = getVideoCategory(video);
       counts[category] = (counts[category] || 0) + 1;
     });
     return counts;
@@ -1381,8 +1404,8 @@ function YediHubAppContent() {
   const filteredVideos = useMemo(() => {
     return videos
       .filter((v) => v.status === activeTab)
-      .filter((v) => (selectedCategory === 'All' ? true : v.category === selectedCategory))
-      .filter((v) => mediaTypeFilter === 'All' || detectMusicType(v.url, v.title, v.note, v.category) === mediaTypeFilter)
+      .filter((v) => (selectedCategory === 'All' ? true : getVideoCategory(v) === selectedCategory))
+      .filter((v) => mediaTypeFilter === 'All' || getVideoMediaType(v) === mediaTypeFilter)
       .filter((v) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
@@ -1711,11 +1734,14 @@ function YediHubAppContent() {
         : parsed.platform === 'kick'
           ? `Kick Clip (${parsed.videoId})`
         : 'Community Requested Media');
-    const finalCategory =
-      manualCategory && manualCategory !== 'Auto'
-        ? manualCategory
-        : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
-    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note, finalCategory);
+    const categoryManuallySet = Boolean(manualCategory && manualCategory !== 'Auto');
+    const detectedCategory = categoryManuallySet
+      ? manualCategory
+      : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
+    const mediaType = categoryManuallySet
+      ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
+      : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
+    const finalCategory = !categoryManuallySet && mediaType === 'Music' ? 'Music' : detectedCategory;
 
     const newVideo = {
       id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
@@ -1725,6 +1751,7 @@ function YediHubAppContent() {
       platform: parsed.platform,
       videoId: parsed.videoId,
       category: finalCategory,
+      categoryManuallySet,
       mediaType,
       duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? '00:45' : '03:45',
       durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? 45 : 225,
@@ -1967,9 +1994,11 @@ function YediHubAppContent() {
     if (!video || video.platform !== 'youtube' || !video.videoId || !iframe) {
       youtubePlayerRef.current = null;
       youtubePlaybackInfoRef.current = { currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 };
+      setYoutubePlaybackState({ requestId: video?.id || '', isPlaying: false });
       return undefined;
     }
 
+    setYoutubePlaybackState({ requestId: video.id, isPlaying: true });
     const playerWindow = iframe.contentWindow;
     if (!playerWindow) return undefined;
     let cancelled = false;
@@ -2034,6 +2063,9 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        if ((stateFromEvent === 0 || stateFromEvent === 1 || stateFromEvent === 2) && currentVideoRef.current?.id === video.id) {
+          setYoutubePlaybackState({ requestId: video.id, isPlaying: stateFromEvent === 1 });
+        }
         if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
         if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
           endedHandled = true;
@@ -2179,7 +2211,7 @@ function YediHubAppContent() {
   };
 
   const handleCategoryChange = (videoId, newCategory) => {
-    syncUpdateVideo(videoId, { category: newCategory });
+    syncUpdateVideo(videoId, { category: newCategory, categoryManuallySet: true, mediaType: newCategory === 'Music' ? 'Music' : 'Non-Music' });
     addToast(`Category updated to "${newCategory}"`, 'success');
   };
 
@@ -2645,8 +2677,8 @@ function YediHubAppContent() {
           </div>
           <div className="space-y-2.5">
             <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE</div>
-            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Music' ? 'All' : 'Music'); }} aria-pressed={mediaTypeFilter === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
-            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
+            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory(selectedCategory === 'Music' && activeTab === 'queue' ? 'All' : 'Music'); setMediaTypeFilter('All'); }} aria-pressed={selectedCategory === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${selectedCategory === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
+            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
           </div>
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
@@ -2659,11 +2691,11 @@ function YediHubAppContent() {
               <div className="flex items-center gap-2 min-w-0">
                 {currentVideo && (
                   <>
-                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
-                      {currentVideo.category}
+                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[getVideoCategory(currentVideo)]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
+                      {getVideoCategory(currentVideo)}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                      {detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)}
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${getVideoMediaType(currentVideo) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                      {getVideoMediaType(currentVideo)}
                     </span>
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
@@ -2687,7 +2719,7 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
-                  className={`relative w-full bg-black flex items-center justify-center overflow-hidden transition-all ${
+                  className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
                     isTheatreMode
                       ? 'h-[75vh] min-h-[580px] max-h-[960px]'
                       : 'h-[62vh] min-h-[460px] max-h-[780px]'
@@ -2695,12 +2727,12 @@ function YediHubAppContent() {
                 >
                   {isVerticalMedia(currentVideo) && (
                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
-                      <div className="absolute inset-0 bg-gradient-to-br from-[#111827] via-[#312e81] to-[#164e63]" />
+                      <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
                       {currentVideo.thumbnail && !String(currentVideo.thumbnail).toLowerCase().includes('placehold.co') && (
-                        <img src={currentVideo.thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-55 blur-3xl" />
+                        <img src={currentVideo.thumbnail} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-3xl" />
                       )}
-                      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-                      <div className="absolute inset-0 bg-gradient-to-r from-black/25 via-transparent to-black/25" />
+                      <div className="absolute inset-0 bg-[#05020a]/65 backdrop-blur-sm" />
+                      <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-transparent to-[#10051b]/40" />
                     </div>
                   )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
@@ -2837,8 +2869,19 @@ function YediHubAppContent() {
                   <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center gap-2">
                     {currentVideo.platform === 'youtube' && (
                       <div className="gachi-media-controls flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] p-2">
-                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.playVideo(); }} className="gachi-sound-action" title="Play YouTube video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
-                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.pauseVideo(); }} className="gachi-sound-action" title="Pause YouTube video"><Pause className="w-3.5 h-3.5 fill-current" /> Pause</button>
+                        <button type="button" onClick={() => {
+                          const player = youtubePlayerRef.current;
+                          if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; }
+                          const isPlaying = youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true;
+                          const nextIsPlaying = !isPlaying;
+                          if (nextIsPlaying) player.playVideo(); else player.pauseVideo();
+                          youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, playerState: nextIsPlaying ? 1 : 2 };
+                          setYoutubePlaybackState({ requestId: currentVideo.id, isPlaying: nextIsPlaying });
+                        }} className="gachi-sound-action gachi-sound-action-primary" title={(youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true) ? 'Pause YouTube video' : 'Play YouTube video'}>
+                          {(youtubePlaybackState.requestId === currentVideo.id ? youtubePlaybackState.isPlaying : true)
+                            ? <><Pause className="w-3.5 h-3.5 fill-current" /> Pause</>
+                            : <><Play className="w-3.5 h-3.5 fill-current" /> Play</>}
+                        </button>
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.mute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true }; setYoutubeMuted(true); }} className="gachi-sound-action" title="Mute YouTube sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50; player.setVolume(nextVolume); player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false }; setYoutubeVolume(nextVolume); setYoutubeMuted(false); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable YouTube sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
                         <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5">
@@ -2849,23 +2892,28 @@ function YediHubAppContent() {
                     )}
                     {currentVideo.platform === 'tiktok' && (
                       <div className="gachi-media-controls flex flex-wrap items-center gap-2">
-                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: true, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false })); }} className="gachi-sound-action" title="Play TikTok video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
-                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } frame.postMessage({ type: 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: false, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false })); }} className="gachi-sound-action" title="Pause TikTok video"><Pause className="w-3.5 h-3.5 fill-current" /> Pause</button>
+                        <button type="button" onClick={() => {
+                          const frame = tiktokIframeRef.current?.contentWindow;
+                          if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; }
+                          const isPlaying = tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true;
+                          const nextIsPlaying = !isPlaying;
+                          frame.postMessage({ type: nextIsPlaying ? 'play' : 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                          setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: nextIsPlaying, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false }));
+                        }} className="gachi-sound-action gachi-sound-action-primary" title={(tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true) ? 'Pause TikTok video' : 'Play TikTok video'}>
+                          {(tiktokPlaybackState.requestId === currentVideo.id ? tiktokPlaybackState.isPlaying : true)
+                            ? <><Pause className="w-3.5 h-3.5 fill-current" /> Pause</>
+                            : <><Play className="w-3.5 h-3.5 fill-current" /> Play</>}
+                        </button>
                         <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'muted' }; frame.postMessage({ type: 'mute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: previous.requestId === currentVideo.id ? previous.isPlaying : true, isMuted: true })); }} className="gachi-sound-action" title="Mute TikTok sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
                         <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'unmuted' }; frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false }); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable TikTok sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
                       </div>
-                    )}
-                    {currentVideo.platform === 'tiktok' && (
-                      <span className="max-w-56 text-[10px] leading-4 text-slate-500" title="TikTok's embedded player does not allow external exact-volume control.">
-                        Exact volume: use the speaker control inside the video. App/chat controls can mute or unmute only.
-                      </span>
                     )}
                     {/* Instant Category Tag Override */}
                     {isStaff && (
                       <div className="flex items-center gap-1.5 bg-[#0e121a] px-2.5 py-1.5 rounded-xl border border-slate-700">
                         <span className="text-[10px] uppercase font-bold text-slate-400">Category:</span>
                         <select
-                          value={currentVideo.category}
+                          value={getVideoCategory(currentVideo)}
                           onChange={(e) => handleCategoryChange(currentVideo.id, e.target.value)}
                           className="bg-transparent text-xs font-bold text-purple-300 focus:outline-none cursor-pointer"
                         >
@@ -3061,7 +3109,7 @@ function YediHubAppContent() {
               ) : (
                 filteredVideos.map((video, idx) => {
                   const isCurrent = currentVideo && currentVideo.id === video.id;
-                  const catObj = CATEGORY_META[video.category] || CATEGORY_META.General;
+                  const resolvedCategory = getVideoCategory(video); const catObj = CATEGORY_META[resolvedCategory] || CATEGORY_META.General;
 
                   return (
                     <div
@@ -3138,7 +3186,7 @@ function YediHubAppContent() {
                             {/* Editable Category Dropdown for 1-Click Fixes */}
                             {isStaff ? (
                               <select
-                                value={video.category}
+                                value={resolvedCategory}
                                 onChange={(e) => handleCategoryChange(video.id, e.target.value)}
                                 className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border cursor-pointer focus:outline-none ${catObj.badgeBg}`}
                                 title="Click to fix or change category"
@@ -3151,12 +3199,12 @@ function YediHubAppContent() {
                               </select>
                             ) : (
                               <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${catObj.badgeBg}`}>
-                                {video.category}
+                                {resolvedCategory}
                               </span>
                             )}
 
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ detectMusicType(video.url, video.title, video.note, video.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                              {detectMusicType(video.url, video.title, video.note, video.category)}
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ getVideoMediaType(video) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                              {getVideoMediaType(video)}
                             </span>
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
                               {video.platform}
