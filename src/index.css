@@ -1731,3 +1731,165 @@ body { background: #03070b; }
   background: linear-gradient(90deg, #030207 0%, #090511 50%, #030207 100%) !important;
   opacity: 1 !important;
 }
+
+
+/* Compact queue pass: fit more requests in the right rail without hiding queue actions. */
+@media (min-width: 1200px) {
+  .gachi-queue-panel {
+    height: calc(100vh - 7.25rem) !important;
+    max-height: calc(100vh - 7.25rem) !important;
+    min-height: 0 !important;
+    gap: .45rem !important;
+    padding: .6rem !important;
+  }
+  .gachi-queue-panel > div:first-child {
+    flex: 0 0 auto !important;
+  }
+  .gachi-queue-feed {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding-right: .2rem !important;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+.gachi-queue-feed {
+  gap: .45rem !important;
+  padding-top: .15rem !important;
+}
+.gachi-queue-item {
+  gap: .35rem !important;
+  padding: .42rem !important;
+  align-content: start !important;
+}
+.gachi-queue-item > div:first-child {
+  gap: .4rem !important;
+  align-items: center !important;
+}
+.gachi-queue-details {
+  gap: .2rem !important;
+}
+.gachi-queue-details > div:first-child {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: .25rem !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+.gachi-queue-details > div:first-child > * {
+  flex-shrink: 0 !important;
+  margin: 0 !important;
+}
+.gachi-queue-details > div:first-child select,
+.gachi-queue-details > div:first-child > span:first-of-type {
+  max-width: 5.5rem !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.gachi-queue-details > div:first-child select {
+  padding: .08rem .25rem !important;
+  font-size: .58rem !important;
+}
+.gachi-queue-details h4 {
+  display: block !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  -webkit-line-clamp: unset !important;
+  font-size: .73rem !important;
+  line-height: 1.2 !important;
+  margin: 0 !important;
+}
+.gachi-queue-details > div:last-child {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: .25rem !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  font-size: .6rem !important;
+  line-height: 1.15 !important;
+}
+.gachi-queue-details > div:last-child > span {
+  flex-shrink: 0 !important;
+}
+.gachi-queue-details > div:last-child > span:last-child {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.gachi-queue-position-badge {
+  padding: .08rem .28rem !important;
+  border-radius: 4px !important;
+  font-size: .52rem !important;
+  line-height: 1.25 !important;
+  letter-spacing: .03em !important;
+  white-space: nowrap !important;
+}
+.gachi-queue-actions {
+  flex-wrap: nowrap !important;
+  justify-content: flex-end !important;
+  align-self: stretch !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  padding-left: 0 !important;
+  gap: .25rem !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142,66,186,.45) transparent;
+}
+.gachi-queue-actions button {
+  flex: 0 0 auto !important;
+  padding: .24rem .38rem !important;
+  min-height: 1.55rem !important;
+  border-radius: .4rem !important;
+  font-size: .62rem !important;
+  line-height: 1.1 !important;
+}
+.gachi-queue-actions button svg {
+  width: .75rem !important;
+  height: .75rem !important;
+}
+.gachi-queue-actions .gachi-queue-play-now {
+  padding: .28rem .48rem !important;
+}
+@media (max-width: 1199px) {
+  .gachi-queue-feed { gap: .45rem !important; }
+  .gachi-queue-item { gap: .35rem !important; padding: .42rem !important; }
+  .gachi-queue-details { gap: .2rem !important; }
+  .gachi-queue-details h4 {
+    display: block !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+  }
+  .gachi-queue-details > div:first-child {
+    flex-wrap: nowrap !important;
+    overflow: hidden !important;
+    gap: .25rem !important;
+  }
+  .gachi-queue-position-badge { font-size: .52rem !important; padding: .08rem .28rem !important; }
+  .gachi-queue-actions {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding-left: 0 !important;
+    gap: .25rem !important;
+    justify-content: flex-end !important;
+  }
+  .gachi-queue-actions button { flex: 0 0 auto !important; }
+}
+@media (max-width: 767px) {
+  .gachi-queue-feed { max-height: min(62vh, 580px) !important; min-height: 120px !important; }
+  .gachi-queue-item > div:first-child { gap: .35rem !important; }
+  .gachi-queue-details > div:first-child select,
+  .gachi-queue-details > div:first-child > span:first-of-type { max-width: 4.5rem !important; }
+}

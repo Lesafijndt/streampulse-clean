@@ -3745,8 +3745,9 @@ function YediHubAppContent() {
                 filteredVideos.map((video, idx) => {
                   const isCurrent = currentVideo && currentVideo.id === video.id;
                   const queueRank = queueRankById.get(String(video.id)) ?? (idx + 1);
-                  const queuePositionLabel = activeTab === 'queue' && video.status === 'queue' && queueRank <= 3
-                    ? queueRank === 1 ? 'UP NEXT' : queueRank === 2 ? 'COMING UP' : 'IN ROTATION'
+                  // Keep the queue rank visible for every row; only the first waiting item needs a badge.
+                  const queuePositionLabel = activeTab === 'queue' && video.status === 'queue' && queueRank === 1
+                    ? 'UP NEXT'
                     : '';
                   const resolvedCategory = getVideoCategory(video); const catObj = CATEGORY_META[resolvedCategory] || CATEGORY_META.General;
 
@@ -3853,7 +3854,7 @@ function YediHubAppContent() {
                               {video.platform}
                             </span>
                             {queuePositionLabel && (
-                              <span className={`px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide border ${queueRank === 1 ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-purple-500/10 border-purple-500/20 text-purple-200'}`}>
+                              <span className="gachi-queue-position-badge px-1.5 py-0.5 rounded border bg-emerald-500/15 border-emerald-500/30 text-emerald-300">
                                 {queuePositionLabel}
                               </span>
                             )}
