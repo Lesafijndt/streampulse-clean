@@ -1258,7 +1258,7 @@ function YediHubAppContent() {
       setCloudSynced(false);
       setSyncStatusText('Cloud unavailable — local save is active');
     }
-  }, [db, firebaseUser, channelRoom, appId, cloudReconnectTick];
+  }, [db, firebaseUser, channelRoom, appId, cloudReconnectTick]);
 
   // Persist the channel's moderation settings in Firestore so they follow the broadcaster
   // across browsers/devices. The room name itself is also carried in the ?channel= URL.
