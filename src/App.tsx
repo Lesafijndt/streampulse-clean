@@ -1708,14 +1708,15 @@ function YediHubAppContent() {
   };
   const handlePlayNow = (video) => {
     exitTikTokFullscreenBeforeTrackChange();
-    // Set current active playing to watched, set selected to playing
+    // Keep real playback chronology separate from the time a viewer requested the video.
+    const playedAt = Date.now();
     videos.forEach((v) => {
-      if (v.status === 'playing') {
-        syncUpdateVideo(v.id, { status: 'watched', watchedAt: 'Just now' });
+      if (v.status === 'playing' && v.id !== video.id) {
+        syncUpdateVideo(v.id, { status: 'watched', watchedAt: 'Just now', playedAt });
       }
     });
 
-    syncUpdateVideo(video.id, { status: 'playing', pinned: false });
+    syncUpdateVideo(video.id, { status: 'playing', pinned: false, playedAt });
     setSimProgress(0);
     addToast(`Now Playing: ${video.title.slice(0, 32)}...`, 'info');
   };
@@ -1732,11 +1733,12 @@ function YediHubAppContent() {
       .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
       .sort(compareQueueOrder)[0] || null;
     const updatesById = new Map();
+    const playedAt = Date.now();
     videos.filter((video) => video.status === 'playing').forEach((video) => {
-      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now' });
+      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now', playedAt });
     });
-    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now' });
-    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false });
+    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now', playedAt });
+    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false, playedAt });
 
     setVideos((previous) => previous.map((video) => {
       const updates = updatesById.get(video.id);
@@ -1844,7 +1846,11 @@ function YediHubAppContent() {
     if (!outgoing) return;
     const previouslyPlayed = videos
       .filter((video) => video.status === 'watched' && video.id !== outgoing.id)
-      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))[0];
+      // Newer records use the time playback actually ended; timestamp is only a legacy fallback.
+      .sort((a, b) =>
+        (Number(b.playedAt) || Number(b.timestamp) || 0) -
+        (Number(a.playedAt) || Number(a.timestamp) || 0)
+      )[0];
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
