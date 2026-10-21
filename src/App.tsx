@@ -2707,7 +2707,7 @@ function YediHubAppContent() {
   };
 
   // Player and bridge callbacks always use current handlers and queue state.
-  handleSkipNextRef.current = handleSkipNext;  handleSkipNextRef.current = handleSkipNext;
+  handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
     const playing = currentVideoRef.current || currentVideo;
