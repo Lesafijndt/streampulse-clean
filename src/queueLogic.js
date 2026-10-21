@@ -300,9 +300,8 @@ export function validateQueueBackup(value) {
 }
 
 
-export function buildQueueStatistics(videos = [], now = Date.now(), recentWindowMs = 3 * 60 * 60 * 1000) {
+export function buildQueueStatistics(videos = []) {
   const items = Array.isArray(videos) ? videos : [];
-  const cutoff = Number(now) - Math.max(0, Number(recentWindowMs) || 0);
   const countsFor = (selector, sourceItems = items) => {
     const totals = new Map();
     sourceItems.forEach((video) => {
@@ -318,51 +317,28 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
     const login = String(video?.requestedBy || '').trim().replace(/^@/, '').toLowerCase();
     return login && login !== 'viewer' && login !== 'unknown' ? login : '';
   };
-  const timestampOf = (value) => {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    if (typeof value === 'string') {
-      const parsed = Date.parse(value);
-      return Number.isFinite(parsed) ? parsed : 0;
-    }
-    return 0;
-  };
-  const requestsRecent = items.filter((video) => {
-    const timestamp = timestampOf(video?.timestamp) || timestampOf(video?.createdAt);
-    return timestamp >= cutoff && timestamp <= Number(now);
-  });
-  const watchedRecent = items.filter((video) => {
-    if (video?.status !== 'watched') return false;
-    const playedAt = timestampOf(video?.playedAt) || timestampOf(video?.watchedAt);
-    return playedAt >= cutoff && playedAt <= Number(now);
-  });
   const requesters = new Set(items.map(requesterOf).filter(Boolean));
-  const recentRequesters = new Set(requestsRecent.map(requesterOf).filter(Boolean));
-  // Rankings match the board's "last 3 hours" scope, not all entries still retained.
-  const requesterCounts = countsFor(requesterOf, requestsRecent);
+  const requesterCounts = countsFor(requesterOf);
   const platforms = countsFor((video) => {
     const platform = String(video?.platform || 'external').toLowerCase();
     return platform === 'web' ? 'external' : platform;
-  }, requestsRecent);
-  const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General', requestsRecent);
+  });
+  const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General');
   const queued = items.filter((video) => video?.status === 'queue');
+  const historyItems = items.filter((video) => video?.status === 'watched');
   const queueDurationEstimates = queued.map((video) => ({ video, ...getDurationEstimate(video) }));
   const queueEstimatedItems = queueDurationEstimates.filter((entry) => entry.estimated);
   const queueKnownItems = queueDurationEstimates.filter((entry) => !entry.estimated);
   return {
     totalRequests: items.length,
     totalRequesters: requesters.size,
-    requestsLastWindow: requestsRecent.length,
-    requestersLastWindow: recentRequesters.size,
     queueCount: queued.length,
+    historyCount: historyItems.length,
     queueDurationSeconds: queueDurationEstimates.reduce((total, entry) => total + entry.seconds, 0),
     queueKnownDurationSeconds: queueKnownItems.reduce((total, entry) => total + entry.seconds, 0),
     queueEstimatedDurationSeconds: queueEstimatedItems.reduce((total, entry) => total + entry.seconds, 0),
     queueKnownCount: queueKnownItems.length,
     queueEstimatedCount: queueEstimatedItems.length,
-    // This counts transitions into the watched/history status, including skips.
-    historyMovesLastWindow: watchedRecent.length,
-    watchedLastWindow: watchedRecent.length,
     mostPopularPlatform: platforms[0] || null,
     mostPopularGenre: genres[0] || null,
     mostActiveRequester: requesterCounts[0] || null,
@@ -370,7 +346,6 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
     genres: genres.slice(0, 4)
   };
 }
-
 
 export function formatRuntimeHoursMinutes(totalSeconds) {
   const seconds = Number(totalSeconds);

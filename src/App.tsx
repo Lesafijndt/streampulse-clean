@@ -3276,17 +3276,17 @@ function YediHubAppContent() {
             </div>
             {statsExpanded && (
               <div className="space-y-3">
-            <p className="text-[9px] text-slate-500">Recent activity · last 3 hours · retained items only</p>
+            <p className="text-[9px] text-slate-500">Current snapshot · all retained queue/history items</p>
 
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><Users className="h-3 w-3" /> People</div>
-                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.requestersLastWindow}</div>
+                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequesters}</div>
                 <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequesters} unique in saved items</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><TrendingUp className="h-3 w-3" /> Requests</div>
-                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.requestsLastWindow}</div>
+                <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.totalRequests}</div>
                 <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequests} retained items</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
@@ -3296,8 +3296,8 @@ function YediHubAppContent() {
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><CheckCircle2 className="h-3 w-3" /> Moved to history</div>
-                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.historyMovesLastWindow}</div>
-                <div className="mt-1 text-[9px] text-slate-500">in the last 3h</div>
+                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.historyCount}</div>
+                <div className="mt-1 text-[9px] text-slate-500">currently retained history items</div>
               </div>
             </div>
 
@@ -3347,14 +3347,14 @@ function YediHubAppContent() {
                         <div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-rose-500" style={{ width: (Math.max(7, Math.round((item.count / Math.max(1, queueStats.genres[0]?.count || 1)) * 100))) + '%' }} />
                       </div>
                     </div>
-                  )) : <p className="text-[10px] text-slate-600">No requests in the last 3 hours</p>}
+                  )) : <p className="text-[10px] text-slate-600">No retained requests yet</p>}
                 </div>
               </div>
             </div>
 
             {queueStats.mostActiveRequester && (
               <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[9px]">
-                <span className="text-slate-500">Top requester · 3h</span>
+                <span className="text-slate-500">Top requester · saved items</span>
                 <span className="max-w-[130px] truncate font-bold text-fuchsia-200">@{queueStats.mostActiveRequester.label} · {queueStats.mostActiveRequester.count}</span>
               </div>
             )}

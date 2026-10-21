@@ -156,7 +156,7 @@ test('Queue backup validation rejects unsafe URLs, duplicate IDs, and unrelated 
 });
 
 
-test('Live queue statistics report recent requesters, platforms, genres, runtime, and recent plays', async () => {
+test('Queue statistics report retained requesters, platforms, genres, runtime, and history', async () => {
   const { buildQueueStatistics } = await import('../src/queueLogic.js');
   const now = 10_000_000_000;
   const data = [
@@ -169,14 +169,13 @@ test('Live queue statistics report recent requesters, platforms, genres, runtime
   const stats = buildQueueStatistics(data, now);
   assert.equal(stats.totalRequests, 5);
   assert.equal(stats.totalRequesters, 4);
-  assert.equal(stats.requestsLastWindow, 4);
-  assert.equal(stats.requestersLastWindow, 3);
+  assert.equal(stats.totalRequests, 5);
+  assert.equal(stats.totalRequesters, 4);
   assert.equal(stats.queueCount, 3);
   assert.equal(stats.queueDurationSeconds, 180 + 120 + 45);
-  assert.equal(stats.watchedLastWindow, 2);
-  assert.equal(stats.historyMovesLastWindow, 2);
-  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
-  assert.deepEqual(stats.mostPopularGenre, { label: 'Music', count: 2 });
+  assert.equal(stats.historyCount, 2);
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'tiktok', count: 2 });
+  assert.deepEqual(stats.mostPopularGenre, { label: 'Memes', count: 2 });
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
 });
 
@@ -240,7 +239,7 @@ test('Queue runway stats separate known runtime from estimates', async () => {
   assert.equal(stats.queueDurationSeconds, 285);
 });
 
-test('Stats platform, genre and requester rankings use the declared recent window', async () => {
+test('Stats platform, genre and requester rankings use all retained items', async () => {
   const { buildQueueStatistics } = await import('../src/queueLogic.js');
   const now = 50_000_000_000;
   const stats = buildQueueStatistics([
@@ -248,8 +247,8 @@ test('Stats platform, genre and requester rankings use the declared recent windo
     { id: 'recent-2', status: 'watched', requestedBy: 'ALICE', platform: 'youtube', category: 'Music', timestamp: now - 2000 },
     { id: 'recent-3', status: 'queue', requestedBy: 'bob', platform: 'tiktok', category: 'Memes', timestamp: now - 3000 },
     { id: 'old-1', status: 'watched', requestedBy: 'carol', platform: 'tiktok', category: 'Memes', timestamp: now - 4 * 60 * 60 * 1000 }
-  ], now);
-  assert.equal(stats.requestsLastWindow, 3);
+  ]);
+  assert.equal(stats.totalRequests, 4);
   assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
   assert.deepEqual(stats.mostPopularGenre, { label: 'Music', count: 2 });
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
