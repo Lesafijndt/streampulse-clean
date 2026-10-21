@@ -156,7 +156,13 @@ function normalizeLegacyVideoVotes(video) {
     platform: validPlatforms.has(raw.platform) ? raw.platform : 'external',
     videoId: raw.videoId === undefined || raw.videoId === null ? '' : String(raw.videoId),
     category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : 'General',
-    mediaType: typeof raw.mediaType === 'string' ? raw.mediaType : '',
+    // Recompute this from normalized metadata instead of trusting outdated saved labels.
+    mediaType: detectMusicType(
+      typeof raw.url === 'string' ? raw.url : '',
+      title,
+      typeof raw.note === 'string' ? raw.note : '',
+      typeof raw.category === 'string' ? raw.category : ''
+    ),
     requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
     status: validStatuses.has(raw.status) ? raw.status : 'queue',
     duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
@@ -1693,7 +1699,7 @@ function YediHubAppContent() {
       manualCategory && manualCategory !== 'Auto'
         ? manualCategory
         : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
-    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
+    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note, finalCategory);
 
     const newVideo = {
       id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
@@ -2680,7 +2686,7 @@ function YediHubAppContent() {
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                       {currentVideo.category}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
                       {detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)}
                     </span>
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
