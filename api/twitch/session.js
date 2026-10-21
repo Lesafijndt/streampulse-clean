@@ -1,6 +1,3 @@
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 
 function parseCookies(header = '') {
@@ -26,9 +23,15 @@ function clearAuthCookies(res) {
 function unauthenticated(res) {
   return res.status(200).json({ authenticated: false, role: 'viewer', user: null });
 }
-function getFirebaseAdminAuth() {
+async function getFirebaseAdminAuth() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not configured');
+  // Load Firebase Admin lazily so a startup/module-loading issue cannot crash
+  // the entire Twitch session endpoint before its handler runs.
+  const [{ cert, getApps, initializeApp }, { getAuth: getAdminAuth }] = await Promise.all([
+    import('firebase-admin/app'),
+    import('firebase-admin/auth')
+  ]);
   let serviceAccount;
   try { serviceAccount = JSON.parse(raw); } catch {
     try { serviceAccount = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); }
@@ -92,7 +95,8 @@ export default async function handler(req, res) {
     let firebaseCustomToken = '';
     let firebaseTokenReady = false;
     try {
-      firebaseCustomToken = await getFirebaseAdminAuth().createCustomToken(`twitch_${me.id}`, {
+      const adminAuth = await getFirebaseAdminAuth();
+      firebaseCustomToken = await adminAuth.createCustomToken(`twitch_${me.id}`, {
         yediAuthorized: true,
         twitchLogin: login,
         role
