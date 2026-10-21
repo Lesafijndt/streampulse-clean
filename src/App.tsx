@@ -3000,7 +3000,7 @@ function YediHubAppContent() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Streamer Safety & Queue Rules</h3>
+                <h3 className="text-base font-bold text-white">Arena Control Rules</h3>
               </div>
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -3013,7 +3013,7 @@ function YediHubAppContent() {
             <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
                 <div className="font-bold text-amber-300">OPEN FLOOR • NO MERCY</div>
-                <p className="text-[11px] text-slate-400">Every request enters the live queue immediately while the arena is open. No approval step, no waiting room. Categories are labels only.</p>
+                <p className="text-[11px] text-slate-400">Requests hit the queue immediately while the arena is open. Full send, no waiting room. Categories are labels only.</p>
               </div>
 
               {[
@@ -3045,7 +3045,7 @@ function YediHubAppContent() {
               <button
                 onClick={() => {
                   setShowSettingsModal(false);
-                  addToast('Streamer Queue Rules updated!', 'success');
+                  addToast('Arena rules updated!', 'success');
                 }}
                 className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
               >
