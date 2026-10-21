@@ -2512,9 +2512,9 @@ function YediHubAppContent() {
               <div>
                 <div
                   className={`relative w-full bg-black flex items-center justify-center overflow-hidden transition-all ${
-                    isVerticalMedia(currentVideo)
-                      ? (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[900px]' : 'h-[55vh] min-h-[460px] max-h-[700px]')
-                      : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
+                    isTheatreMode
+                      ? 'h-[72vh] min-h-[560px] max-h-[920px]'
+                      : 'h-[58vh] min-h-[430px] max-h-[720px]'
                   }`}
                 >
                   {isVerticalMedia(currentVideo) && (
