@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WHALE CUM player bridge fixture</title>
+<style>body{margin:0;min-height:100vh;background:#050a11;color:#f5f7fb;font:16px system-ui,sans-serif;display:grid;place-items:center}main{width:min(90vw,560px);padding:24px;border:1px solid #264052;border-radius:18px;background:#0d1722}h1{font-size:1.15rem;margin-top:0}.buttons{display:flex;flex-wrap:wrap;gap:10px}button{border:1px solid #34566b;color:#f5f7fb;background:#172a3a;border-radius:10px;padding:10px 14px;cursor:pointer}pre{background:#03070b;border-radius:10px;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere}</style></head>
+<body><main><h1>Player command bridge regression fixture</h1><p>Uses the same provider command helpers as the app, with cross-origin player windows mocked.</p>
+<div class="buttons"><button id="yt-play">YouTube play</button><button id="yt-pause">YouTube pause</button><button id="tt-play">TikTok play</button><button id="tt-pause">TikTok pause</button><button id="tt-mute">TikTok mute</button><button id="tt-unmute">TikTok unmute</button></div><pre id="log" aria-live="polite">Waiting for commands…</pre></main>
+<script type="module">
+import { postTikTokPlayerCommand, postYouTubePlayerCommand } from '../../src/playerBridge.js';
+window.__playerCommands=[];
+const target={postMessage(data,origin){window.__playerCommands.push({data,origin});render();}};
+const render=()=>{document.querySelector('#log').textContent=JSON.stringify(window.__playerCommands);};
+document.querySelector('#yt-play').addEventListener('click',()=>postYouTubePlayerCommand(target,'playVideo'));
+document.querySelector('#yt-pause').addEventListener('click',()=>postYouTubePlayerCommand(target,'pauseVideo'));
+document.querySelector('#tt-play').addEventListener('click',()=>postTikTokPlayerCommand(target,'play'));
+document.querySelector('#tt-pause').addEventListener('click',()=>postTikTokPlayerCommand(target,'pause'));
+document.querySelector('#tt-mute').addEventListener('click',()=>postTikTokPlayerCommand(target,'mute'));
+document.querySelector('#tt-unmute').addEventListener('click',()=>postTikTokPlayerCommand(target,'unMute'));
+window.__playerFixtureReady=true;
+</script></body></html>
