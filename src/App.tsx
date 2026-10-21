@@ -1242,15 +1242,18 @@ function YediHubAppContent() {
         const isRequestCommand = lowerText.startsWith('!assr ');
         const volumeCommand = parseModVolumeCommand(lowerText);
         if (isRequestCommand) {
-          // Use the canonical Twitch login as requester identity so self-vote protection is reliable.
           handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
-        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
+        } else if (lowerText === '!remove' || lowerText === '!unrequest') {
+          handleRemoveOwnRequestRef.current?.(voterLogin || username);
+        } else if (lowerText === '!queue') {
+          handleQueueSummaryRef.current?.(voterLogin || username);
+        } else if (/^!bigcock        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('Yedi Hub commands: !assr <URL> requests a YouTube/Shorts, Twitch clip, or TikTok video. !position (aliases !queue / !when / !myqueue) shows your queue spot and estimated wait. !bigcock [number] upvotes a waiting video; !bigcock 2 votes for queue slot #2. One vote per person per video, and you cannot vote for your own request.');
+          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.'');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
-        } else if (['!position', '!queue', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
+        } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
           handleSkipNextRef.current?.();
@@ -1317,23 +1320,47 @@ function YediHubAppContent() {
   // REQUEST CREATION & DISPATCH
   // ==========================================
   const handleIncomingChatCommand = async (username, role, rawText) => {
-    // Syntax: !assr <url> [optional title/note]
-    const tokens = rawText.trim().split(/\s+/);
-    if (tokens.length < 2) return;
+    const requester = normalizeTwitchLogin(username);
+    const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
+    if (!requestText) {
+      sendTwitchChatReply(`@${requester} use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
+      return;
+    }
+    if (!queueOpenRef.current) {
+      sendTwitchChatReply(`@${requester} requests are currently closed. Try again when the streamer reopens the queue.`);
+      return;
+    }
 
-    const url = tokens[1];
-    let candidateNote = tokens.slice(2).join(' ');
-
-    await processAndQueueRequest({
-      url,
-      requestedBy: username,
-      userRole: role,
-      note: candidateNote || 'Requested via Twitch command bridge',
-      manualCategory: null
+    const looksLikeUrl = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv)\//i.test(requestText);
+    let url = requestText;
+    let title = '';
+    if (!looksLikeUrl) {
+      try {
+        const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
+          sendTwitchChatReply(`@${requester} couldn't find "${requestText.slice(0, 45)}". Try a more specific title or paste a URL.`);
+          return;
+        }
+        url = result.results[0].url;
+        title = result.results[0].title || '';
+      } catch (error) {
+        console.warn('Chat title search failed:', error);
+        sendTwitchChatReply(`@${requester} title search is temporarily unavailable. Please try a direct video URL.`);
+        return;
+      }
+    }
+    const ok = await processAndQueueRequest({
+      url, title, requestedBy: username, userRole: role,
+      note: 'Requested via Twitch chat', manualCategory: null
     });
+    if (ok) sendTwitchChatReply(`@${requester} added "${String(title || requestText).slice(0, 75)}". Use !position to check its spot, or !remove to remove your latest waiting request.`);
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
+
+  const handleRemoveOwnRequestRef = useRef(null);
+  const handleQueueSummaryRef = useRef(null);
 
   const processAndQueueRequest = async ({
     url,
@@ -1581,8 +1608,41 @@ function YediHubAppContent() {
     addToast('Remote volume control is not supported for this media type.', 'info');
   };
 
+  const handlePreviousTrack = () => {
+    exitTikTokFullscreenBeforeTrackChange();
+    const outgoing = currentVideoRef.current;
+    if (!outgoing) return;
+    const previouslyPlayed = videos
+      .filter((video) => video.status === 'watched' && video.id !== outgoing.id)
+      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))[0];
+    if (!previouslyPlayed) {
+      addToast('There is no previous video in history yet.', 'warning');
+      return;
+    }
+    const updates = new Map();
+    updates.set(outgoing.id, { status: 'queue', queueOrder: getNextQueueOrder() });
+    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false });
+    setVideos((previous) => previous.map((video) => {
+      const change = updates.get(video.id);
+      return change ? { ...video, ...change } : video;
+    }));
+    setSimProgress(0);
+    if (db && firebaseUser) {
+      const batch = writeBatch(db);
+      updates.forEach((change, id) => batch.set(
+        doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(id)),
+        change, { merge: true }
+      ));
+      batch.commit().catch((error) => {
+        console.warn('Previous-track transition could not sync to Firestore.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Previous track changed locally — cloud sync failed');
+      });
+    }
+  };
+
   // Player and bridge callbacks always use current handlers and queue state.
-  handleSkipNextRef.current = handleSkipNext;
+  handleSkipNextRef.current = handleSkipNext;  handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
     if (!currentVideo || currentVideo.id !== videoId) return;
@@ -1923,7 +1983,36 @@ function YediHubAppContent() {
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
-  const handleMoveOrder = (videoId, direction) => {
+  const handleRemoveOwnRequest = (requesterLogin) => {
+    const requester = normalizeTwitchLogin(requesterLogin);
+    if (!requester) return;
+    const ownedWaiting = videos
+      .filter((video) => video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === requester)
+      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    if (!ownedWaiting.length) {
+      sendTwitchChatReply(`@${requester} you have no waiting requests to remove. Playing/already-played videos cannot be removed with !remove.`);
+      return;
+    }
+    const target = ownedWaiting[0];
+    void syncDeleteVideo(target.id);
+    sendTwitchChatReply(`@${requester} removed "${String(target.title || 'your request').slice(0, 70)}" from the queue.`);
+  };
+  handleRemoveOwnRequestRef.current = handleRemoveOwnRequest;
+
+  const handleQueueSummary = (requesterLogin) => {
+    const requester = normalizeTwitchLogin(requesterLogin);
+    const playing = videos.find((video) => video.status === 'playing') || null;
+    const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
+    const top = queued.slice(0, 5).map((video, index) =>
+      `#${index + 1} ${String(video.title || 'Untitled').slice(0, 35)} (@${normalizeTwitchLogin(video.requestedBy) || 'viewer'}, +${Number(video.upvotes) || 0})`
+    );
+    const myCount = queued.filter((video) => normalizeTwitchLogin(video.requestedBy) === requester).length;
+    const playingText = playing ? `Now playing: "${String(playing.title || 'Untitled').slice(0, 45)}".` : 'Nothing is playing right now.';
+    sendTwitchChatReply(`${playingText} Queue: ${queued.length} waiting; ${myCount} of yours waiting. ${top.length ? 'Next up: ' + top.join(' | ') + (queued.length > top.length ? ` | +${queued.length - top.length} more` : '') : 'The waiting queue is empty.'}`);
+  };
+  handleQueueSummaryRef.current = handleQueueSummary;
+
+  const handleMoveOrder =  const handleMoveOrder = (videoId, direction) => {
     if (!isStaff || activeTab !== 'queue') return;
     const visibleQueue = filteredVideos.filter((video) => video.status === 'queue');
     const visibleIndex = visibleQueue.findIndex((video) => String(video.id) === String(videoId));
@@ -2501,8 +2590,17 @@ function YediHubAppContent() {
                       <span>Watch Later</span>
                     </button>
 
-                    {/* Skip / Next Track */}
+                    {/* Previous / Skip / Next Track */}
                     {isStaff && (
+                      <>
+                      <button
+                        onClick={handlePreviousTrack}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all active:scale-95"
+                        title="Return to the most recently played video"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Previous</span>
+                      </button>
                       <button
                         onClick={handleSkipNext}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
@@ -2510,6 +2608,7 @@ function YediHubAppContent() {
                         <SkipForward className="w-4 h-4" />
                         <span>Next Track</span>
                       </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -2776,7 +2875,21 @@ function YediHubAppContent() {
 
                         {/* Every request is immediately playable; no approval state. */}
                         <>
+                            {video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) && (
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Remove your request "${String(video.title || 'this video').slice(0, 80)}" from the queue?`)) {
+                                    void syncDeleteVideo(video.id);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-rose-950/60 text-rose-300 border border-rose-500/20"
+                                title="Remove your own waiting request"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             <button
+                              onClick={() => handlePlayNow(video)                            <button
                               onClick={() => handlePlayNow(video)}
                               className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
                             >
