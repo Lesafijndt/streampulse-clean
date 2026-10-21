@@ -992,7 +992,7 @@ function YediHubAppContent() {
             const normalized = {
               ...normalizeLegacyVideoVotes(data),
               id: d.id,
-              mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note),
+              mediaType: detectMusicType(data.url, data.title, data.note, data.category),
             };
             if (!Array.isArray(data.voters) && !legacyVoteMigrationRef.current.has(d.id)) {
               legacyVoteMigrationRef.current.add(d.id);
