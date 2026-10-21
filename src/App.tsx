@@ -411,6 +411,32 @@ function detectMusicType(url = '', title = '', note = '') {
 /**
  * Standardize media platform parsing
  */
+function getMediaIdentityKey(platform = '', videoId = '', rawUrl = '') {
+  const normalizedPlatform = String(platform || 'web').trim().toLowerCase();
+  const normalizedId = String(videoId || '').trim().toLowerCase();
+
+  // Platform IDs deduplicate equivalent URL forms (for example youtu.be and youtube.com).
+  if (normalizedPlatform !== 'web' && normalizedId && !normalizedId.startsWith('ext-')) {
+    return `${normalizedPlatform}:${normalizedId}`;
+  }
+
+  // For generic media URLs, ignore common tracking parameters and trailing slashes.
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    const host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
+    const pathname = parsed.pathname.replace(/\\/+$/, '').toLowerCase();
+    const ignoredParams = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'feature', 'si', 'share', 'ab_channel']);
+    const query = [...parsed.searchParams.entries()]
+      .filter(([key]) => !ignoredParams.has(key.toLowerCase()))
+      .sort(([keyA, valueA], [keyB, valueB]) => keyA.localeCompare(keyB) || valueA.localeCompare(valueB))
+      .map(([key, value]) => `${key.toLowerCase()}=${value}`)
+      .join('&');
+    return `url:${host}${pathname}${query ? `?${query}` : ''}`;
+  } catch {
+    return `url:${String(rawUrl || '').trim().replace(/\\/+$/, '').toLowerCase()}`;
+  }
+}
+
 function parseMediaUrl(rawUrl = '') {
   const url = (rawUrl || '').trim();
   if (!url) return { platform: 'web', videoId: null, thumbnail: null };
@@ -537,6 +563,11 @@ function YediHubAppContent() {
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
   });
+  const videosRef = useRef(videos);
+  const pendingMediaRequestKeysRef = useRef(new Set());
+  useEffect(() => {
+    videosRef.current = videos;
+  }, [videos]);
 
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
@@ -990,6 +1021,7 @@ function YediHubAppContent() {
 
   // Sync Video Changes Helper (updates Firestore if online, updates state locally)
   const syncUpdateVideo = async (videoId, updates) => {
+    videosRef.current = videosRef.current.map((v) => (v.id === videoId ? { ...v, ...updates } : v));
     setVideos((prev) =>
       prev.map((v) => (v.id === videoId ? { ...v, ...updates } : v))
     );
@@ -1052,6 +1084,8 @@ function YediHubAppContent() {
 
   const syncAddVideo = async (videoObj) => {
     const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
+    // Update the ref synchronously so back-to-back chat messages see the new item immediately.
+    videosRef.current = [localItem, ...videosRef.current];
     setVideos((prev) => [localItem, ...prev]);
 
     if (db && firebaseUser) {
@@ -1067,6 +1101,7 @@ function YediHubAppContent() {
   };
 
   const syncDeleteVideo = async (videoId) => {
+    videosRef.current = videosRef.current.filter((v) => v.id !== videoId);
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
 
     if (db && firebaseUser) {
@@ -1399,7 +1434,7 @@ function YediHubAppContent() {
     }
     const ok = await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
-      note: 'Requested via Twitch chat', manualCategory: null
+      note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
     });
     // Successful requests stay silent in chat to avoid spam; errors and closed-queue replies remain enabled.
   };
@@ -1415,7 +1450,8 @@ function YediHubAppContent() {
     note = '',
     requestedBy,
     userRole = 'viewer',
-    manualCategory = null
+    manualCategory = null,
+    fromChat = false
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
@@ -1454,6 +1490,26 @@ function YediHubAppContent() {
       }
     }
 
+    // Reject duplicates that are already waiting, playing, or saved for later. Recently watched
+    // items may be requested again later; this prevents duplicate copies playing back-to-back.
+    const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
+    const activeStatuses = new Set(['queue', 'playing', 'watch_later']);
+    const isAlreadyActive = (video) => activeStatuses.has(video?.status)
+      && getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey;
+    const alreadyExists = videosRef.current.some(isAlreadyActive);
+    const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
+    if (alreadyExists || requestAlreadyPending) {
+      addToast('That video is already queued, playing, or saved for later. Duplicate request ignored.', 'warning');
+      if (fromChat) {
+        const requester = normalizeTwitchLogin(requestedBy);
+        sendTwitchChatReply(`@${requester || 'viewer'} that video is already queued, playing, or saved for later, so I did not add it again.`);
+      }
+      return false;
+    }
+    // The lock closes the race where the same URL arrives in two chat messages at once,
+    // while metadata/TikTok resolution is still running.
+    pendingMediaRequestKeysRef.current.add(identityKey);
+
     // Fetch public oEmbed titles for URL-only submissions so Music/Non-Music classification
     // has real title text rather than only a video ID. Failure is non-fatal.
     let resolvedTitle = String(title || '').trim();
@@ -1471,6 +1527,7 @@ function YediHubAppContent() {
 
     // Re-check after async URL/title resolution in case the streamer closed the queue mid-request.
     if (!queueOpenRef.current) {
+      pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
       return false;
     }
@@ -1516,6 +1573,7 @@ function YediHubAppContent() {
     };
 
     syncAddVideo(newVideo);
+    pendingMediaRequestKeysRef.current.delete(identityKey);
 
     addToast(`Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] straight to the queue!`, 'success');
     return true;
