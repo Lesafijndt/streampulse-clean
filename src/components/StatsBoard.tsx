@@ -24,7 +24,7 @@ function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
 }
 
 export default function StatsBoard({
-  queueStats, activityStats, statsExpanded, onToggle, durationLookupStats, onRefreshDurations,
+  queueStats, activityStats, statsExpanded, onToggle, onRefreshStats, durationLookupStats, onRefreshDurations,
   isStaff, activitySyncStatus, activitySyncTone, activitySyncError, canRetryActivitySync,
   onRetryActivitySync, networkOnline
 }) {
@@ -36,7 +36,19 @@ export default function StatsBoard({
         <BarChart3 className="h-4 w-4 text-amber-200" /> Stats & analytics
         <ChevronDown className={`h-3.5 w-3.5 transition-transform ${statsExpanded ? 'rotate-180' : ''}`} />
       </button>
-      <ConnectionStatusPill tone={activitySyncTone}><Activity className="h-3 w-3" />{activitySyncStatus}</ConnectionStatusPill>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onRefreshStats}
+          className="gachi-control-btn inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[9px] font-bold"
+          title="Refresh lifetime stats from saved activity and cloud sync"
+          aria-label="Refresh stats"
+        >
+          <RefreshCw className="h-3 w-3" />
+          <span className="hidden xl:inline">Refresh</span>
+        </button>
+        <ConnectionStatusPill tone={activitySyncTone}><Activity className="h-3 w-3" />{activitySyncStatus}</ConnectionStatusPill>
+      </div>
     </div>
     {statsExpanded && <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
