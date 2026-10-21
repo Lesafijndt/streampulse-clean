@@ -660,7 +660,6 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
-  const [showObsOverlay, setShowObsOverlay] = useState(false);
 
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
@@ -701,6 +700,8 @@ function YediHubAppContent() {
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
+  const [draggedQueueId, setDraggedQueueId] = useState('');
+  const [dragOverQueueId, setDragOverQueueId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
@@ -2396,6 +2397,58 @@ function YediHubAppContent() {
     }
   };
 
+  const handleDropReorder = (movingId, targetId) => {
+    if (!isStaff || activeTab !== 'queue' || !movingId || !targetId || String(movingId) === String(targetId)) return;
+    const fullQueue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
+    const fromIndex = fullQueue.findIndex((video) => String(video.id) === String(movingId));
+    const targetIndexBeforeRemoval = fullQueue.findIndex((video) => String(video.id) === String(targetId));
+    if (fromIndex < 0 || targetIndexBeforeRemoval < 0 || fromIndex === targetIndexBeforeRemoval) return;
+
+    const [movingVideo] = fullQueue.splice(fromIndex, 1);
+    const targetIndex = fullQueue.findIndex((video) => String(video.id) === String(targetId));
+    if (targetIndex < 0) return;
+    fullQueue.splice(targetIndex, 0, movingVideo);
+
+    const updates = fullQueue.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
+    const orderById = new Map(updates.map((video) => [String(video.id), video.queueOrder]));
+    const nextVideos = videos.map((video) => {
+      const nextOrder = orderById.get(String(video.id));
+      return nextOrder === undefined ? video : { ...video, queueOrder: nextOrder };
+    });
+    queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
+    setSortBy('priority');
+    setVideos(nextVideos);
+
+    if (db && firebaseUser) {
+      void (async () => {
+        const batch = writeBatch(db);
+        updates.forEach((video) => {
+          batch.set(
+            doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+            { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+            { merge: true }
+          );
+        });
+        try {
+          await batch.commit();
+        } catch (error) {
+          console.warn('Drag-and-drop reorder batch failed; attempting merge writes.', error);
+          try {
+            await Promise.all(updates.map((video) => setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            )));
+          } catch (fallbackError) {
+            console.warn('Drag-and-drop queue order could not sync to Firebase.', fallbackError);
+            setCloudSynced(false);
+            setSyncStatusText('Queue order saved locally — cloud update failed');
+          }
+        }
+      })();
+    }
+  };
+
   // Room switching is disabled: this site is dedicated to Twitch channel 2o3a.
   const handleSwitchRoom = (e) => { e?.preventDefault?.(); setChannelRoom(PRIVATE_CHANNEL); setRoomInput(PRIVATE_CHANNEL); };
 
@@ -2436,79 +2489,6 @@ function YediHubAppContent() {
     );
   }
 
-
-  // ==========================================
-  // RENDER OBS OVERLAY HUD (POP-OUT MODE)
-  // ==========================================
-  if (showObsOverlay) {
-    return (
-      <div className="gachi-theme gachi-overlay fixed inset-0 bg-[#090a0f] text-white p-6 flex flex-col justify-between font-sans select-none overflow-hidden border-4 border-purple-500/30">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 bg-[#18181b]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 shadow-lg">
-            <Radio className="w-4 h-4 text-purple-400 animate-pulse" />
-            <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
-              ♂ GACHI ARENA • OBS DECK • {channelRoom ? `twitch.tv/${channelRoom}` : 'CHANNEL NOT SET'} ♂
-            </span>
-          </div>
-          <button
-            onClick={() => setShowObsOverlay(false)}
-            className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-all"
-          >
-            Exit Overlay View
-          </button>
-        </div>
-
-        {/* Big Now Playing Banner for OBS */}
-        {currentVideo ? (
-          <div className="max-w-2xl bg-[#121622]/95 border border-purple-500/40 rounded-2xl p-5 shadow-2xl backdrop-blur-md flex items-center gap-5">
-            <img
-              src={currentVideo.thumbnail}
-              alt=""
-              className="w-24 h-24 rounded-xl object-cover border border-white/10 shrink-0"
-            />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-600 text-white">
-                  Now Playing
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
-                  {currentVideo.category}
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                  {detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note, currentVideo.category)}
-                </span>
-              </div>
-              <h2 className="text-lg font-black text-white truncate">{currentVideo.title}</h2>
-              <p className="text-xs text-purple-200">
-                Requested by <strong className="text-white">@{currentVideo.requestedBy}</strong> • 🔥 {currentVideo.upvotes || 0} Hypes
-              </p>
-              {/* Progress bar */}
-              <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mt-2">
-                <div
-                  className="bg-gradient-to-r from-purple-500 to-cyan-400 h-full transition-all duration-300"
-                  style={{ width: `${simProgress}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-slate-400 text-sm">No active video in stream deck.</div>
-        )}
-
-        {/* Next Up Ticker */}
-        <div className="bg-[#121622]/80 backdrop-blur-md px-4 py-2.5 rounded-xl border border-white/5 flex items-center gap-3 max-w-xl">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">Next Up:</span>
-          {counts.queue > 0 ? (
-            <span className="text-xs text-slate-200 truncate">
-              {videos.filter((v) => v.status === 'queue').sort(compareQueueOrder)[0]?.title || 'Loading next item...'}
-            </span>
-          ) : (
-            <span className="text-xs text-slate-400">Queue is empty. Paste a video URL in Twitch chat or use !assr &lt;url&gt;!</span>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   // ==========================================
   // MAIN APP INTERFACE
@@ -2562,16 +2542,6 @@ function YediHubAppContent() {
 
           {/* Right Action Tools */}
           <div className="flex items-center gap-2">
-            {/* Pop-Out OBS Overlay View */}
-            <button
-              onClick={() => setShowObsOverlay(true)}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-semibold transition-colors"
-              title="OBS Overlay Browser Capture Deck"
-            >
-              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
-              <span>OBS Deck</span>
-            </button>
-
             {/* Queue settings: keep the close/open switch one click away for staff. */}
             {isStaff && (
               <button
@@ -2674,15 +2644,6 @@ function YediHubAppContent() {
             <span className="text-[10px] font-black text-slate-300">{counts.queue} IN QUEUE</span>
           </div>
           <div className="space-y-2.5">
-            <div className="gachi-rail-heading"><Play className="w-3.5 h-3.5 fill-current" /> NEXT UP</div>
-            {nextQueuedVideo ? (
-              <button type="button" onClick={() => handlePlayNow(nextQueuedVideo)} className="gachi-next-up-card w-full flex items-center gap-3 text-left rounded-xl p-2">
-                <img src={nextQueuedVideo.thumbnail} alt="" onError={(e) => { e.currentTarget.src = 'https://placehold.co/160x160/18181b/ff315f?text=Yedi+Hub'; }} className="w-14 h-14 rounded-lg object-cover shrink-0 border border-white/10" />
-                <span className="min-w-0"><span className="block text-[10px] uppercase tracking-widest text-slate-400">Waiting</span><span className="block mt-1 text-xs font-extrabold text-white line-clamp-2">{nextQueuedVideo.title}</span><span className="block mt-1 text-[10px] text-slate-400">by @{nextQueuedVideo.requestedBy}</span></span>
-              </button>
-            ) : <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-slate-500">Nothing waiting in the queue.</div>}
-          </div>
-          <div className="space-y-2.5">
             <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE</div>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Music' ? 'All' : 'Music'); }} aria-pressed={mediaTypeFilter === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
             <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
@@ -2728,8 +2689,8 @@ function YediHubAppContent() {
                 <div
                   className={`relative w-full bg-black flex items-center justify-center overflow-hidden transition-all ${
                     isTheatreMode
-                      ? 'h-[72vh] min-h-[560px] max-h-[920px]'
-                      : 'h-[58vh] min-h-[430px] max-h-[720px]'
+                      ? 'h-[75vh] min-h-[580px] max-h-[960px]'
+                      : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
                   {isVerticalMedia(currentVideo) && (
@@ -2877,6 +2838,7 @@ function YediHubAppContent() {
                     {currentVideo.platform === 'youtube' && (
                       <div className="gachi-media-controls flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-[#0e121a] p-2">
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.playVideo(); }} className="gachi-sound-action" title="Play YouTube video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
+                        <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.pauseVideo(); }} className="gachi-sound-action" title="Pause YouTube video"><Pause className="w-3.5 h-3.5 fill-current" /> Pause</button>
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } player.mute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true }; setYoutubeMuted(true); }} className="gachi-sound-action" title="Mute YouTube sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
                         <button type="button" onClick={() => { const player = youtubePlayerRef.current; if (!player) { addToast('YouTube player is not ready yet.', 'warning'); return; } const nextVolume = youtubeVolume > 0 ? youtubeVolume : 50; player.setVolume(nextVolume); player.unMute(); youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: nextVolume, muted: false }; setYoutubeVolume(nextVolume); setYoutubeMuted(false); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable YouTube sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
                         <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5">
@@ -2888,6 +2850,7 @@ function YediHubAppContent() {
                     {currentVideo.platform === 'tiktok' && (
                       <div className="gachi-media-controls flex flex-wrap items-center gap-2">
                         <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: true, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false })); }} className="gachi-sound-action" title="Play TikTok video"><Play className="w-3.5 h-3.5 fill-current" /> Play</button>
+                        <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } frame.postMessage({ type: 'pause', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: false, isMuted: previous.requestId === currentVideo.id ? previous.isMuted : false })); }} className="gachi-sound-action" title="Pause TikTok video"><Pause className="w-3.5 h-3.5 fill-current" /> Pause</button>
                         <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet. Try again in a moment.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'muted' }; frame.postMessage({ type: 'mute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState((previous) => ({ requestId: currentVideo.id, isPlaying: previous.requestId === currentVideo.id ? previous.isPlaying : true, isMuted: true })); }} className="gachi-sound-action" title="Mute TikTok sound"><VolumeX className="w-3.5 h-3.5" /> Mute Sound</button>
                         <button type="button" onClick={() => { const frame = tiktokIframeRef.current?.contentWindow; if (!frame) { addToast('TikTok player is not ready yet.', 'warning'); return; } tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: 'unmuted' }; frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com'); setTikTokPlaybackState({ requestId: currentVideo.id, isPlaying: true, isMuted: false }); }} className="gachi-sound-action gachi-sound-action-primary" title="Enable TikTok sound"><Volume2 className="w-3.5 h-3.5" /> Enable Sound</button>
                       </div>
@@ -3103,7 +3066,31 @@ function YediHubAppContent() {
                   return (
                     <div
                       key={video.id}
-                      className={`gachi-queue-item group relative flex items-center justify-between gap-3 p-2.5 rounded-2xl border transition-all ${
+                      draggable={Boolean(isStaff && activeTab === 'queue' && video.status === 'queue')}
+                      onDragStart={(event) => {
+                        if (!isStaff || activeTab !== 'queue' || video.status !== 'queue') { event.preventDefault(); return; }
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', String(video.id));
+                        setDraggedQueueId(String(video.id));
+                      }}
+                      onDragOver={(event) => {
+                        if (!isStaff || activeTab !== 'queue' || video.status !== 'queue') return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = 'move';
+                        if (dragOverQueueId !== String(video.id)) setDragOverQueueId(String(video.id));
+                      }}
+                      onDragLeave={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget)) setDragOverQueueId((id) => id === String(video.id) ? '' : id);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const movingId = event.dataTransfer.getData('text/plain') || draggedQueueId;
+                        handleDropReorder(movingId, video.id);
+                        setDraggedQueueId('');
+                        setDragOverQueueId('');
+                      }}
+                      onDragEnd={() => { setDraggedQueueId(''); setDragOverQueueId(''); }}
+                      className={`gachi-queue-item group relative flex items-center justify-between gap-3 p-2.5 rounded-2xl border transition-all ${draggedQueueId === String(video.id) ? 'gachi-dragging' : ''} ${dragOverQueueId === String(video.id) && draggedQueueId !== String(video.id) ? 'gachi-drop-target' : ''} ${
                         isCurrent
                           ? 'bg-purple-950/20 border-purple-500/50 shadow-lg shadow-purple-950/40'
                           : video.pinned
