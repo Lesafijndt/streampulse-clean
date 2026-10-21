@@ -174,8 +174,9 @@ test('Live queue statistics report recent requesters, platforms, genres, runtime
   assert.equal(stats.queueCount, 3);
   assert.equal(stats.queueDurationSeconds, 180 + 120 + 45);
   assert.equal(stats.watchedLastWindow, 2);
-  assert.deepEqual(stats.mostPopularPlatform, { label: 'tiktok', count: 2 });
-  assert.deepEqual(stats.mostPopularGenre, { label: 'Memes', count: 2 });
+  assert.equal(stats.historyMovesLastWindow, 2);
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
+  assert.deepEqual(stats.mostPopularGenre, { label: 'Music', count: 2 });
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
 });
 
@@ -237,4 +238,20 @@ test('Queue runway stats separate known runtime from estimates', async () => {
   assert.equal(stats.queueKnownDurationSeconds, 240);
   assert.equal(stats.queueEstimatedDurationSeconds, 45);
   assert.equal(stats.queueDurationSeconds, 285);
+});
+
+test('Stats platform, genre and requester rankings use the declared recent window', async () => {
+  const { buildQueueStatistics } = await import('../src/queueLogic.js');
+  const now = 50_000_000_000;
+  const stats = buildQueueStatistics([
+    { id: 'recent-1', status: 'queue', requestedBy: 'alice', platform: 'youtube', category: 'Music', timestamp: now - 1000 },
+    { id: 'recent-2', status: 'watched', requestedBy: 'ALICE', platform: 'youtube', category: 'Music', timestamp: now - 2000 },
+    { id: 'recent-3', status: 'queue', requestedBy: 'bob', platform: 'tiktok', category: 'Memes', timestamp: now - 3000 },
+    { id: 'old-1', status: 'watched', requestedBy: 'carol', platform: 'tiktok', category: 'Memes', timestamp: now - 4 * 60 * 60 * 1000 }
+  ], now);
+  assert.equal(stats.requestsLastWindow, 3);
+  assert.deepEqual(stats.mostPopularPlatform, { label: 'youtube', count: 2 });
+  assert.deepEqual(stats.mostPopularGenre, { label: 'Music', count: 2 });
+  assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
+  assert.equal(stats.totalRequesters, 3, 'overall unique counts are only for retained items');
 });

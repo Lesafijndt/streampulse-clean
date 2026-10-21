@@ -756,6 +756,23 @@ function YediHubAppContent() {
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
   );
   const [connectionDetailsExpanded, setConnectionDetailsExpanded] = useState(false);
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
+  const topMenuRef = useRef(null);
+  useEffect(() => {
+    if (!topMenuOpen) return undefined;
+    const closeOnPointerDown = (event) => {
+      if (!topMenuRef.current?.contains(event.target)) setTopMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setTopMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [topMenuOpen]);
   const restoringBackupRef = useRef(false);
   const backupFileInputRef = useRef(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -2527,7 +2544,7 @@ function YediHubAppContent() {
         target.isContentEditable ||
         target.closest('input, textarea, select, [contenteditable="true"]')
       );
-      if (isTyping || showAuthModal || showSettingsModal || showRequestModal) return;
+      if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (event.code === 'Space' || key === ' ') {
         event.preventDefault();
@@ -2544,7 +2561,7 @@ function YediHubAppContent() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status]);
+  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, topMenuOpen]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -3131,87 +3148,83 @@ function YediHubAppContent() {
             <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />
           </button>
 
-          {/* Right Action Tools */}
-          <div className="flex items-center gap-2">
-            {/* Queue settings: keep the close/open switch one click away for staff. */}
-            {isStaff && (
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold transition-colors"
-                title="Queue settings — close or reopen requests and configure playback"
-              >
-                <Settings className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Settings</span>
-              </button>
+
+          {/* All top-bar actions live inside a single compact dropdown. */}
+          <div className="relative z-50" ref={topMenuRef}>
+            <button
+              type="button"
+              onClick={() => setTopMenuOpen((open) => !open)}
+              aria-expanded={topMenuOpen}
+              aria-haspopup="true"
+              aria-controls="whale-cum-top-menu"
+              className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-gradient-to-r from-[#24112f] to-[#11101a] px-3.5 py-2 text-xs font-black text-white shadow-lg shadow-purple-950/20 transition hover:border-purple-400/60 hover:from-[#351447] hover:to-[#171020]"
+            >
+              <Settings className="h-4 w-4 text-purple-300" />
+              <span>Options</span>
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${topMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {topMenuOpen && (
+              <div id="whale-cum-top-menu" className="absolute right-0 top-full z-[60] mt-2 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-purple-500/25 bg-[#0b0a12] p-2 shadow-2xl shadow-black/70 ring-1 ring-white/5">
+                <div className="border-b border-white/10 px-3 pb-2.5 pt-1">
+                  <div className="text-[9px] font-black uppercase tracking-[0.2em] text-purple-300">Arena options</div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-bold text-white">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</span>
+                    <span className="shrink-0 rounded-md border border-purple-400/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-black uppercase text-purple-200">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</span>
+                  </div>
+                </div>
+                {isStaff && (
+                  <button type="button" onClick={() => { setTopMenuOpen(false); setShowSettingsModal(true); }} className="mt-2 flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                    <Settings className="h-4 w-4 text-cyan-300" />
+                    <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Queue access and playback preferences</span></span>
+                  </button>
+                )}
+                <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
+                  <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
+                </button>
+                <div className="my-2 border-t border-white/10" />
+                <div className="rounded-xl px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
+                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : 'RECONNECTING'}</span>
+                  </div>
+                  <button type="button" onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10">
+                    <RefreshCw className="h-3 w-3" /> Restart command bridge
+                  </button>
+                </div>
+                <div className="mt-1 rounded-xl px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />Chat reply bot</span>
+                    <span className={chatBotSession.connected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-rose-200'}>{chatBotSession.loading ? 'CHECKING' : chatBotSession.connected ? 'ONLINE' : 'OFFLINE'}</span>
+                  </div>
+                  <button type="button" onClick={async () => {
+                    setTopMenuOpen(false);
+                    if (!chatBotSession.connected) { window.location.href = '/api/twitch/bot-login'; return; }
+                    try {
+                      await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
+                      setChatBotSession({ loading: false, connected: false, username: '' });
+                      addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
+                    } catch (error) { addToast('Could not disconnect the chat bot. Please try again.', 'warning'); }
+                  }} className={`mt-2 flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold transition ${chatBotSession.connected ? 'border-slate-700 bg-[#171420] text-slate-200 hover:border-rose-400/40 hover:text-rose-200' : 'border-cyan-500/40 bg-cyan-800/60 text-white hover:bg-cyan-700'}`} title={chatBotSession.connected ? 'Disconnect chat reply account @gachibot69' : 'Connect chat reply account @gachibot69'}>
+                    {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
+                    {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
+                  </button>
+                </div>
+                <div className="my-2 border-t border-white/10" />
+                <button type="button" onClick={() => {
+                  setTopMenuOpen(false);
+                  if (!normalizeRoomName(channelRoom)) { addToast('Set a Twitch channel before copying a room link.', 'warning'); return; }
+                  const shareUrl = new URL(window.location.href);
+                  shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
+                  navigator.clipboard.writeText(shareUrl.toString())
+                    .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
+                    .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
+                }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                  <Copy className="h-4 w-4 text-purple-300" />
+                  <span className="flex-1">Copy room link <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Share this broadcaster room</span></span>
+                </button>
+              </div>
             )}
-
-            {/* User Profile / Login Modal Trigger */}
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className="flex items-center gap-2 pl-2 pr-3 py-1 rounded-xl bg-[#141926] hover:bg-slate-800 border border-slate-800 transition-colors"
-            >
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white">
-                {twitchAuth.avatarLetter}
-              </div>
-              <div className="text-left hidden sm:block">
-                <div className="text-xs font-bold text-slate-200 leading-none">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</div>
-                <div className="text-[10px] text-purple-400 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</div>
-              </div>
-            </button>
-
-            {/* Twitch IRC bridge controls only — no chat transcript is shown on the site. */}
-            <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${ircConnected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              {ircConnected ? 'Bridge Live' : 'Bridge Reconnecting'}
-            </div>
-            <button
-              onClick={() => connectTwitchIrc(channelRoom)}
-              className="px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-              title="Restart Twitch command bridge"
-            >
-              Restart Bridge
-            </button>
-            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !when are sent by the separate Twitch account gachibot69">
-              <span className={`h-1.5 w-1.5 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-              {chatBotSession.loading ? 'Bot checking' : chatBotSession.connected ? 'Bot Online' : 'Bot Offline'}
-            </div>
-            <button
-              onClick={async () => {
-                if (!chatBotSession.connected) {
-                  window.location.href = '/api/twitch/bot-login';
-                  return;
-                }
-                try {
-                  await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
-                  setChatBotSession({ loading: false, connected: false, username: '' });
-                  addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
-                } catch (error) {
-                  addToast('Could not disconnect the chat bot. Please try again.', 'warning');
-                }
-              }}
-              className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-bold ${chatBotSession.connected ? 'bg-[#141926] hover:bg-slate-800 text-slate-200 border-slate-800' : 'bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500/40'}`}
-              title={chatBotSession.connected ? 'Disconnect the separate chat reply account' : 'Log in with Twitch account gachibot69 to send chat replies'}
-            >
-              {chatBotSession.loading ? 'Checking Bot…' : chatBotSession.connected ? 'Disconnect Bot' : 'Connect @gachibot69'}
-            </button>
-            <button
-              onClick={() => {
-                if (!normalizeRoomName(channelRoom)) {
-                  addToast('Set a Twitch channel before copying a room link.', 'warning');
-                  return;
-                }
-                const shareUrl = new URL(window.location.href);
-                shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
-                navigator.clipboard.writeText(shareUrl.toString())
-                  .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
-                  .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
-              }}
-              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-              title="Copy link for this broadcaster room"
-            >
-              <Copy className="w-3 h-3" />
-              Room Link
-            </button>
           </div>
         </div>
 
@@ -3269,7 +3282,7 @@ function YediHubAppContent() {
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><Users className="h-3 w-3" /> People</div>
                 <div className="mt-1 text-xl font-black leading-none text-white">{queueStats.requestersLastWindow}</div>
-                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequesters} unique total</div>
+                <div className="mt-1 text-[9px] text-slate-500">{queueStats.totalRequesters} unique in saved items</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
                 <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><TrendingUp className="h-3 w-3" /> Requests</div>
@@ -3282,8 +3295,8 @@ function YediHubAppContent() {
                 <div className="mt-1 text-[9px] text-slate-500">queued videos</div>
               </div>
               <div className="rounded-lg border border-white/5 bg-black/20 p-2">
-                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><CheckCircle2 className="h-3 w-3" /> Watched</div>
-                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.watchedLastWindow}</div>
+                <div className="flex items-center gap-1 text-[9px] font-bold uppercase text-slate-500"><CheckCircle2 className="h-3 w-3" /> Moved to history</div>
+                <div className="mt-1 text-xl font-black leading-none text-emerald-300">{queueStats.historyMovesLastWindow}</div>
                 <div className="mt-1 text-[9px] text-slate-500">in the last 3h</div>
               </div>
             </div>
@@ -3341,7 +3354,7 @@ function YediHubAppContent() {
 
             {queueStats.mostActiveRequester && (
               <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-2 text-[9px]">
-                <span className="text-slate-500">Most requests</span>
+                <span className="text-slate-500">Top requester · 3h</span>
                 <span className="max-w-[130px] truncate font-bold text-fuchsia-200">@{queueStats.mostActiveRequester.label} · {queueStats.mostActiveRequester.count}</span>
               </div>
             )}
@@ -3604,8 +3617,7 @@ function YediHubAppContent() {
                   </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-slate-500">
                     <Keyboard className="h-3 w-3" />
-                    <span>Shortcuts: Space play/pause · M mute</span>
-                    {isStaff && <span>· ← previous · → next (N/P also work)</span>}
+                    <span>Keyboard: Space play/pause · M mute{isStaff ? ' · ← / P previous · → / N next' : ''}</span>
                   </div>
                 </div>
               </div>

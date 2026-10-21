@@ -303,9 +303,9 @@ export function validateQueueBackup(value) {
 export function buildQueueStatistics(videos = [], now = Date.now(), recentWindowMs = 3 * 60 * 60 * 1000) {
   const items = Array.isArray(videos) ? videos : [];
   const cutoff = Number(now) - Math.max(0, Number(recentWindowMs) || 0);
-  const countsFor = (selector) => {
+  const countsFor = (selector, sourceItems = items) => {
     const totals = new Map();
-    items.forEach((video) => {
+    sourceItems.forEach((video) => {
       const value = selector(video);
       if (!value) return;
       totals.set(value, (totals.get(value) || 0) + 1);
@@ -338,12 +338,13 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
   });
   const requesters = new Set(items.map(requesterOf).filter(Boolean));
   const recentRequesters = new Set(requestsRecent.map(requesterOf).filter(Boolean));
-  const requesterCounts = countsFor(requesterOf);
+  // Rankings match the board's "last 3 hours" scope, not all entries still retained.
+  const requesterCounts = countsFor(requesterOf, requestsRecent);
   const platforms = countsFor((video) => {
     const platform = String(video?.platform || 'external').toLowerCase();
     return platform === 'web' ? 'external' : platform;
-  });
-  const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General');
+  }, requestsRecent);
+  const genres = countsFor((video) => String(video?.category || video?.mediaType || 'General').trim() || 'General', requestsRecent);
   const queued = items.filter((video) => video?.status === 'queue');
   const queueDurationEstimates = queued.map((video) => ({ video, ...getDurationEstimate(video) }));
   const queueEstimatedItems = queueDurationEstimates.filter((entry) => entry.estimated);
@@ -359,6 +360,8 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
     queueEstimatedDurationSeconds: queueEstimatedItems.reduce((total, entry) => total + entry.seconds, 0),
     queueKnownCount: queueKnownItems.length,
     queueEstimatedCount: queueEstimatedItems.length,
+    // This counts transitions into the watched/history status, including skips.
+    historyMovesLastWindow: watchedRecent.length,
     watchedLastWindow: watchedRecent.length,
     mostPopularPlatform: platforms[0] || null,
     mostPopularGenre: genres[0] || null,
