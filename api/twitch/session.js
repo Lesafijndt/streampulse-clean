@@ -97,6 +97,7 @@ export default async function handler(req, res) {
 
     let firebaseCustomToken = '';
     let firebaseTokenReady = false;
+    let firebaseDiagnostic = 'firebase_custom_token_failed';
     try {
       firebaseCustomToken = await (await getFirebaseAdminAuth()).createCustomToken(`twitch_${me.id}`, {
         yediAuthorized: true,
@@ -104,15 +105,27 @@ export default async function handler(req, res) {
         role
       });
       firebaseTokenReady = true;
+      firebaseDiagnostic = 'ready';
     } catch (error) {
-      // Twitch login still works in browser-local mode, but Firestore stays locked without this secret.
-      console.error('Could not create Firebase custom token:', error?.message || error);
+      // Keep the detailed error server-side; only send a non-sensitive diagnostic category to the browser.
+      const message = String(error?.message || '');
+      if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured/i.test(message)) {
+        firebaseDiagnostic = 'missing_service_account';
+      } else if (/not valid JSON or base64 JSON/i.test(message)) {
+        firebaseDiagnostic = 'invalid_service_account_json';
+      } else if (/private key|PEM|credential|invalid_grant/i.test(message)) {
+        firebaseDiagnostic = 'invalid_service_account_credentials';
+      } else if (/Cannot find package|Cannot find module|ERR_MODULE_NOT_FOUND/i.test(message)) {
+        firebaseDiagnostic = 'firebase_admin_sdk_unavailable';
+      }
+      console.error('Could not create Firebase custom token:', message || error);
     }
 
     return res.status(200).json({
       authenticated: true,
       role,
       firebaseTokenReady,
+      firebaseDiagnostic,
       ...(firebaseCustomToken ? { firebaseCustomToken } : {}),
       user: { id: me.id, login: me.login, display_name: me.display_name, profile_image_url: me.profile_image_url || '' },
       channel: '2o3a'
