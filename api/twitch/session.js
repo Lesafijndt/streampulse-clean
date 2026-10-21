@@ -39,6 +39,24 @@ async function getFirebaseAdminAuth() {
     try { serviceAccount = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); }
     catch { throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON or base64 JSON'); }
   }
+
+  // Validate the key shape explicitly so configuration mistakes are reported as a
+  // useful safe category instead of the generic custom-token failure.
+  if (!serviceAccount || typeof serviceAccount !== 'object' || Array.isArray(serviceAccount)) {
+    throw new Error('Firebase service account must be a JSON object');
+  }
+  if (typeof serviceAccount.project_id !== 'string' || !serviceAccount.project_id.trim()) {
+    throw new Error("Firebase service account is missing the 'project_id' field");
+  }
+  if (typeof serviceAccount.client_email !== 'string' || !serviceAccount.client_email.trim()) {
+    throw new Error("Firebase service account is missing the 'client_email' field");
+  }
+  if (typeof serviceAccount.private_key !== 'string' || !serviceAccount.private_key.trim()) {
+    throw new Error("Firebase service account is missing the 'private_key' field");
+  }
+  // Handle a key pasted with literal backslash-n sequences as well as normal JSON newlines.
+  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+
   const appName = 'yedi-hub-firebase-admin';
   const app = getApps().find(item => item.name === appName) || initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id }, appName);
   return getAdminAuth(app);
@@ -111,9 +129,15 @@ export default async function handler(req, res) {
       const message = String(error?.message || '');
       if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured/i.test(message)) {
         firebaseDiagnostic = 'missing_service_account';
-      } else if (/not valid JSON or base64 JSON/i.test(message)) {
+      } else if (/not valid JSON or base64 JSON|must be a JSON object/i.test(message)) {
         firebaseDiagnostic = 'invalid_service_account_json';
-      } else if (/private key|PEM|credential|invalid_grant/i.test(message)) {
+      } else if (/missing the 'project_id' field/i.test(message)) {
+        firebaseDiagnostic = 'service_account_missing_project_id';
+      } else if (/missing the 'client_email' field/i.test(message)) {
+        firebaseDiagnostic = 'service_account_missing_client_email';
+      } else if (/missing the 'private_key' field/i.test(message)) {
+        firebaseDiagnostic = 'service_account_missing_private_key';
+      } else if (/private.?key|PEM|credential|invalid_grant|service account object|invalid jwt|signBlob|iam.serviceAccounts.signBlob/i.test(message)) {
         firebaseDiagnostic = 'invalid_service_account_credentials';
       } else if (/Cannot find package|Cannot find module|ERR_MODULE_NOT_FOUND/i.test(message)) {
         firebaseDiagnostic = 'firebase_admin_sdk_unavailable';
