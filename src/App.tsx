@@ -6,7 +6,6 @@ import {
   Clock,
   CheckCircle2,
   ListVideo,
-  ShieldAlert,
   Music,
   Gamepad2,
   Laugh,
@@ -30,7 +29,6 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
-  Check,
   X,
   AlertTriangle,
   Radio,
@@ -78,7 +76,6 @@ const ALLOWED_TWITCH_USERS = new Set(['2o3a', 'paim_beach_pete']);
 const DEFAULT_STREAM_SETTINGS = {
   streamMode: 'all',
   queueOpen: true,
-  requireApproval: false,
   subsOnly: false,
   autoPlayNext: true,
   allowYouTube: true,
@@ -132,7 +129,7 @@ function normalizeLegacyVideoVotes(video) {
   // Old browser storage / Firestore documents can outlive a deployed client version.
   // Normalize them once at the boundary so malformed fields cannot crash History rendering.
   const raw = video && typeof video === 'object' && !Array.isArray(video) ? video : {};
-  const validStatuses = new Set(['queue', 'playing', 'watched', 'watch_later', 'pending']);
+  const validStatuses = new Set(['queue', 'playing', 'watched', 'watch_later']);
   const validPlatforms = new Set(['youtube', 'tiktok', 'twitch', 'external']);
   const title = typeof raw.title === 'string' && raw.title.trim()
     ? raw.title.trim()
@@ -495,7 +492,11 @@ function YediHubAppContent() {
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'settings'), {});
-    return { ...DEFAULT_STREAM_SETTINGS, ...(saved && typeof saved === 'object' ? saved : {}) };
+    // Ignore the retired approval toggle from settings saved by an earlier version.
+    const compatibleSaved = saved && typeof saved === 'object'
+      ? Object.fromEntries(Object.entries(saved).filter(([key]) => key !== 'requireApproval'))
+      : {};
+    return { ...DEFAULT_STREAM_SETTINGS, ...compatibleSaved };
   });
 
   // Videos master state. Persist locally even when Firebase is not configured or is offline.
@@ -511,7 +512,7 @@ function YediHubAppContent() {
   });
 
   // Filter & Nav State
-  const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched' | 'pending'
+  const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
@@ -1104,7 +1105,7 @@ function YediHubAppContent() {
       queue: videos.filter((v) => v.status === 'queue').length,
       watch_later: videos.filter((v) => v.status === 'watch_later').length,
       watched: videos.filter((v) => v.status === 'watched').length,
-      pending: videos.filter((v) => v.status === 'pending').length
+
     };
   }, [videos]);
 
@@ -1383,8 +1384,6 @@ function YediHubAppContent() {
         : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
     const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
 
-    const targetStatus = streamSettings.requireApproval && !requesterIsStaff ? 'pending' : 'queue';
-
     const newVideo = {
       id: 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
       channelRoom,
@@ -1398,7 +1397,7 @@ function YediHubAppContent() {
       durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? 45 : 225,
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
-      status: targetStatus,
+      status: 'queue',
       upvotes: 0,
       voters: [],
       pinned: false,
@@ -1411,12 +1410,7 @@ function YediHubAppContent() {
 
     syncAddVideo(newVideo);
 
-    addToast(
-      targetStatus === 'pending'
-        ? `Sent "${cleanTitle.slice(0, 24)}..." to Moderator Approval`
-        : `Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] to Queue!`,
-      'success'
-    );
+    addToast(`Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] straight to the queue!`, 'success');
     return true;
   };
 
@@ -1741,11 +1735,6 @@ function YediHubAppContent() {
     addToast(`Saved "${video.title.slice(0, 24)}..." to Watch Later list.`, 'info');
   };
 
-  const handleApprovePending = (video) => {
-    syncUpdateVideo(video.id, { status: 'queue', queueOrder: getNextQueueOrder() });
-    addToast(`Approved request from @${video.requestedBy}!`, 'success');
-  };
-
   const handleRequeue = (video) => {
     syncUpdateVideo(video.id, {
       status: 'queue',
@@ -1868,12 +1857,10 @@ function YediHubAppContent() {
     const owned = (video) => normalizeTwitchLogin(video.requestedBy) === requester;
     const playing = videos.find((video) => video.status === 'playing');
     const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const pending = videos.filter((video) => video.status === 'pending' && owned(video));
     const myQueued = queued.map((video, index) => ({ video, position: index + 1 })).filter((item) => owned(item.video));
     const messages = [];
 
     if (playing && owned(playing)) messages.push('one request is playing now');
-    if (pending.length) messages.push(`${pending.length} request${pending.length === 1 ? '' : 's'} waiting for moderator approval`);
 
     let secondsAhead = 0;
     if (playing) {
@@ -2095,10 +2082,10 @@ function YediHubAppContent() {
                   Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ GACHI MODE ♂
+                  ♂ SVENSK GACHI PIT ♂
                 </span>
                 <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 SWEDISH SOAP CLUB 🧼
+                  🇸🇪 SVERIGE • NO MERCY 🧼
                 </span>
               </div>
 
@@ -2513,10 +2500,9 @@ function YediHubAppContent() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
-                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
-                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
-                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' },
-                  { id: 'pending', label: 'Mod Approval', icon: ShieldAlert, count: counts.pending, badge: 'bg-amber-500/20 text-amber-300' }
+                  { id: 'queue', label: 'Fight Card', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
+                  { id: 'watch_later', label: 'Backlog', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
+                  { id: 'watched', label: 'War Stories', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
                 ].map((tab) => {
                   const Icon = tab.icon;
                   const active = activeTab === tab.id;
@@ -2738,7 +2724,7 @@ function YediHubAppContent() {
                         </div>
                       </div>
 
-                      {/* Right: Moderation & Control Buttons */}
+                      {/* Right: Arena Control Buttons */}
                       <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
                         {/* Hype Vote */}
                         <button
@@ -2755,29 +2741,8 @@ function YediHubAppContent() {
                           <span>{video.upvotes || 0}</span>
                         </button>
 
-                        {/* Mod Approval Mode specific buttons */}
-                        {video.status === 'pending' && isStaff && (
-                          <>
-                            <button
-                              onClick={() => handleApprovePending(video)}
-                              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Approve</span>
-                            </button>
-                            <button
-                              onClick={() => syncDeleteVideo(video.id)}
-                              className="p-1.5 rounded-xl bg-rose-600/20 text-rose-300 border border-rose-500/30 hover:bg-rose-600/30"
-                              title="Reject Request"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
-
-                        {/* Standard Queue Buttons */}
-                        {video.status !== 'pending' && (
-                          <>
+                        {/* Every request is immediately playable; no approval state. */}
+                        <>
                             <button
                               onClick={() => handlePlayNow(video)}
                               className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
@@ -2846,8 +2811,7 @@ function YediHubAppContent() {
                                 </button>
                               </>
                             )}
-                          </>
-                        )}
+                        </>
                       </div>
                     </div>
                   );
@@ -2872,7 +2836,7 @@ function YediHubAppContent() {
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
+                  <h3 className="text-base font-bold text-white">ENTER THE SVENSK GACHI PIT</h3>
                   <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
                 </div>
               </div>
@@ -3048,14 +3012,13 @@ function YediHubAppContent() {
 
             <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
-                <div className="font-bold text-emerald-300">Unfiltered media requests</div>
-                <p className="text-[11px] text-slate-400">All platforms and categories are accepted while the queue is open. Categories are labels only; subscriber-only, platform, and stream-mode filters are disabled.</p>
+                <div className="font-bold text-amber-300">OPEN FLOOR • NO MERCY</div>
+                <p className="text-[11px] text-slate-400">Every request enters the live queue immediately while the arena is open. No approval step, no waiting room. Categories are labels only.</p>
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
-                { key: 'requireApproval', label: 'Require Moderator Approval', desc: 'Accepted requests go to Pending Approval until approved' },
-                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically skip to next item when finished where the player exposes an ended event' }
+                { key: 'queueOpen', label: 'Arena Open for Requests', desc: 'Allow !assr Twitch requests and web submissions' },
+                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
               ].map((item) => (
                 <label
                   key={item.key}
