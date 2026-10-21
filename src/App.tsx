@@ -313,7 +313,7 @@ const CATEGORY_META = {
     ]
   },
   Gaming: {
-    label: 'Gaming',
+    label: 'Blind Playthroughs',
     icon: Gamepad2,
     badgeBg: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
     colorHex: '#10b981',
@@ -325,7 +325,7 @@ const CATEGORY_META = {
     ]
   },
   Memes: {
-    label: 'Memes / Comedy',
+    label: 'Shitposts',
     icon: Laugh,
     badgeBg: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
     colorHex: '#f59e0b',
@@ -1594,6 +1594,23 @@ function YediHubAppContent() {
     setActivityReconnectTick((tick) => tick + 1);
     setCloudReconnectTick((tick) => tick + 1);
     flushPendingActivityEvents();
+  };
+
+  const handleRefreshStats = () => {
+    const storedEvents = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
+    const merged = mergeActivityEvents(
+      activityEventsRef.current,
+      Array.isArray(storedEvents) ? storedEvents : []
+    );
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    setStatsNow(Date.now());
+
+    // Authenticated viewers can pull the latest lifetime activity from the server log too.
+    if (twitchAuth.authenticated && networkOnline) {
+      setActivityReconnectTick((tick) => tick + 1);
+    }
   };
 
   const syncAddVideo = async (videoObj) => {
@@ -3503,6 +3520,7 @@ function YediHubAppContent() {
             activityStats={activityStats}
             statsExpanded={statsExpanded}
             onToggle={() => setStatsExpanded((expanded) => !expanded)}
+            onRefreshStats={handleRefreshStats}
             durationLookupStats={durationLookupStats}
             onRefreshDurations={handleRefreshDurations}
             isStaff={isStaff}
@@ -4130,8 +4148,8 @@ function YediHubAppContent() {
                   >
                     <option value="Auto">✨ Auto-Detect via Engine</option>
                     <option value="Music">🎵 Music / Beats</option>
-                    <option value="Gaming">🎮 Gaming / Highlights</option>
-                    <option value="Memes">😂 Memes / Comedy</option>
+                    <option value="Gaming">🎮 Blind Playthroughs</option>
+                    <option value="Memes">😂 Shitposts</option>
                     <option value="Clips">🎬 Twitch Clips</option>
                     <option value="IRL">🎙️ IRL / Podcast</option>
                   </select>
