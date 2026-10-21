@@ -23,19 +23,15 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Run regression tests
         run: npm test
-      - name: Install Playwright package
-        run: |
-          timeout 180s npm install --no-save --package-lock=false playwright
-          npx playwright --version
       - name: Configure headless browser
         run: |
           BROWSER_PATH="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          if [ -n "$BROWSER_PATH" ]; then
-            echo "CHROME_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
-            echo "Using runner browser: $BROWSER_PATH"
-          else
-            timeout 180s npx playwright install chromium
+          if [ -z "$BROWSER_PATH" ]; then
+            echo "The GitHub runner must provide Google Chrome or Chromium for browser regression tests."
+            exit 1
           fi
+          echo "CHROME_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
+          echo "Using runner browser: $BROWSER_PATH"
       - name: Run browser regression tests
         run: |
           npm run dev -- --host 127.0.0.1 > /tmp/whale-cum-vite.log 2>&1 &

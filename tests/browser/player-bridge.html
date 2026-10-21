@@ -15,4 +15,18 @@ document.querySelector('#tt-pause').addEventListener('click',()=>postTikTokPlaye
 document.querySelector('#tt-mute').addEventListener('click',()=>postTikTokPlayerCommand(target,'mute'));
 document.querySelector('#tt-unmute').addEventListener('click',()=>postTikTokPlayerCommand(target,'unMute'));
 window.__playerFixtureReady=true;
+if (new URLSearchParams(window.location.search).get('autotest') === '1') {
+  const buttonIds = ['#yt-play', '#yt-pause', '#tt-play', '#tt-pause', '#tt-mute', '#tt-unmute'];
+  for (const buttonId of buttonIds) document.querySelector(buttonId).click();
+  const commands = window.__playerCommands;
+  const pass = commands.length === 6
+    && commands[0].origin === 'https://www.youtube.com'
+    && JSON.stringify(JSON.parse(commands[0].data)) === JSON.stringify({ event: 'command', func: 'playVideo', args: [] })
+    && JSON.stringify(JSON.parse(commands[1].data)) === JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] })
+    && commands[2].origin === 'https://www.tiktok.com'
+    && JSON.stringify(commands.slice(2).map((entry) => entry.data.type)) === JSON.stringify(['play', 'pause', 'mute', 'unMute'])
+    && commands.slice(2).every((entry) => entry.data['x-tiktok-player'] === true && entry.data.value === null);
+  document.body.setAttribute('data-test-status', pass ? 'pass' : 'fail');
+  document.querySelector('#log').textContent = JSON.stringify({ pass, commands }, null, 2);
+}
 </script></body></html>
