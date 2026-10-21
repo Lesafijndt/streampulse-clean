@@ -663,6 +663,7 @@ function YediHubAppContent() {
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
@@ -1333,6 +1334,7 @@ function YediHubAppContent() {
     return videos
       .filter((v) => v.status === activeTab)
       .filter((v) => (selectedCategory === 'All' ? true : v.category === selectedCategory))
+      .filter((v) => mediaTypeFilter === 'All' || (v.mediaType || detectMusicType(v.url, v.title, v.note)) === mediaTypeFilter)
       .filter((v) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
@@ -1354,7 +1356,7 @@ function YediHubAppContent() {
         if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
         return compareQueueOrder(a, b);
       });
-  }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
+  }, [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]);
 
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
@@ -1445,7 +1447,7 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('WHALE CUM: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
+          sendTwitchChatReply('whale cum: paste a supported video URL directly in chat, or use !assr <URL or search words> (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
           sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
           sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
@@ -2187,7 +2189,7 @@ function YediHubAppContent() {
         lastChatReplyAtRef.current = Date.now();
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
-          console.warn('WHALE CUM could not reply in Twitch chat:', result.error || response.statusText);
+          console.warn('whale cum could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
             addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
@@ -2470,7 +2472,7 @@ function YediHubAppContent() {
           HEADER: BROADCASTER IDENTITY & SYNC STATUS
           ========================================== */}
       <header className="sticky top-0 z-40 bg-[#0e121a]/95 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-2.5">
-        <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
+        <div className="w-full max-w-none mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
           <div className="flex items-center gap-3">
             <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
@@ -2482,10 +2484,10 @@ function YediHubAppContent() {
                   WHALE CUM
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ GACHI ARENA ♂
+                  ♂ GACHI MODE ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  REAL MEN • REAL CONTENT
+                  🇸🇪 fitta javla fih
                 </span>
               </div>
 
@@ -2611,7 +2613,7 @@ function YediHubAppContent() {
           ========================================== */}
       <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
         <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
-        <div className="relative z-10 mx-auto flex min-h-[150px] max-w-[1740px] flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
+        <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
           <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
           <p className="mt-1 text-xs sm:text-sm font-black uppercase italic tracking-[0.22em] text-slate-100">REAL MEN WATCH REAL CONTENT</p>
@@ -2628,15 +2630,15 @@ function YediHubAppContent() {
             <div className="gachi-rail-heading"><Play className="w-3.5 h-3.5 fill-current" /> NEXT UP</div>
             {nextQueuedVideo ? (
               <button type="button" onClick={() => handlePlayNow(nextQueuedVideo)} className="gachi-next-up-card w-full flex items-center gap-3 text-left rounded-xl p-2">
-                <img src={nextQueuedVideo.thumbnail} alt="" onError={(e) => { e.currentTarget.src = 'https://placehold.co/160x160/18181b/ff315f?text=WHALE+CUM'; }} className="w-14 h-14 rounded-lg object-cover shrink-0 border border-white/10" />
+                <img src={nextQueuedVideo.thumbnail} alt="" onError={(e) => { e.currentTarget.src = 'https://placehold.co/160x160/18181b/ff315f?text=Yedi+Hub'; }} className="w-14 h-14 rounded-lg object-cover shrink-0 border border-white/10" />
                 <span className="min-w-0"><span className="block text-[10px] uppercase tracking-widest text-slate-400">Waiting</span><span className="block mt-1 text-xs font-extrabold text-white line-clamp-2">{nextQueuedVideo.title}</span><span className="block mt-1 text-[10px] text-slate-400">by @{nextQueuedVideo.requestedBy}</span></span>
               </button>
             ) : <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-slate-500">Nothing waiting in the queue.</div>}
           </div>
           <div className="space-y-2.5">
             <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE BREAKDOWN</div>
-            <div className="gachi-queue-stat flex items-center justify-between rounded-xl px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></div>
-            <div className="gachi-queue-stat flex items-center justify-between rounded-xl px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></div>
+            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Music' ? 'All' : 'Music'); }} aria-pressed={mediaTypeFilter === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={\`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left \${mediaTypeFilter === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}\`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
+            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter(mediaTypeFilter === 'Non-Music' ? 'All' : 'Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={\`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left \${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}\`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
           </div>
           <div className="gachi-rail-foot rounded-xl p-3"><div className="text-[10px] uppercase tracking-[0.2em] font-black text-rose-300">GACHI ARENA</div><p className="mt-1.5 text-xs leading-5 text-slate-400">Real men. Real content. Live requests from chat.</p></div>
         </aside>
@@ -2764,7 +2766,7 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This shortened link could not be resolved. Request the full video URL containing <code>/video/</code> followed by the post ID.</p>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so whale cum can extract the post ID.</p>
                       
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
@@ -2951,7 +2953,7 @@ function YediHubAppContent() {
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => { setActiveTab(tab.id); if (tab.id !== 'queue') setMediaTypeFilter('All'); }}
                       className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                         active
                           ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
@@ -2988,7 +2990,7 @@ function YediHubAppContent() {
               {/* Category Pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
                 <button
-                  onClick={() => setSelectedCategory('All')}
+                  onClick={() => { setSelectedCategory('All'); setMediaTypeFilter('All'); }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
                     selectedCategory === 'All'
                       ? 'bg-white/10 border border-purple-500 text-white'
@@ -3005,7 +3007,7 @@ function YediHubAppContent() {
                   return (
                     <button
                       key={catKey}
-                      onClick={() => setSelectedCategory(catKey)}
+                      onClick={() => { setSelectedCategory(catKey); setMediaTypeFilter('All'); }}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${
                         active
                           ? 'bg-white/10 border-purple-500 text-white'
@@ -3047,7 +3049,7 @@ function YediHubAppContent() {
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />
                   <p className="text-sm font-bold text-slate-300">No media found in this view</p>
                   <p className="text-xs text-slate-500">
-                    Nothing in this view yet. Add a video link or request one through Twitch chat.
+                    The arena awaits its next main event. Submit a YouTube, Twitch Clip, or TikTok link.
                   </p>
                 </div>
               ) : (
@@ -3058,7 +3060,7 @@ function YediHubAppContent() {
                   return (
                     <div
                       key={video.id}
-                      className={`gachi-queue-item group relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-2.5 rounded-2xl border transition-all ${
+                      className={`gachi-queue-item group relative flex items-center justify-between gap-3 p-2.5 rounded-2xl border transition-all ${
                         isCurrent
                           ? 'bg-purple-950/20 border-purple-500/50 shadow-lg shadow-purple-950/40'
                           : video.pinned
@@ -3086,7 +3088,7 @@ function YediHubAppContent() {
                             src={video.thumbnail}
                             alt=""
                             onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=WHALE+CUM';
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
                             }}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           />
@@ -3551,7 +3553,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('WHALE CUM render failure', error, info);
+    console.error('whale cum render failure', error, info);
     this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
@@ -3560,7 +3562,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">WHALE CUM hit a rendering error</h1>
+            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
             <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
             <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
