@@ -195,7 +195,7 @@ const KNOWN_CHAT_BOTS = new Set([
   'botrix', 'deepbot', 'sery_bot', 'serybot', 'mixitup', 'soundalerts',
   'commanderroot', 'tangia', 'firebot', 'own3d', 'botisimo', 'blerp',
   'pretzelrocks', 'monstercat', 'vivbot', 'ankhbot', 'ohbot', 'phantombot',
-  'streamcaptain', 'streamstickers', 'sery_bot'
+  'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
@@ -524,6 +524,9 @@ export default function YediHubApp() {
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
+  // If the official player never starts after a queue transition, fall back to TikTok's standard embed.
+  const [tiktokEmbedMode, setTikTokEmbedMode] = useState({ requestId: '', mode: 'player' });
+  const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
   const youtubePlayerContainerRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const tiktokIframeRef = useRef(null);
@@ -624,6 +627,45 @@ export default function YediHubApp() {
         setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
       })
       .finally(() => { if (!cancelled) setTwitchAuthLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // The chat bot has a separate server-side Twitch session. It does not grant dashboard access.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/twitch/bot-session', { credentials: 'same-origin', cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
+      .then((session) => {
+        if (cancelled) return;
+        setChatBotSession({
+          loading: false,
+          connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
+          username: session.connected ? String(session.user?.login || 'gachibot69') : ''
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
+      });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('bot_connected') === '1') {
+      addToast('Chat bot @gachibot69 connected. Queue replies will use that account.', 'success');
+      params.delete('bot_connected');
+    }
+    const botError = params.get('bot_error');
+    if (botError) {
+      const explanation = botError === 'wrong_account'
+        ? 'Please authorize Twitch account @gachibot69 for chat messages.'
+        : botError === 'missing_scope'
+        ? 'Twitch did not grant chat-write permission. Reconnect the bot and approve the requested permission.'
+        : 'The chat-bot Twitch login did not complete. Please try again.';
+      addToast(explanation, 'warning');
+      params.delete('bot_error');
+    }
+    if (params.has('bot_connected') || botError) {
+      const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
+      window.history.replaceState({}, '', nextUrl);
+    }
     return () => { cancelled = true; };
   }, []);
 
@@ -986,6 +1028,9 @@ export default function YediHubApp() {
   }, [videos]);
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
+  const currentTikTokMode = currentVideo?.platform === 'tiktok' && tiktokEmbedMode.requestId === currentVideo.id
+    ? tiktokEmbedMode.mode
+    : 'player';
 
   // Older saved queues may have no explicit "playing" status even though their top item is visible.
   // Promote that first item once so vote changes reorder waiting requests, not the video already on screen.
@@ -1483,40 +1528,51 @@ export default function YediHubApp() {
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
-  // TikTok's official player needs a fresh iframe for every queue request. After a skip, retry
-  // play/unmute on load and ready; if the embed never becomes ready, expose a retry/open fallback.
+  // TikTok player health is based on actual playback, not merely the iframe's onLoad/onPlayerReady.
+  // Some transitions announce ready then remain black; after a short startup/stall window we switch to TikTok's standard embed.
   useEffect(() => {
     if (!currentVideo || currentVideo.platform !== 'tiktok' || !currentVideo.videoId) return undefined;
 
-    let readyTimeout = null;
-    const recoveryTimers = [];
-    setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
+    const requestId = currentVideo.id;
+    const mode = currentTikTokMode;
+    let playbackStarted = false;
+    let lastPlaybackTime = -1;
+    let lastMediaAdvanceAt = Date.now();
+    let startupTimer = null;
+    let stallMonitor = null;
+
+    setTikTokPlayerState({ requestId, status: 'loading' });
 
     const postTikTokCommand = (type) => {
       const frame = tiktokIframeRef.current;
-      if (!frame?.contentWindow) return;
+      if (!frame?.contentWindow || currentVideoRef.current?.id !== requestId) return;
       try {
         frame.contentWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
       } catch (error) {
         console.warn('TikTok player command could not be sent.', error);
       }
     };
-    const schedulePlaybackRecovery = (delay) => {
-      const timer = window.setTimeout(() => {
-        if (currentVideoRef.current?.id !== currentVideo.id) return;
-        postTikTokCommand('play');
-        postTikTokCommand('unMute');
-      }, delay);
-      recoveryTimers.push(timer);
+
+    const markPlaybackStarted = () => {
+      playbackStarted = true;
+      setTikTokPlayerState({ requestId, status: 'playing' });
     };
-    const markReady = () => {
-      if (readyTimeout) window.clearTimeout(readyTimeout);
-      setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
+
+    const switchToStandardEmbed = (reason) => {
+      if (currentVideoRef.current?.id !== requestId) return;
+      if (mode === 'player') {
+        setTikTokPlayerState({ requestId, status: 'loading' });
+        setTikTokEmbedMode({ requestId, mode: 'classic' });
+        setTikTokFrameReload((attempt) => attempt + 1);
+        addToast(`TikTok's player stalled${reason ? ` (${reason})` : ''}; trying the standard embed.`, 'warning');
+      } else {
+        setTikTokPlayerState({ requestId, status: 'error' });
+      }
     };
+
     const handleTikTokMessage = (event) => {
       if (event.origin !== 'https://www.tiktok.com') return;
       if (event.source !== tiktokIframeRef.current?.contentWindow) return;
-
       let data = event.data;
       if (typeof data === 'string') {
         try { data = JSON.parse(data); } catch { return; }
@@ -1524,42 +1580,58 @@ export default function YediHubApp() {
       if (!data || data['x-tiktok-player'] !== true) return;
 
       if (data.type === 'onPlayerReady') {
-        markReady();
+        // Do not unmute programmatically: that can cause the browser to pause autoplay after a moment.
+        // Let autoplay start naturally, then let the viewer use TikTok's own audio control if needed.
         postTikTokCommand('play');
-        postTikTokCommand('unMute');
-        // Some quick queue transitions report ready before the inner media element is available.
-        schedulePlaybackRecovery(700);
-        schedulePlaybackRecovery(1800);
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
         if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        if (currentTime > lastPlaybackTime + 0.04) {
+          lastPlaybackTime = currentTime;
+          lastMediaAdvanceAt = Date.now();
+        }
+        if (currentTime > 0.15) markPlaybackStarted();
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        if (state === 1) markReady();
-        if (state === 0) handleMediaEndedRef.current?.(currentVideo.id);
+        if (state === 1) markPlaybackStarted();
+        if (state === 0) handleMediaEndedRef.current?.(requestId);
       } else if (data.type === 'onPlayerError' || data.type === 'onError') {
-        if (readyTimeout) window.clearTimeout(readyTimeout);
         const errorType = data.value?.errorType || data.value || 'playback error';
-        setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
-        addToast(`TikTok could not start this post (${String(errorType)}). Retry the embed or open it on TikTok.`, 'warning');
+        switchToStandardEmbed(String(errorType));
       }
     };
 
     window.addEventListener('message', handleTikTokMessage);
-    readyTimeout = window.setTimeout(() => {
-      if (currentVideoRef.current?.id !== currentVideo.id) return;
-      setTikTokPlayerState((previous) => previous.requestId === currentVideo.id && previous.status === 'loading'
-        ? { requestId: currentVideo.id, status: 'error' }
-        : previous);
-    }, 12000);
+
+    if (mode === 'player') {
+      startupTimer = window.setTimeout(() => {
+        if (!playbackStarted && currentVideoRef.current?.id === requestId) {
+          switchToStandardEmbed('no playback signal');
+        }
+      }, 5000);
+      stallMonitor = window.setInterval(() => {
+        if (playbackStarted && currentVideoRef.current?.id === requestId && Date.now() - lastMediaAdvanceAt > 3500) {
+          switchToStandardEmbed('playback stopped advancing');
+        }
+      }, 1500);
+    } else {
+      // The classic embed does not expose the player/v1 message API consistently; the iframe onLoad handler marks it ready.
+      startupTimer = window.setTimeout(() => {
+        if (currentVideoRef.current?.id === requestId && tiktokIframeRef.current) {
+          setTikTokPlayerState((previous) => previous.requestId === requestId && previous.status === 'loading'
+            ? { requestId, status: 'error' }
+            : previous);
+        }
+      }, 12000);
+    }
 
     return () => {
       window.removeEventListener('message', handleTikTokMessage);
-      if (readyTimeout) window.clearTimeout(readyTimeout);
-      recoveryTimers.forEach((timer) => window.clearTimeout(timer));
+      if (startupTimer) window.clearTimeout(startupTimer);
+      if (stallMonitor) window.clearInterval(stallMonitor);
     };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, tiktokFrameReload]);
+  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, currentTikTokMode, tiktokFrameReload]);
 
   const handleMoveToWatchLater = (video) => {
     const isNowPlaying = video.status === 'playing';
@@ -1645,7 +1717,7 @@ export default function YediHubApp() {
     const safeMessage = String(message || '').trim().slice(0, 450);
     if (!safeMessage) return;
 
-    // Serialize replies and keep a comfortable gap so many !position commands do not trip Twitch rate limits.
+    // Serialize replies; the server sends through the dedicated @gachibot69 account and enforces Twitch limits.
     chatReplyQueueRef.current = chatReplyQueueRef.current
       .catch(() => undefined)
       .then(async () => {
@@ -1663,7 +1735,7 @@ export default function YediHubApp() {
           console.warn('Yedi Hub could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
-            addToast('Twitch chat replies need permission: log out and back in to approve chat messaging.', 'warning');
+            addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
           }
         }
       })
@@ -1964,6 +2036,29 @@ export default function YediHubApp() {
             >
               Restart Bridge
             </button>
+            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !position are sent by the separate Twitch account gachibot69">
+              <span className={`h-1.5 w-1.5 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+              {chatBotSession.loading ? 'Bot checking' : chatBotSession.connected ? 'Bot Online' : 'Bot Offline'}
+            </div>
+            <button
+              onClick={async () => {
+                if (!chatBotSession.connected) {
+                  window.location.href = '/api/twitch/bot-login';
+                  return;
+                }
+                try {
+                  await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
+                  setChatBotSession({ loading: false, connected: false, username: '' });
+                  addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
+                } catch (error) {
+                  addToast('Could not disconnect the chat bot. Please try again.', 'warning');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-bold ${chatBotSession.connected ? 'bg-[#141926] hover:bg-slate-800 text-slate-200 border-slate-800' : 'bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500/40'}`}
+              title={chatBotSession.connected ? 'Disconnect the separate chat reply account' : 'Log in with Twitch account gachibot69 to send chat replies'}
+            >
+              {chatBotSession.loading ? 'Checking Bot…' : chatBotSession.connected ? 'Disconnect Bot' : 'Connect @gachibot69'}
+            </button>
             <button
               onClick={() => {
                 if (!normalizeRoomName(channelRoom)) {
@@ -2043,50 +2138,85 @@ export default function YediHubApp() {
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
                       <iframe
-                        key={`tiktok-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                        key={`tiktok-${currentVideo.id}-${currentVideo.videoId}-${currentTikTokMode}-${tiktokFrameReload}`}
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
+                        style={currentTikTokMode === 'classic' ? { width: 'min(100%, 360px)', height: '100%', aspectRatio: 'auto' } : undefined}
+                        src={currentTikTokMode === 'classic'
+                          ? `https://www.tiktok.com/embed/v2/${currentVideo.videoId}?lang=en-US`
+                          : `https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&controls=1&progress_bar=1&play_button=1&volume_control=1&timestamp=1&description=1&music_info=1&rel=0`}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; fullscreen; picture-in-picture; web-share"
                         loading="eager"
                         referrerPolicy="strict-origin-when-cross-origin"
                         onLoad={() => {
-                          const requestId = currentVideo.id;
-                          [250, 850, 1700].forEach((delay) => window.setTimeout(() => {
-                            if (currentVideoRef.current?.id !== requestId) return;
-                            const frame = tiktokIframeRef.current;
-                            if (!frame?.contentWindow) return;
-                            frame.contentWindow.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            frame.contentWindow.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                          }, delay));
+                          if (currentTikTokMode === 'classic') {
+                            // The standard embed has no reliable playback-time events. Distinguish a loaded
+                            // document from a verified playing video; show a recovery prompt instead of a spinner forever.
+                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'fallback-ready' });
+                          }
+                          // For player/v1, actual playback events (not iframe load) determine health.
+                        }}
+                        onError={() => {
+                          if (currentTikTokMode === 'player') {
+                            setTikTokEmbedMode({ requestId: currentVideo.id, mode: 'classic' });
+                            setTikTokFrameReload((attempt) => attempt + 1);
+                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
+                          } else {
+                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
+                          }
                         }}
                         allowFullScreen
                       />
+                      <a
+                        href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || ''))
+                          ? currentVideo.url
+                          : `https://www.tiktok.com/video/${currentVideo.videoId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute right-3 top-3 z-30 rounded-lg border border-white/20 bg-black/70 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-lg hover:bg-black/90"
+                      >
+                        Open TikTok ↗
+                      </a>
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
-                          <div className="text-base font-black text-white">TikTok did not load correctly</div>
-                          <p className="max-w-sm text-sm text-slate-300">The embed can stall after a skip or be blocked by TikTok/browser playback rules. Retry it, or open the original post.</p>
+                          <div className="text-base font-black text-white">TikTok embed could not start</div>
+                          <p className="max-w-sm text-sm text-slate-300">The embedded player did not start. Try the alternate player or open the post on TikTok.</p>
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
                               type="button"
                               onClick={() => {
                                 setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
+                                setTikTokEmbedMode({ requestId: currentVideo.id, mode: currentTikTokMode === 'classic' ? 'player' : 'classic' });
                                 setTikTokFrameReload((attempt) => attempt + 1);
                               }}
                               className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
                             >
-                              Retry TikTok player
+                              Try alternate embed
                             </button>
-                            <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
+                            <a href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700">
                               Open on TikTok
                             </a>
                           </div>
                         </div>
                       )}
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'loading' && (
-                        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/65 px-3 py-1 text-[11px] text-slate-200">
-                          Loading TikTok player…
+                        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/65 px-3 py-1 text-center text-[11px] text-slate-200">
+                          {currentTikTokMode === 'player' ? 'Starting TikTok player… trying alternate embed if playback does not begin' : 'Loading alternate TikTok embed…'}
+                        </div>
+                      )}
+                      {currentTikTokMode === 'classic' && tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'fallback-ready' && (
+                        <div className="absolute bottom-3 left-1/2 z-20 flex max-w-[94%] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-white/15 bg-black/85 px-3 py-2 text-center text-[10px] text-white shadow-xl">
+                          <span>TikTok fallback loaded. If the video is black, open the post directly.</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' });
+                              setTikTokEmbedMode({ requestId: currentVideo.id, mode: 'player' });
+                              setTikTokFrameReload((attempt) => attempt + 1);
+                            }}
+                            className="rounded-lg border border-white/20 bg-white/10 px-2 py-1 font-bold hover:bg-white/20"
+                          >Retry player</button>
                         </div>
                       )}
                     </>
