@@ -129,15 +129,47 @@ function compareQueuePriority(a, b) {
 }
 
 function normalizeLegacyVideoVotes(video) {
-  if (Array.isArray(video?.voters)) {
-    return { ...video, upvotes: Math.max(0, Number(video.upvotes) || 0), voters: video.voters };
-  }
-  // Previous versions gave every new request one free vote. No voter identities were saved then,
-  // so subtract that seed once when migrating old records into the new voter-tracked system.
+  // Old browser storage / Firestore documents can outlive a deployed client version.
+  // Normalize them once at the boundary so malformed fields cannot crash History rendering.
+  const raw = video && typeof video === 'object' && !Array.isArray(video) ? video : {};
+  const validStatuses = new Set(['queue', 'playing', 'watched', 'watch_later', 'pending']);
+  const validPlatforms = new Set(['youtube', 'tiktok', 'twitch', 'external']);
+  const title = typeof raw.title === 'string' && raw.title.trim()
+    ? raw.title.trim()
+    : (typeof raw.title?.title === 'string' && raw.title.title.trim()
+      ? raw.title.title.trim()
+      : (typeof raw.url === 'string' && raw.url.trim() ? raw.url.trim() : 'Untitled video'));
+  const timestamp = Number(raw.timestamp);
+  const safeId = raw.id !== undefined && raw.id !== null && String(raw.id).trim()
+    ? String(raw.id)
+    : `legacy-${Number.isFinite(timestamp) ? timestamp : 0}-${String(raw.videoId || raw.url || title).replace(/[^a-z0-9_-]/gi, '').slice(0, 32)}`;
+  const hasVoters = Array.isArray(raw.voters);
+  const voters = hasVoters
+    ? raw.voters.map((item) => typeof item === 'string' || typeof item === 'number' ? String(item) : '').filter(Boolean)
+    : [];
+
   return {
-    ...video,
-    upvotes: Math.max(0, (Number(video?.upvotes) || 0) - 1),
-    voters: [],
+    ...raw,
+    id: safeId,
+    title,
+    url: typeof raw.url === 'string' ? raw.url : '',
+    platform: validPlatforms.has(raw.platform) ? raw.platform : 'external',
+    videoId: raw.videoId === undefined || raw.videoId === null ? '' : String(raw.videoId),
+    category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : 'General',
+    mediaType: typeof raw.mediaType === 'string' ? raw.mediaType : '',
+    requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
+    status: validStatuses.has(raw.status) ? raw.status : 'queue',
+    duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
+    durationSec: Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
+    addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
+    watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
+    note: typeof raw.note === 'string' ? raw.note : '',
+    thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : '',
+    timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+    queueOrder: raw.queueOrder === undefined || raw.queueOrder === null || !Number.isFinite(Number(raw.queueOrder)) ? undefined : Number(raw.queueOrder),
+    pinned: Boolean(raw.pinned),
+    upvotes: Math.max(0, hasVoters ? (Number(raw.upvotes) || 0) : ((Number(raw.upvotes) || 0) - 1)),
+    voters,
   };
 }
 
