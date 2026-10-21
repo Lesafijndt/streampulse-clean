@@ -2893,7 +2893,6 @@ function YediHubAppContent() {
                               </button>
                             )}
                             <button
-                              <button
                               onClick={() => handlePlayNow(video)}
                               className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
                             >
