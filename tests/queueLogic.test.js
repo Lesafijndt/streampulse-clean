@@ -182,3 +182,25 @@ test('Live queue statistics report recent requesters, platforms, genres, runtime
 test('player-reported real 03:45 duration is not hidden as a legacy placeholder', () => {
   assert.equal(getDurationLabel({ platform: 'youtube', duration: '03:45', durationSec: 225, durationSource: 'player' }), '3:45');
 });
+
+
+test('known local duration survives an older Firestore snapshot without replacing newer queue state', async () => {
+  const { mergeVideoDurationData, getDurationEstimate, formatRuntimeHoursMinutes } = await import('../src/queueLogic.js');
+  const cloud = [{ id: 'video-1', title: 'Example', status: 'queue', duration: '', durationSource: 'unknown', upvotes: 4 }];
+  const local = [{ id: 'video-1', title: 'Example', status: 'playing', duration: '03:45', durationSec: 225, durationSource: 'player', upvotes: 5 }];
+  const merged = mergeVideoDurationData(cloud, local);
+  assert.equal(merged[0].status, 'queue', 'only the duration fields should be merged');
+  assert.equal(merged[0].upvotes, 4);
+  assert.equal(merged[0].duration, '3:45');
+  assert.equal(merged[0].durationSec, 225);
+  assert.equal(merged[0].durationSource, 'player');
+  assert.deepEqual(getDurationEstimate(merged[0]), { seconds: 225, estimated: false, source: 'player' });
+  assert.equal(formatRuntimeHoursMinutes(3600 + 61), '1h 2m');
+  assert.equal(formatRuntimeHoursMinutes(0), '0h 0m');
+});
+
+test('trusted player-reported default-looking lengths are never demoted to fallbacks', async () => {
+  const { getDurationEstimate, getDurationLabel } = await import('../src/queueLogic.js');
+  assert.deepEqual(getDurationEstimate({ platform: 'youtube', duration: '3:45', durationSec: 225, durationSource: 'player' }), { seconds: 225, estimated: false, source: 'player' });
+  assert.equal(getDurationLabel({ platform: 'youtube', duration: '03:45', durationSec: 225, durationSource: 'player' }), '3:45');
+});

@@ -180,21 +180,22 @@ export function getDurationEstimate(video) {
   const platform = String(video?.platform || 'external').toLowerCase();
   const durationLabel = String(video?.duration || '').trim();
   const storedSeconds = Number(video?.durationSec);
-  const hasProviderDuration = video?.durationSource === 'metadata' &&
+  const hasProviderDuration = ['metadata', 'player'].includes(String(video?.durationSource || '')) &&
     Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400;
 
   if (hasProviderDuration) {
-    return { seconds: Math.round(storedSeconds), estimated: false, source: 'metadata' };
+    const source = String(video?.durationSource || '') === 'player' ? 'player' : 'metadata';
+    return { seconds: Math.round(storedSeconds), estimated: false, source };
   }
 
-  const legacyPlaceholder = (
+  const legacyPlaceholder = !['metadata', 'player'].includes(String(video?.durationSource || '')) && ((
     storedSeconds === 45 &&
     durationLabel === '00:45' &&
     ['tiktok', 'twitch', 'kick'].includes(platform)
   ) || (
     storedSeconds === 225 &&
     ['03:45', '3:45'].includes(durationLabel)
-  );
+  ));
 
   if (!legacyPlaceholder && Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400) {
     return { seconds: Math.round(storedSeconds), estimated: false, source: 'saved' };
@@ -358,4 +359,59 @@ export function buildQueueStatistics(videos = [], now = Date.now(), recentWindow
     platforms: platforms.slice(0, 4),
     genres: genres.slice(0, 4)
   };
+}
+
+
+export function formatRuntimeHoursMinutes(totalSeconds) {
+  const seconds = Number(totalSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0h 0m';
+  const totalMinutes = Math.ceil(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours + 'h ' + minutes + 'm';
+}
+
+function readReliableDuration(video) {
+  if (!video || typeof video !== 'object') return null;
+  const source = String(video.durationSource || 'unknown').toLowerCase();
+  const trustedSource = source === 'metadata' || source === 'player';
+  const label = String(video.duration || '').trim();
+  let seconds = Number(video.durationSec);
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) {
+    const match = label.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    seconds = Number(match[1] || 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+  }
+  const platform = String(video.platform || '').toLowerCase();
+  const legacyPlaceholder = !trustedSource && (
+    (seconds === 45 && label === '00:45' && ['tiktok', 'twitch', 'kick'].includes(platform)) ||
+    (seconds === 225 && ['03:45', '3:45'].includes(label))
+  );
+  if (legacyPlaceholder || seconds <= 0 || seconds > 86400) return null;
+  return {
+    seconds: Math.round(seconds),
+    duration: formatMediaDuration(seconds),
+    durationSource: trustedSource ? source : 'saved',
+    priority: source === 'player' ? 3 : source === 'metadata' ? 2 : 1
+  };
+}
+
+// Prefer a locally known real duration over a stale/cache Firestore snapshot that has no duration.
+// Merge only the immutable duration fields; cloud status, votes, ordering and other changes win.
+export function mergeVideoDurationData(incomingVideos = [], currentVideos = []) {
+  const currentById = new Map((Array.isArray(currentVideos) ? currentVideos : [])
+    .map((video) => [String(video?.id ?? ''), video]));
+  return (Array.isArray(incomingVideos) ? incomingVideos : []).map((incoming) => {
+    const local = currentById.get(String(incoming?.id ?? ''));
+    if (!local) return incoming;
+    const incomingDuration = readReliableDuration(incoming);
+    const localDuration = readReliableDuration(local);
+    if (!localDuration || (incomingDuration && incomingDuration.priority >= localDuration.priority)) return incoming;
+    return {
+      ...incoming,
+      duration: localDuration.duration,
+      durationSec: localDuration.seconds,
+      durationSource: localDuration.durationSource
+    };
+  });
 }

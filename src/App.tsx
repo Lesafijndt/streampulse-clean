@@ -83,6 +83,8 @@ import {
   getQueueMediaCounts,
   getDurationEstimate,
   buildQueueStatistics,
+  formatRuntimeHoursMinutes,
+  mergeVideoDurationData,
   createQueueBackup,
   validateQueueBackup
 } from './queueLogic.js';
@@ -178,10 +180,11 @@ function normalizeLegacyVideoVotes(video) {
   const normalizedCategory = getVideoCategory(normalizedBase);
   const mediaType = getVideoMediaType({ ...normalizedBase, category: normalizedCategory });
   const normalizedPlatform = validPlatforms.has(raw.platform) ? raw.platform : 'external';
-  const legacyEstimatedDuration = raw.durationSource !== 'metadata' && (
+  const hasTrustedDuration = ['metadata', 'player'].includes(String(raw.durationSource || ''));
+  const legacyEstimatedDuration = !hasTrustedDuration && (
     (Number(raw.durationSec) === 45 && String(raw.duration || '') === '00:45' &&
       ['tiktok', 'twitch', 'kick'].includes(normalizedPlatform)) ||
-    (Number(raw.durationSec) === 225 && String(raw.duration || '') === '03:45')
+    (Number(raw.durationSec) === 225 && ['03:45', '3:45'].includes(String(raw.duration || '')))
   );
 
   return {
@@ -1121,7 +1124,8 @@ function YediHubAppContent() {
             (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
           const dedupedRoomList = dedupeMediaVideos(rawRoomList);
-          const roomList = dedupedRoomList.videos;
+          // A cached/older Firestore snapshot must not erase better duration data already found locally.
+          const roomList = mergeVideoDurationData(dedupedRoomList.videos, videosRef.current);
 
           // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
           // so a future refresh or deletion cannot make a duplicate reappear.
@@ -1309,7 +1313,10 @@ function YediHubAppContent() {
 
   // Backfill existing queue/history items added before provider durations were retrieved.
   // Run a few requests at a time; a manual refresh retries items whose provider hides duration.
-  const durationScanKey = videos.map((video) => String(video.id)).join('|');
+  const durationScanKey = videos.map((video) =>
+    String(video.id) + ':' + String(video.durationSource || '') + ':' +
+    String(video.durationSec || '') + ':' + String(video.duration || '')
+  ).join('|');
   useEffect(() => {
     const candidates = videosRef.current.filter((video) => {
       if (!video?.id || !video?.url ||
@@ -1318,12 +1325,14 @@ function YediHubAppContent() {
       if (durationEnrichmentAttemptedRef.current.has(id) || durationEnrichmentInFlightRef.current.has(id)) return false;
       const seconds = Number(video.durationSec) || 0;
       const label = String(video.duration || '').trim();
-      const placeholder = (seconds === 45 && label === '00:45') ||
-        (seconds === 225 && ['03:45', '3:45'].includes(label));
+      const trustedSource = ['metadata', 'player'].includes(String(video.durationSource || ''));
+      const placeholder = !trustedSource && (
+        (seconds === 45 && label === '00:45') ||
+        (seconds === 225 && ['03:45', '3:45'].includes(label))
+      );
       const hasUsefulSeconds = seconds > 0 && !placeholder;
       const hasUsefulLabel = /^(?:\d+:)?\d{1,2}:\d{2}$/.test(label) &&
-        !['00:45', '03:45', '3:45'].includes(label);
-      if (['metadata', 'player'].includes(String(video.durationSource || ''))) return false;
+        (trustedSource || !['00:45', '03:45', '3:45'].includes(label));
       return !hasUsefulSeconds && !hasUsefulLabel;
     }).slice(0, 160);
 
@@ -1694,8 +1703,8 @@ function YediHubAppContent() {
   );
 
   const handleRefreshDurations = () => {
+    // Keep active lookups marked in-flight to avoid spawning duplicate metadata requests.
     durationEnrichmentAttemptedRef.current.clear();
-    durationEnrichmentInFlightRef.current.clear();
     setDurationRefreshCount((count) => count + 1);
   };
 
@@ -3007,17 +3016,7 @@ function YediHubAppContent() {
       </section>
 
       <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5">
-        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-4 space-y-5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-rose-300"><span className="gachi-live-dot" /> LIVE</div>
-            <span className="text-[10px] font-black text-slate-300">{counts.queue} IN QUEUE</span>
-          </div>
-          <div className="space-y-2.5">
-            <div className="gachi-rail-heading"><ListVideo className="w-3.5 h-3.5" /> QUEUE</div>
-            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory(selectedCategory === 'Music' && activeTab === 'queue' ? 'All' : 'Music'); setMediaTypeFilter('All'); }} aria-pressed={selectedCategory === 'Music' && activeTab === 'queue'} title="Filter the queue to music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${selectedCategory === 'Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Music className="w-3.5 h-3.5" /></span> Music</span><strong className="text-sm text-white">{counts.music}</strong></button>
-            <button type="button" onClick={() => { setActiveTab('queue'); setSelectedCategory('All'); setMediaTypeFilter('Non-Music'); }} aria-pressed={mediaTypeFilter === 'Non-Music' && activeTab === 'queue'} title="Filter the queue to non-music requests" className={`gachi-queue-stat flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left ${mediaTypeFilter === 'Non-Music' && activeTab === 'queue' ? 'gachi-stat-active' : ''}`}><span className="flex items-center gap-2 text-xs font-semibold text-slate-200"><span className="gachi-stat-icon"><Play className="w-3.5 h-3.5 fill-current" /></span> Non-Music</span><strong className="text-sm text-white">{counts.nonMusic}</strong></button>
-          </div>
-
+        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <section className="rounded-xl border border-fuchsia-500/20 bg-gradient-to-b from-[#181022] to-[#0e111b] p-3 space-y-3 shadow-lg shadow-fuchsia-950/10">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
@@ -3055,7 +3054,7 @@ function YediHubAppContent() {
             <div className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-2.5 py-2">
               <div className="min-w-0">
                 <div className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Queue runway</div>
-                <div className="mt-0.5 text-sm font-black text-white">{queueStats.queueDurationSeconds > 0 ? formatQueueWait(queueStats.queueDurationSeconds).replace(/^~/, '') : '0s'} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div>
+                <div className="mt-0.5 text-sm font-black text-white">{formatRuntimeHoursMinutes(queueStats.queueDurationSeconds)} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div>
               </div>
               <Timer className="h-4 w-4 shrink-0 text-purple-300" />
             </div>

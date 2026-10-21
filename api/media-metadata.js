@@ -42,9 +42,12 @@ export function parseDurationFromHtml(html) {
   const source = String(html || '').slice(0, 8_000_000);
   const metaTags = source.match(/<meta\b[^>]*>/gi) || [];
   for (const tag of metaTags) {
-    const name = readAttribute(tag, 'property') || readAttribute(tag, 'name');
+    const name = readAttribute(tag, 'property') || readAttribute(tag, 'name') || readAttribute(tag, 'itemprop');
     if (!/(?:video:duration|og:video:duration|^duration$)/i.test(name)) continue;
-    const value = Number(readAttribute(tag, 'content'));
+    const content = readAttribute(tag, 'content');
+    const isoSeconds = parseIso8601Duration(content);
+    if (isoSeconds) return isoSeconds;
+    const value = Number(content);
     if (Number.isFinite(value) && value > 0 && value <= 86400) return value;
   }
   const youtubeLength = source.match(/"lengthSeconds"\s*:\s*"?([0-9]+)"?/i);

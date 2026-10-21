@@ -27,3 +27,9 @@ test('TikTok item duration is extracted from provider page data', () => {
   assert.equal(parseDurationFromHtml('{"video":{"id":"1234567890123","height":1920,"duration":37,"ratio":"720p"}}'), 37);
   assert.equal(parseDurationFromHtml('{"duration":0}'), null);
 });
+
+
+test('microdata duration values are extracted even when ISO-8601 encoded', () => {
+  assert.equal(parseDurationFromHtml('<meta itemprop="duration" content="PT3M45S">'), 225);
+  assert.equal(parseDurationFromHtml('<meta property="og:video:duration" content="182">'), 182);
+});
