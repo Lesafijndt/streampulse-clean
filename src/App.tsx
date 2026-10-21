@@ -2084,8 +2084,8 @@ function YediHubAppContent() {
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
                 </span>
-                <span className="swedish-soap-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
-                  🇸🇪 SE // LIVE STREAM CONTROL
+                <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide">
+                  🇸🇪 TOTALLY NORMAL STREAM
                 </span>
               </div>
 
