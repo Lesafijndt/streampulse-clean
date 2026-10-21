@@ -3751,7 +3751,8 @@ function YediHubAppContent() {
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
-          <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slat            <QueueToolbar
+          <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
+            <QueueToolbar
               activeTab={activeTab}
               setActiveTab={setActiveTab}
               counts={counts}
@@ -3765,10 +3766,6 @@ function YediHubAppContent() {
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
             />
-
-          )}
-              </div>
-            </div>
 
             {/* Video Cards Feed */}
             <div className="gachi-queue-feed space-y-3 pt-1">
