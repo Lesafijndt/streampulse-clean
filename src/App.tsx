@@ -2296,18 +2296,12 @@ function YediHubAppContent() {
       sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
-    const previousIds = new Set(videosRef.current.map((video) => String(video.id)));
-    const ok = await processAndQueueRequest({
+    // Keep successful requests quiet in Twitch chat. Failure responses (closed queue,
+    // invalid TikTok links, failed title search, duplicates) are still sent by the request flow.
+    await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
       note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
     });
-    if (ok) {
-      const added = videosRef.current.find((video) => !previousIds.has(String(video.id))) || null;
-      const waiting = videosRef.current.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-      const position = added ? waiting.findIndex((video) => String(video.id) === String(added.id)) + 1 : 0;
-      const titleLabel = String(added?.title || title || 'video').slice(0, 48);
-      sendTwitchChatReply(`@${requester} Added "${titleLabel}"${position > 0 ? ' (#' + position + ')' : ''}.`);
-    }
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
