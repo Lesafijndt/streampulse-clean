@@ -1,9 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<defs><linearGradient id="brand" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7c3aed"/><stop offset=".52" stop-color="#4f46e5"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
-<rect width="64" height="64" rx="15" fill="url(#brand)"/>
-<path d="M18 21L27 13M46 21L37 13" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
-<rect x="13" y="22" width="38" height="27" rx="4" fill="none" stroke="#fff" stroke-width="3.5"/>
-<path d="M19 28H45V43H19Z" fill="#fff" fill-opacity=".17"/>
-<path d="M24 52H40" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
-<circle cx="45.5" cy="44.5" r="1.8" fill="#fff"/>
+  <defs>
+    <linearGradient id="soap" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fffdf3"/>
+      <stop offset="1" stop-color="#ded9c6"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#1686c7"/>
+      <stop offset="1" stop-color="#005293"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#10253c"/>
+  <g transform="rotate(-8 32 33)" filter="url(#shadow)">
+    <rect x="10" y="13" width="44" height="39" rx="9" fill="url(#soap)" stroke="#c8c1ac" stroke-width="1.5"/>
+    <rect x="13" y="16" width="38" height="33" rx="6" fill="url(#blue)"/>
+    <path d="M24 16h7v12h20v7H31v14h-7V35H13v-7h11z" fill="#fecc00"/>
+    <path d="M16 20q4-2 8-1" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" opacity=".85"/>
+    <path d="M16 44q2 2 5 2" fill="none" stroke="#fff" stroke-width="1.2" stroke-linecap="round" opacity=".55"/>
+  </g>
+  <circle cx="50" cy="10" r="3.2" fill="#b8e9ff" stroke="#e9f9ff" stroke-width="1"/>
+  <circle cx="10" cy="51" r="2.2" fill="#b8e9ff" stroke="#e9f9ff" stroke-width=".8"/>
+  <circle cx="54" cy="52" r="1.5" fill="#b8e9ff" opacity=".9"/>
 </svg>
