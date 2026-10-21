@@ -423,8 +423,8 @@ function getMediaIdentityKey(platform = '', videoId = '', rawUrl = '') {
   // For generic media URLs, ignore common tracking parameters and trailing slashes.
   try {
     const parsed = new URL(String(rawUrl || '').trim());
-    const host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
-    const pathname = parsed.pathname.replace(/\\/+$/, '').toLowerCase();
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = parsed.pathname.replace(/\/+$/, '').toLowerCase();
     const ignoredParams = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'feature', 'si', 'share', 'ab_channel']);
     const query = [...parsed.searchParams.entries()]
       .filter(([key]) => !ignoredParams.has(key.toLowerCase()))
@@ -433,7 +433,7 @@ function getMediaIdentityKey(platform = '', videoId = '', rawUrl = '') {
       .join('&');
     return `url:${host}${pathname}${query ? `?${query}` : ''}`;
   } catch {
-    return `url:${String(rawUrl || '').trim().replace(/\\/+$/, '').toLowerCase()}`;
+    return `url:${String(rawUrl || '').trim().replace(/\/+$/, '').toLowerCase()}`;
   }
 }
 
