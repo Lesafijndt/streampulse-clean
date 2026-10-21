@@ -130,7 +130,7 @@ function normalizeLegacyVideoVotes(video) {
   // Normalize them once at the boundary so malformed fields cannot crash History rendering.
   const raw = video && typeof video === 'object' && !Array.isArray(video) ? video : {};
   const validStatuses = new Set(['queue', 'playing', 'watched', 'watch_later']);
-  const validPlatforms = new Set(['youtube', 'tiktok', 'twitch', 'external']);
+  const validPlatforms = new Set(['youtube', 'tiktok', 'twitch', 'kick', 'external']);
   const title = typeof raw.title === 'string' && raw.title.trim()
     ? raw.title.trim()
     : (typeof raw.title?.title === 'string' && raw.title.title.trim()
@@ -430,6 +430,16 @@ function parseMediaUrl(rawUrl = '') {
       videoId: clipSlug,
       thumbnail: `https://placehold.co/640x360/581c87/f3e8ff?text=Twitch+Clip+%E2%80%A2+${encodeURIComponent(clipSlug.slice(0, 10))}`
     };
+  }
+
+  // Kick Clips are queued as external media and open through the official Kick clip page.
+  if (hostname === 'kick.com' || hostname.endsWith('.kick.com')) {
+    const parts = (parsedUrl?.pathname || '').split('/').filter(Boolean);
+    const clipIndex = parts.findIndex((part) => part.toLowerCase() === 'clips' || part.toLowerCase() === 'clip');
+    const clipSlug = clipIndex >= 0 ? parts[clipIndex + 1] : (hostname === 'clip.kick.com' ? parts[0] : null);
+    if (clipSlug) {
+      return { platform: 'kick', videoId: clipSlug, thumbnail: 'https://placehold.co/640x360/18181b/53fc18?text=Kick+Clip' };
+    }
   }
 
   // TikTok's official embedded player needs the numeric post ID. Short share URLs
@@ -1331,7 +1341,7 @@ function YediHubAppContent() {
       return;
     }
 
-    const looksLikeUrl = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv)\//i.test(requestText);
+    const looksLikeUrl = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\//i.test(requestText);
     let url = requestText;
     let title = '';
     if (!looksLikeUrl) {
@@ -1439,6 +1449,8 @@ function YediHubAppContent() {
         ? `Twitch Clip (${parsed.videoId})`
         : parsed.platform === 'tiktok'
         ? `TikTok Short Clip`
+        : parsed.platform === 'kick'
+          ? `Kick Clip (${parsed.videoId})`
         : 'Community Requested Media');
     const finalCategory =
       manualCategory && manualCategory !== 'Auto'
@@ -1455,8 +1467,8 @@ function YediHubAppContent() {
       videoId: parsed.videoId,
       category: finalCategory,
       mediaType,
-      duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? '00:45' : '03:45',
-      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' ? 45 : 225,
+      duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? '00:45' : '03:45',
+      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? 45 : 225,
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: 'queue',
