@@ -1119,3 +1119,178 @@ body { background: #03070b; }
     gap: .8rem !important;
   }
 }
+
+
+/* Queue panel refinement: larger single-row actions, readable metadata, reference proportions. */
+@media (min-width: 1200px) {
+  .gachi-workspace {
+    grid-template-columns: minmax(235px, 18.5vw) minmax(0, 1fr) minmax(375px, 30vw) !important;
+    gap: .8rem !important;
+    padding: .8rem !important;
+  }
+}
+.gachi-queue-panel {
+  padding: .7rem !important;
+}
+.gachi-queue-panel > div:first-child {
+  gap: .55rem !important;
+}
+.gachi-queue-panel > div:first-child > div:first-child {
+  gap: .4rem !important;
+}
+.gachi-queue-panel > div:first-child button {
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+.gachi-queue-item {
+  min-height: 72px !important;
+  gap: .55rem !important;
+  padding: .48rem !important;
+}
+.gachi-queue-item > div:first-child {
+  flex: 1 1 0% !important;
+  gap: .5rem !important;
+  overflow: hidden;
+}
+.gachi-queue-item > div:first-child > div:first-child {
+  flex: 0 0 1.2rem !important;
+  width: 1.2rem !important;
+  font-size: .72rem !important;
+}
+.gachi-queue-thumbnail {
+  flex: 0 0 3.15rem !important;
+  width: 3.15rem !important;
+  height: 3.15rem !important;
+}
+.gachi-queue-details {
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+.gachi-queue-details > div:first-child {
+  flex-wrap: nowrap !important;
+  white-space: nowrap !important;
+  gap: .22rem !important;
+}
+.gachi-queue-details select,
+.gachi-queue-details > div:first-child > span {
+  flex: 0 1 auto;
+  max-width: 100%;
+  padding: .14rem .28rem !important;
+  font-size: .62rem !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+}
+.gachi-queue-details h4 {
+  display: block !important;
+  width: 100%;
+  margin: .15rem 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  overflow-wrap: normal !important;
+  font-size: .86rem !important;
+  line-height: 1.2 !important;
+}
+.gachi-queue-details > div:last-child {
+  display: block !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  font-size: .67rem !important;
+  line-height: 1.25 !important;
+}
+.gachi-queue-actions {
+  display: flex !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: .25rem !important;
+  white-space: nowrap !important;
+}
+.gachi-queue-actions button {
+  display: inline-flex !important;
+  flex: 0 0 1.85rem !important;
+  width: 1.85rem !important;
+  min-width: 1.85rem !important;
+  height: 1.85rem !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: .45rem !important;
+  align-items: center !important;
+  justify-content: center !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  font-size: .7rem !important;
+  line-height: 1 !important;
+}
+.gachi-queue-actions button svg {
+  display: block;
+  flex: 0 0 auto !important;
+  width: 1rem !important;
+  height: 1rem !important;
+}
+.gachi-queue-actions .gachi-queue-play-now {
+  flex: 0 0 4.7rem !important;
+  width: 4.7rem !important;
+  min-width: 4.7rem !important;
+  height: 1.85rem !important;
+  padding: 0 .35rem !important;
+  font-size: .68rem !important;
+}
+.gachi-queue-actions button span {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gachi-queue-actions button:focus-visible {
+  outline: 2px solid rgba(255, 90, 125, .9);
+  outline-offset: 2px;
+}
+.gachi-queue-feed {
+  padding-right: .2rem !important;
+}
+@media (min-width: 1200px) {
+  .gachi-queue-feed { max-height: calc(100vh - 16rem) !important; }
+}
+@media (min-width: 2400px) {
+  .gachi-workspace {
+    grid-template-columns: minmax(250px, 18.5vw) minmax(0, 1fr) minmax(430px, 30vw) !important;
+    gap: 1rem !important;
+  }
+  .gachi-queue-item { gap: .65rem !important; }
+  .gachi-queue-actions { gap: .3rem !important; }
+}
+@media (max-width: 1199px) {
+  .gachi-queue-actions {
+    flex-wrap: wrap !important;
+    justify-content: flex-end !important;
+    max-width: 100%;
+  }
+  .gachi-queue-item {
+    align-items: flex-start !important;
+  }
+  .gachi-queue-item > div:first-child {
+    align-items: center !important;
+  }
+}
+@media (max-width: 767px) {
+  .gachi-queue-item { align-items: stretch !important; }
+  .gachi-queue-actions {
+    width: 100% !important;
+    flex-wrap: wrap !important;
+    justify-content: flex-end !important;
+  }
+  .gachi-queue-actions button {
+    flex: 0 0 1.85rem !important;
+    width: 1.85rem !important;
+  }
+  .gachi-queue-actions .gachi-queue-play-now {
+    flex: 0 0 4.7rem !important;
+    width: 4.7rem !important;
+  }
+}
