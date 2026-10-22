@@ -2634,7 +2634,7 @@ function YediHubAppContent() {
       batch.commit().catch((error) => {
         console.warn('Next-track transition could not sync to Firestore.', error);
         setCloudSynced(false);
-        setSyncStatusText('Next track changed locally — cloud sync failed');
+        setSyncStatusText('Next video changed locally — cloud sync failed');
       });
     }
 
@@ -3378,7 +3378,7 @@ function YediHubAppContent() {
                   ♂ GACHI MODE ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  🇸🇪 fitta javla fih
+                  ♂ fitta javla fih
                 </span>
               </div>
 
