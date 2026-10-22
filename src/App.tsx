@@ -620,6 +620,50 @@ function YediHubAppContent() {
     return () => { cancelled = true; };
   }, []);
 
+  // Renew the persistent Twitch refresh cookie while a signed-in dashboard is in use.
+  // This is a cookie-refresh check, not a client-side grant of access; the server still
+  // validates Twitch and the allowlist on every call. Focus handling also covers long sleeps.
+  useEffect(() => {
+    if (!twitchAuth.authenticated) return;
+    let active = true;
+    let requestInFlight = false;
+    const renewRememberedSession = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const response = await fetch('/api/twitch/session', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!response.ok) return; // A temporary server issue should not sign the user out.
+        const session = await response.json();
+        if (!active || session.authenticated) return;
+        // A successful response that says the Twitch session is no longer valid is
+        // authoritative. Do not keep a stale moderator/streamer UI active.
+        authorizedLoginRef.current = '';
+        setFirebaseLoginToken('');
+        setFirebaseUser(null);
+        setCloudSynced(false);
+        if (auth) {
+          try { await signOut(auth); } catch { /* Firebase may already be signed out */ }
+        }
+        setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
+      } catch {
+        // Preserve the current UI on transient network errors; retry on focus or interval.
+      } finally {
+        requestInFlight = false;
+      }
+    };
+    const sessionRenewalTimer = window.setInterval(renewRememberedSession, 6 * 60 * 60 * 1000);
+    window.addEventListener('focus', renewRememberedSession);
+    return () => {
+      active = false;
+      window.clearInterval(sessionRenewalTimer);
+      window.removeEventListener('focus', renewRememberedSession);
+    };
+  }, [twitchAuth.authenticated, auth]);
+
   // The chat bot has a separate server-side Twitch session. It does not grant dashboard access.
   useEffect(() => {
     let cancelled = false;
