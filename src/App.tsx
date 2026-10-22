@@ -455,6 +455,7 @@ function YediHubAppContent() {
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
+  const [twitchClipReadyId, setTwitchClipReadyId] = useState('');
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
   const tiktokMutePreferenceRef = useRef({ requestId: '', preference: 'auto' });
   // Track observed player state separately from the viewer's deliberate preference.
@@ -1984,18 +1985,19 @@ function YediHubAppContent() {
   useEffect(() => {
     const video = currentVideo;
     if (!video || video.platform !== 'twitch' || !video.videoId || !streamSettings.autoPlayNext) return undefined;
+    if (twitchClipReadyId !== String(video.id)) return undefined;
     const durationSeconds = Number(video.durationSec);
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return undefined;
     const videoId = String(video.id);
-    // Twitch's clip iframe has no documented ended-event API. Use its reported duration
-    // plus a small load/rounding buffer as a best-effort auto-advance fallback.
+    // Twitch's Clip iframe doesn't expose a documented ended-event API. Start this
+    // duration fallback only after the iframe loads, with extra room for startup/rounding.
     const timer = window.setTimeout(() => {
       if (String(currentVideoRef.current?.id || '') === videoId) {
         handleMediaEndedRef.current?.(videoId);
       }
-    }, (durationSeconds + 2.5) * 1000);
+    }, (durationSeconds + 4) * 1000);
     return () => window.clearTimeout(timer);
-  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.durationSec, streamSettings.autoPlayNext]);
+  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.durationSec, streamSettings.autoPlayNext, twitchClipReadyId]);
 
   const counts = useMemo(() => ({
     ...getQueueMediaCounts(videos, getVideoMediaType),
@@ -2136,9 +2138,10 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('Requests: !assr <YouTube title or supported URL> · direct URLs also work (YouTube, TikTok, Twitch Clips, Kick).');
-          sendTwitchChatReply('Your queue: !remove (latest waiting request) · !when (position/ETA) · !queue (queue status) · !bigcock [#] (upvote; not your own, one vote/video).');
-          sendTwitchChatReply('Mods: !skip · YouTube volume: !volume up/down/0-100, !mute, !unmute. For TikTok/Twitch Clips, use the player controls.');
+          sendTwitchChatReply('Request: !assr <YouTube title or URL> · direct URLs: YouTube, TikTok, Twitch Clips, Kick. Queue must be open.');
+          sendTwitchChatReply('Your requests: !remove / !unrequest (remove your latest waiting request) · !when / !position (spot and ETA) · !queue (queue status).');
+          sendTwitchChatReply('Vote: !bigcock [#] (upvote a waiting request; not your own, one vote per video). Mods: !skip.');
+          sendTwitchChatReply('Volume: Mods can use !volume up/down/0-100, !mute, !unmute on YouTube. TikTok/Twitch Clip volume uses the player controls.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -3741,7 +3744,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=0&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -3826,6 +3829,11 @@ function YediHubAppContent() {
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
                       allowFullScreen
+                      onLoad={() => {
+                        if (String(currentVideoRef.current?.id || '') === String(currentVideo.id)) {
+                          setTwitchClipReadyId(String(currentVideo.id));
+                        }
+                      }}
                     />
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
