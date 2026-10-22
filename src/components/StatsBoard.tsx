@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Activity, BarChart3, CheckCircle2, ChevronDown, ListVideo, RefreshCw, Timer, TrendingUp, Users, ThumbsUp, SkipForward } from 'lucide-react';
 import ConnectionStatusPill from './ConnectionStatusPill';
+import { buildActivityStatistics, filterActivityEventsByPeriod } from '../activityLog.js';
 
 function Metric({ icon: Icon, label, value, detail }) {
   return <div className="gachi-stat-card min-w-0 rounded-xl border p-2.5">
@@ -27,10 +28,17 @@ function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
 }
 
 export default function StatsBoard({
-  queueStats, activityStats, statsExpanded, onToggle, onRefreshStats, durationLookupStats, onRefreshDurations,
+  queueStats, activityEvents = [], currentSessionId = '', statsNow = Date.now(), statsExpanded, onToggle, onRefreshStats, durationLookupStats, onRefreshDurations,
   isStaff, activitySyncStatus, activitySyncTone, activitySyncError, canRetryActivitySync,
   onRetryActivitySync, networkOnline
 }) {
+  const [statsPeriod, setStatsPeriod] = useState('lifetime');
+  const activityStats = useMemo(() => buildActivityStatistics(filterActivityEventsByPeriod(activityEvents, {
+    period: statsPeriod,
+    sessionId: currentSessionId,
+    now: statsNow
+  })), [activityEvents, statsPeriod, currentSessionId, statsNow]);
+  const periodLabel = statsPeriod === '24h' ? 'Last 24 hours' : statsPeriod === 'session' ? 'This tab session' : 'Lifetime';
   const runwayMinutes = Math.ceil(Math.max(0, Number(queueStats.queueDurationSeconds) || 0) / 60);
   const runway = `${Math.floor(runwayMinutes / 60)}h ${runwayMinutes % 60}m`;
   return <section className="gachi-panel gachi-stats-panel rounded-2xl border p-3 space-y-3">
@@ -44,7 +52,7 @@ export default function StatsBoard({
           type="button"
           onClick={onRefreshStats}
           className="gachi-control-btn inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-2 text-[9px] font-bold"
-          title="Refresh lifetime stats from saved activity and cloud sync"
+          title="Refresh saved activity and pull the latest cloud event log"
           aria-label="Refresh stats"
         >
           <RefreshCw className="h-3 w-3" />
@@ -55,13 +63,20 @@ export default function StatsBoard({
     </div>
     {statsExpanded && <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[9px] text-slate-400">Lifetime activity · persistent event log</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="stats-period" className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Activity window</label>
+          <select id="stats-period" className="gachi-select rounded-lg px-2 py-1 text-[10px]" value={statsPeriod} onChange={(event) => setStatsPeriod(event.target.value)}>
+            <option value="lifetime">Lifetime</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="session">This tab session</option>
+          </select>
+        </div>
         <span className="text-[9px] text-slate-500">{networkOnline ? 'Network online' : 'Offline · local changes saved'}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <Metric icon={Users} label="People" value={activityStats.uniqueRequesters} detail="unique recorded requesters" />
-        <Metric icon={TrendingUp} label="Requests" value={activityStats.totalRequests} detail="recorded over time" />
-        <Metric icon={ListVideo} label="Waiting" value={queueStats.queueCount} detail="currently in queue" />
+        <Metric icon={Users} label="People" value={activityStats.uniqueRequesters} detail="unique requesters · selected window" />
+        <Metric icon={TrendingUp} label="Requests" value={activityStats.totalRequests} detail={periodLabel.toLowerCase() + ' request events'} />
+        <Metric icon={ListVideo} label="Waiting" value={queueStats.queueCount} detail="live queue · not period-filtered" />
         <Metric icon={CheckCircle2} label="Completed" value={activityStats.completed} detail="player ended events" />
         <Metric icon={SkipForward} label="Skipped" value={activityStats.skipped} detail="tracks skipped manually" />
         <Metric icon={ThumbsUp} label="Votes" value={activityStats.votes} detail="successful upvotes" />
@@ -84,7 +99,7 @@ export default function StatsBoard({
       </div>
       {activitySyncError && canRetryActivitySync && <button type="button" onClick={onRetryActivitySync} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold"><RefreshCw className="h-3.5 w-3.5" /> Retry activity sync</button>}
       {isStaff && <button type="button" onClick={onRefreshDurations} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold" title="Retry provider metadata lookups for entries whose duration is still unknown"><RefreshCw className="h-3.5 w-3.5" /> Refresh missing durations</button>}
-      <div className="text-[9px] leading-4 text-slate-500">The log records events as they happen. Older items are imported from saved queue/history when available; completion is counted only when the player reports an ended event.</div>
+      <div className="text-[9px] leading-4 text-slate-500">{periodLabel} filters recorded requests, people, completion, skips, votes, and rankings. Waiting count and queue runway always describe the current queue. Events are recorded as they happen; legacy queue/history items may be imported when available, and completion is counted only when the player reports an ended event.</div>
     </div>}
   </section>;
 }

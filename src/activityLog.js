@@ -70,3 +70,22 @@ export function buildActivityStatistics(events = []) {
     requesters: requesters.slice(0, 4)
   };
 }
+
+
+/**
+ * Filters normalized activity events for the Stats board's selectable reporting window.
+ * "session" is scoped to this browser tab's current activity session ID.
+ */
+export function filterActivityEventsByPeriod(events = [], { period = 'lifetime', sessionId = '', now = Date.now() } = {}) {
+  const normalized = mergeActivityEvents(events);
+  if (period === 'session') {
+    const currentSession = String(sessionId || '');
+    return currentSession ? normalized.filter((event) => event.sessionId === currentSession) : [];
+  }
+  if (period === '24h') {
+    const currentTime = Number(now) || Date.now();
+    const cutoff = currentTime - 24 * 60 * 60 * 1000;
+    return normalized.filter((event) => event.at >= cutoff && event.at <= currentTime);
+  }
+  return normalized;
+}
