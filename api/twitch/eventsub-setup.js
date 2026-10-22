@@ -32,10 +32,14 @@ function clearCookies(res, prefix) {
     `${prefix}_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
   ]);
 }
-function getOrigin() {
+function getOrigin(req) {
   const configured = String(process.env.TWITCH_APP_URL || '').trim();
+  const forwardedHost = String(req?.headers?.['x-forwarded-host'] || '').split(',')[0].trim();
+  const requestHost = forwardedHost || String(req?.headers?.host || '').split(',')[0].trim();
+  const requestProto = String(req?.headers?.['x-forwarded-proto'] || 'https').split(',')[0].trim().toLowerCase();
+  const requestOrigin = requestHost ? `${requestProto}://${requestHost}` : '';
   const vercelHost = String(process.env.VERCEL_URL || '').trim();
-  const candidate = configured || (vercelHost ? `https://${vercelHost}` : 'https://streampulse-clean.vercel.app');
+  const candidate = configured || requestOrigin || (vercelHost ? `https://${vercelHost}` : 'https://streampulse-clean.vercel.app');
   const parsed = new URL(candidate);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('The public app URL must be HTTPS');
   return parsed.origin;
@@ -216,7 +220,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     let origin;
     try {
-      origin = getOrigin();
+      origin = getOrigin(req);
       const configuredOrigin = origin;
       if (String(req.headers.origin || '') !== configuredOrigin) {
         return res.status(403).json({ active: false, status: 'error', code: 'origin_mismatch', message: 'Setup must be started from the WHALE CUM dashboard.' });
@@ -288,7 +292,7 @@ export default async function handler(req, res) {
 
   // GET only checks the listener state; it never creates subscriptions or writes queue data.
   try {
-    const origin = getOrigin();
+    const origin = getOrigin(req);
     const { broadcasterId, botId } = await resolveUserIds();
     const subscription = await findSubscription(origin, broadcasterId, botId);
     const currentStatus = statusResult(subscription);
