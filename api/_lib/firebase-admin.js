@@ -1,6 +1,3 @@
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-
 let cachedDb = null;
 
 function loadServiceAccount() {
@@ -35,17 +32,26 @@ function loadServiceAccount() {
   return serviceAccount;
 }
 
-export function getFirebaseAdminApp() {
+export async function getFirebaseAdminApp() {
   const serviceAccount = loadServiceAccount();
   const appName = 'yedi-hub-firebase-admin';
+  // Match the lazy dynamic-import strategy used by the Twitch session API. This avoids
+  // the ERR_REQUIRE_ESM failure seen when the Vercel function bundle loads Admin SDKs.
+  const { cert, getApps, initializeApp } = await import('firebase-admin/app');
   return getApps().find((app) => app.name === appName) || initializeApp({
     credential: cert(serviceAccount),
     projectId: serviceAccount.project_id,
   }, appName);
 }
 
-export function getFirebaseAdminDb() {
-  if (!cachedDb) cachedDb = getFirestore(getFirebaseAdminApp());
+export async function getFirebaseAdminDb() {
+  if (!cachedDb) {
+    const [{ getFirestore }, app] = await Promise.all([
+      import('firebase-admin/firestore'),
+      getFirebaseAdminApp(),
+    ]);
+    cachedDb = getFirestore(app);
+  }
   return cachedDb;
 }
 
