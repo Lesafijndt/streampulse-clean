@@ -1712,7 +1712,8 @@ function YediHubAppContent() {
       const paused = snapshot.paused || intent.paused;
       const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
       const currentTime = Math.max(0, Number(snapshot.currentTime) || 0);
-      const expiresAt = Date.now() + 5000;
+      // Only guard the iframe's immediate restoration blip; a multi-second guard blocks real user clicks.
+      const expiresAt = Date.now() + 350;
       playbackRestoreGuardRef.current = {
         videoId,
         until: expiresAt,
@@ -2715,6 +2716,9 @@ function YediHubAppContent() {
           updatePlaybackIntent(videoId, { paused: true });
           keyboardPausedRef.current = { videoId, paused: true };
         } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
+          // Consume this one transient resume event only. Do not keep rejecting
+          // explicit Play clicks for the remainder of a long visibility guard.
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           postCommand('pauseVideo');
         } else if (stateFromEvent === 1) {
           updatePlaybackIntent(videoId, { paused: false });
@@ -2812,6 +2816,9 @@ function YediHubAppContent() {
           updatePlaybackIntent(videoId, { paused: true });
           keyboardPausedRef.current = { videoId, paused: true };
         } else if (state === 1 && suppressUnexpectedResume) {
+          // Consume this one transient resume event only; native player clicks
+          // after tab return must work immediately.
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           sendCommand('pause');
         } else if (state === 1) {
           updatePlaybackIntent(videoId, { paused: false });
