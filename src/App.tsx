@@ -101,6 +101,7 @@ import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
+import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 
 
 
@@ -2282,6 +2283,7 @@ function YediHubAppContent() {
       ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
       : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
     const finalCategory = !categoryManuallySet && mediaType === 'Music' ? 'Music' : detectedCategory;
+    const requestedAt = Date.now();
 
     const newVideo = {
       id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
@@ -2302,9 +2304,9 @@ function YediHubAppContent() {
       upvotes: 0,
       voters: [],
       pinned: false,
-      addedAt: 'Just now',
+      addedAt: new Date(requestedAt).toISOString(),
       queueOrder: getNextQueueOrder(),
-      timestamp: Date.now(),
+      timestamp: requestedAt,
       note: note || `Added to ${channelRoom} deck`,
       thumbnail: resolvedThumbnail || parsed.thumbnail,
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
@@ -2419,7 +2421,7 @@ function YediHubAppContent() {
       if (item.status === 'playing' && String(item.id) !== String(video.id)) {
         updatesById.set(String(item.id), {
           status: 'watched',
-          watchedAt: 'Just now',
+          watchedAt: new Date(now).toISOString(),
           playedAt: now,
           nextTrackOverrideId: null,
         });
@@ -3012,11 +3014,12 @@ function YediHubAppContent() {
   };
 
   const handleRequeue = (video) => {
+    const requestedAt = Date.now();
     syncUpdateVideo(video.id, {
       status: 'queue',
       queueOrder: getNextQueueOrder(),
-      timestamp: Date.now(),
-      addedAt: 'Re-queued'
+      timestamp: requestedAt,
+      addedAt: new Date(requestedAt).toISOString()
     });
     addToast(`Re-added "${video.title.slice(0, 24)}..." to active queue.`, 'info');
   };
@@ -3731,7 +3734,7 @@ function YediHubAppContent() {
                         Requester: <strong className="text-purple-300 font-semibold">@{currentVideo.requestedBy}</strong>
                       </span>
                       <span>•</span>
-                      <span>Added {currentVideo.addedAt}</span>
+                      <span title={formatAbsoluteTimestamp(currentVideo.timestamp)}>Requested {formatRelativeTimestamp(currentVideo.timestamp, statsNow)}</span>
                       {currentVideo.note && (
                         <>
                           <span>•</span>
@@ -3845,6 +3848,7 @@ function YediHubAppContent() {
                     handleTogglePin={handleTogglePin}
                     handleMoveToWatchLater={handleMoveToWatchLater}
                     handleRequeue={handleRequeue}
+                    now={statsNow}
                   />
                 ))
               )}

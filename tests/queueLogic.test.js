@@ -274,3 +274,17 @@ test('duration enrichment retries missing YouTube/TikTok durations but skips val
   assert.equal(videoNeedsDurationLookup({ id: 'yt', url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', duration: '3:01', durationSec: 181, durationSource: 'metadata' }), false);
   assert.equal(videoNeedsDurationLookup({ id: 'web', url: 'https://example.com/v', platform: 'web' }), false);
 });
+
+
+test('track transition persists the real playback timestamp instead of a static relative label', () => {
+  const videos = [
+    { id: 'outgoing', status: 'playing', timestamp: 100, queueOrder: 1 },
+    { id: 'next', status: 'queue', timestamp: 200, queueOrder: 2 }
+  ];
+  const transitionAt = Date.parse('2026-10-22T12:00:00Z');
+  const transition = buildNextTrackTransition(videos, videos[0], compareQueueOrder, transitionAt);
+  const outgoing = transition.nextVideos.find((video) => video.id === 'outgoing');
+  assert.equal(outgoing.playedAt, transitionAt);
+  assert.equal(outgoing.watchedAt, new Date(transitionAt).toISOString());
+  assert.notEqual(outgoing.watchedAt, 'Just now');
+});

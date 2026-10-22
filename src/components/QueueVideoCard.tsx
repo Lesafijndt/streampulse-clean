@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2 } from 'lucide-react';
 import { CATEGORY_META, getVideoCategory, getVideoMediaType } from '../mediaUtils.js';
 import { getDurationEstimate, getThumbnailDurationLabel } from '../queueLogic.js';
+import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.js';
 
 export default function QueueVideoCard({
   video,
@@ -25,7 +26,8 @@ export default function QueueVideoCard({
   handleMoveOrder,
   handleTogglePin,
   handleMoveToWatchLater,
-  handleRequeue
+  handleRequeue,
+  now = Date.now()
 }) {
 
                   const isCurrent = currentVideo && currentVideo.id === video.id;
@@ -163,11 +165,11 @@ export default function QueueVideoCard({
                               by <strong className="text-slate-200 font-semibold">@{video.requestedBy}</strong>
                             </span>
                             <span>•</span>
-                            <span>{video.addedAt}</span>
-                            {video.watchedAt && (
+                            <span title={formatAbsoluteTimestamp(video.timestamp)}>Requested {formatRelativeTimestamp(video.timestamp, now)}</span>
+                            {(video.status === 'watched' || Boolean(video.watchedAt)) && (
                               <>
                                 <span>•</span>
-                                <span className="text-emerald-400 font-medium">Played {video.watchedAt}</span>
+                                <span className="text-emerald-400 font-medium" title={formatAbsoluteTimestamp(video.playedAt || video.watchedAt)}>Played {formatRelativeTimestamp(video.playedAt || video.watchedAt, now)}</span>
                               </>
                             )}
                             {video.note && (

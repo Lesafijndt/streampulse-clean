@@ -118,7 +118,7 @@ export function buildNextTrackTransition(latestVideos, outgoing, compareQueueOrd
     if (video.status === 'playing') {
       updatesById.set(String(video.id), {
         status: 'watched',
-        watchedAt: 'Just now',
+        watchedAt: new Date(transitionAt).toISOString(),
         playedAt: transitionAt,
         nextTrackOverrideId: null
       });
@@ -126,7 +126,7 @@ export function buildNextTrackTransition(latestVideos, outgoing, compareQueueOrd
   });
   updatesById.set(String(outgoing.id), {
     status: 'watched',
-    watchedAt: 'Just now',
+    watchedAt: new Date(transitionAt).toISOString(),
     playedAt: transitionAt,
     nextTrackOverrideId: null
   });
