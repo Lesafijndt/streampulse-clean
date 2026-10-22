@@ -407,6 +407,21 @@ function YediHubAppContent() {
     return [];
   });
   const videosRef = useRef(videos);
+  // Queue items are added optimistically. Keep unconfirmed writes separately so a stale
+  // Firestore/cache snapshot cannot immediately erase a request when a cloud write fails.
+  const pendingQueueAddsRef = useRef(null);
+  if (pendingQueueAddsRef.current === null) {
+    const savedPendingAdds = readStoredValue(roomStorageKey(channelRoom, 'pending-queue-adds'), []);
+    pendingQueueAddsRef.current = new Map(
+      (Array.isArray(savedPendingAdds) ? savedPendingAdds : [])
+        .filter((video) => video && typeof video === 'object' && video.id)
+        .map((video) => [String(video.id), video])
+    );
+  }
+  const persistPendingQueueAdds = () => writeStoredValue(
+    roomStorageKey(channelRoom, 'pending-queue-adds'),
+    [...pendingQueueAddsRef.current.values()]
+  );
   // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
   videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
@@ -878,6 +893,10 @@ function YediHubAppContent() {
             ? 'Syncing queue changes…'
             : 'Cloud Synced');
 
+          // Cache-only snapshots can be stale. They must never replace the locally persisted
+          // queue; wait for a server-backed snapshot before treating Firestore as authoritative.
+          if (snapshot.metadata.fromCache) return;
+
           // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
           // requests' displayed vote counts honest and makes voter identity persistence consistent.
           const list = snapshot.docs.map((d) => {
@@ -905,6 +924,21 @@ function YediHubAppContent() {
           const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
           const cachedRoomList = applyCachedVideoDurations(dedupedRoomList.videos, durationCache);
           const roomList = mergeVideoDurationData(cachedRoomList, videosRef.current);
+          const cloudDocumentIds = new Set(rawRoomList.map((video) => String(video.id)));
+          // Only retire an optimistic local addition after Firestore has confirmed that document
+          // on the server (not merely in the local pending-write view).
+          if (cloudConfirmed) {
+            cloudDocumentIds.forEach((id) => pendingQueueAddsRef.current.delete(id));
+            persistPendingQueueAdds();
+          }
+          const pendingRoomAdds = [...pendingQueueAddsRef.current.values()].filter(
+            (video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom)
+          );
+          const roomIds = new Set(roomList.map((video) => String(video.id)));
+          const visibleRoomList = [
+            ...roomList,
+            ...pendingRoomAdds.filter((video) => !roomIds.has(String(video.id))),
+          ];
 
           // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
           // so a future refresh or deletion cannot make a duplicate reappear.
@@ -915,17 +949,19 @@ function YediHubAppContent() {
             ));
           }
 
-          if (roomList.length > 0) {
-            initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
-            setVideos(roomList);
-            return;
+          if (visibleRoomList.length > 0) {
+            if (roomList.length > 0) initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
+            setVideos(visibleRoomList);
+            // Keep the one-time migration path below active for an empty cloud queue, even if
+            // this browser has an optimistic local request waiting for cloud confirmation.
+            if (roomList.length > 0) return;
           }
 
           const normalizedRoom = normalizeRoomName(channelRoom);
           const firstSnapshotForRoom = !initializedCloudRoomsRef.current.has(normalizedRoom);
           if (!firstSnapshotForRoom) {
-            // A later empty snapshot means the shared queue was cleared remotely.
-            setVideos([]);
+            // A confirmed remote clear can clear synchronized items, but never unconfirmed local adds.
+            setVideos(pendingRoomAdds);
             return;
           }
 
@@ -951,7 +987,7 @@ function YediHubAppContent() {
               }
             });
           } else {
-            setVideos([]);
+            setVideos(pendingRoomAdds);
           }
         },
         (error) => {
@@ -1422,6 +1458,11 @@ function YediHubAppContent() {
 
   const syncAddVideo = async (videoObj) => {
     const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
+    // Persist an optimistic-add journal before starting the cloud write. If Firestore denies
+    // the write (for example after quota exhaustion), later snapshots and page reloads retain it.
+    pendingQueueAddsRef.current.set(String(localItem.id), localItem);
+    persistPendingQueueAdds();
+
     // Update the ref synchronously so back-to-back chat messages see the new item immediately.
     videosRef.current = [localItem, ...videosRef.current];
     setVideos((prev) => [localItem, ...prev]);
@@ -1432,9 +1473,12 @@ function YediHubAppContent() {
         const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
         await setDoc(itemRef, { ...localItem, createdAt: Date.now() }, { merge: true });
       } catch (error) {
-        console.warn('Firestore add failed; the request is still saved locally.', error);
+        console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
         setCloudSynced(false);
-        setSyncStatusText('Cloud write failed — local save is active');
+        setSyncStatusText('Cloud write failed — request saved in this browser');
+        if (String(localItem.note || '').toLowerCase().includes('twitch chat')) {
+          sendTwitchChatReply('@' + normalizeTwitchLogin(localItem.requestedBy) + ' your request was saved in the dashboard browser, but cloud sync failed. The streamer may not see it until sync recovers.');
+        }
       }
     }
   };
@@ -1445,7 +1489,11 @@ function YediHubAppContent() {
       actor: options.actor || twitchAuth.username || removedItem.requestedBy,
       source: options.source || 'dashboard'
     });
-    videosRef.current = videosRef.current.filter((v) => v.id !== videoId);
+    // A viewer/mod deleting an unconfirmed local add must also remove it from the
+    // optimistic-write journal, otherwise the next cloud snapshot could resurrect it.
+    pendingQueueAddsRef.current.delete(String(videoId));
+    persistPendingQueueAdds();
+    videosRef.current = videosRef.current.filter((v) => String(v.id) !== String(videoId));
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
 
     if (db && firebaseUser) {
