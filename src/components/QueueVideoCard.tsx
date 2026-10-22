@@ -1,4 +1,5 @@
 import React from 'react';
+import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2 } from 'lucide-react';
 import { CATEGORY_META, getVideoCategory, getVideoMediaType } from '../mediaUtils.js';
 import { getDurationEstimate, getThumbnailDurationLabel } from '../queueLogic.js';
 
