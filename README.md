@@ -90,4 +90,4 @@ The GitHub Actions build check runs the unit/regression tests, browser smoke tes
 
 ## Deployment
 
-The repository is connected to Vercel for production deployment from `main`. The app uses the Vite framework preset, `npm run build` as the build command, and `dist` as the output directory. Configure environment variables in Vercel, never in committed source files.
+The repository is connected to Vercel for production deployment from `main`. The app uses the Vite framework preset, `npm run build` as the build command, and `dist` as the output directory. The four Twitch login/logout URLs rewrite to one shared handler to stay under the Vercel Hobby limit of 12 serverless functions; `.github/workflows/build.yml` includes a test to prevent exceeding that limit. Configure environment variables in Vercel, never in committed source files.
