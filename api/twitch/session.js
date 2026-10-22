@@ -1,3 +1,5 @@
+import { createFirebaseCustomToken } from '../_lib/firebase-custom-token.js';
+
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 // Sliding, HttpOnly remember-me cookie. Renewed on every successful session check.
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
@@ -27,43 +29,6 @@ function unauthenticated(res, reason = 'not_authenticated') {
   res.setHeader('X-Yedi-Auth-Diagnostic', reason);
   return res.status(200).json({ authenticated: false, role: 'viewer', user: null, authDiagnostic: reason });
 }
-async function getFirebaseAdminAuth() {
-  // Load lazily so the Twitch session endpoint can still run if Firebase Admin
-  // is missing from the deployed function bundle. Firebase token creation is optional.
-  const [{ cert, getApps, initializeApp }, { getAuth: getAdminAuth }] = await Promise.all([
-    import('firebase-admin/app'),
-    import('firebase-admin/auth')
-  ]);
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not configured');
-  let serviceAccount;
-  try { serviceAccount = JSON.parse(raw); } catch {
-    try { serviceAccount = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); }
-    catch { throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON or base64 JSON'); }
-  }
-
-  // Validate the key shape explicitly so configuration mistakes are reported as a
-  // useful safe category instead of the generic custom-token failure.
-  if (!serviceAccount || typeof serviceAccount !== 'object' || Array.isArray(serviceAccount)) {
-    throw new Error('Firebase service account must be a JSON object');
-  }
-  if (typeof serviceAccount.project_id !== 'string' || !serviceAccount.project_id.trim()) {
-    throw new Error("Firebase service account is missing the 'project_id' field");
-  }
-  if (typeof serviceAccount.client_email !== 'string' || !serviceAccount.client_email.trim()) {
-    throw new Error("Firebase service account is missing the 'client_email' field");
-  }
-  if (typeof serviceAccount.private_key !== 'string' || !serviceAccount.private_key.trim()) {
-    throw new Error("Firebase service account is missing the 'private_key' field");
-  }
-  // Handle a key pasted with literal backslash-n sequences as well as normal JSON newlines.
-  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-
-  const appName = 'yedi-hub-firebase-admin';
-  const app = getApps().find(item => item.name === appName) || initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id }, appName);
-  return getAdminAuth(app);
-}
-
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Vary', 'Cookie');
@@ -132,7 +97,7 @@ export default async function handler(req, res) {
     let firebaseDiagnostic = 'firebase_custom_token_failed';
     let firebaseDiagnosticCode = 'unknown_error';
     try {
-      firebaseCustomToken = await (await getFirebaseAdminAuth()).createCustomToken(`twitch_${me.id}`, {
+      firebaseCustomToken = createFirebaseCustomToken(`twitch_${me.id}`, {
         yediAuthorized: true,
         twitchLogin: login,
         role
@@ -157,6 +122,8 @@ export default async function handler(req, res) {
         firebaseDiagnostic = 'service_account_missing_client_email';
       } else if (/missing the 'private_key' field/i.test(message)) {
         firebaseDiagnostic = 'service_account_missing_private_key';
+      } else if (/does not match VITE_FIREBASE_PROJECT_ID/i.test(message)) {
+        firebaseDiagnostic = 'service_account_project_mismatch';
       } else if (/private.?key|PEM|credential|invalid_grant|service account object|invalid jwt|signBlob|iam.serviceAccounts.signBlob/i.test(message)) {
         firebaseDiagnostic = 'invalid_service_account_credentials';
       } else if (/Cannot find package|Cannot find module|ERR_MODULE_NOT_FOUND/i.test(message)) {
