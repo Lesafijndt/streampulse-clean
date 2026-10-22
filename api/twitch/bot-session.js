@@ -1,4 +1,5 @@
 const BOT_LOGIN = 'gachibot69';
+const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 
 function parseCookies(header = '') {
@@ -62,7 +63,7 @@ export default async function handler(req, res) {
     }
 
     const scopes = Array.isArray(validation?.scopes) ? validation.scopes : [];
-    if (!validation || validation.client_id !== clientId || String(validation.login || '').toLowerCase() !== BOT_LOGIN || !scopes.includes('user:write:chat')) {
+    if (!validation || validation.client_id !== clientId || String(validation.login || '').toLowerCase() !== BOT_LOGIN || !REQUIRED_BOT_SCOPES.every((scope) => scopes.includes(scope))) {
       clearBotCookies(res);
       return replyUnauthenticated(res);
     }
