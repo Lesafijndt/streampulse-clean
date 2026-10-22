@@ -1,6 +1,8 @@
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 const BOT_LOGIN = 'gachibot69';
 const CHAT_WRITE_SCOPE = 'user:write:chat';
+// Persistent refresh cookies are renewed by the session endpoints on use (up to 400 days).
+const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map(v => v.trim()).filter(Boolean).map(v => {
@@ -103,7 +105,7 @@ export default async function handler(req, res) {
       }
 
       setCookie(res, req, 'yedi_twitch_bot_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-      if (token.refresh_token) setCookie(res, req, 'yedi_twitch_bot_refresh', token.refresh_token, 60 * 60 * 24 * 30);
+      if (token.refresh_token) setCookie(res, req, 'yedi_twitch_bot_refresh', token.refresh_token, REMEMBERED_SESSION_MAX_AGE);
       else setCookie(res, req, 'yedi_twitch_bot_refresh', '', 0);
       return res.redirect(302, '/?bot_connected=1');
     }
@@ -121,7 +123,7 @@ export default async function handler(req, res) {
     }
 
     setCookie(res, req, 'yedi_twitch_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-    if (token.refresh_token) setCookie(res, req, 'yedi_twitch_refresh', token.refresh_token, 60 * 60 * 24 * 30);
+    if (token.refresh_token) setCookie(res, req, 'yedi_twitch_refresh', token.refresh_token, REMEMBERED_SESSION_MAX_AGE);
     else setCookie(res, req, 'yedi_twitch_refresh', '', 0);
     return res.redirect(302, '/');
   } catch (error) {
