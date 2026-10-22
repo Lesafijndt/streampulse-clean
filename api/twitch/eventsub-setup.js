@@ -228,8 +228,6 @@ export default async function handler(req, res) {
     if (String(staff.login || '') !== STREAMER_LOGIN) {
       return res.status(403).json({ active: false, status: 'needs_authorization', code: 'streamer_required', message: 'Only the 2o3a streamer session can enable cloud chat capture.' });
     }
-    if (!bot.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
-
     // If an active subscription already exists, don't demand new scopes or create a duplicate.
     try {
       const { broadcasterId, botId } = await resolveUserIds();
@@ -240,6 +238,18 @@ export default async function handler(req, res) {
       if (!bot.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
       const missingScope = getMissingScopeMessage(staff, bot);
       if (missingScope) return res.status(403).json(missingScope);
+
+      // The dashboard must have its public Firebase configuration as well as Admin
+      // credentials, otherwise the server could accept requests that no browser can display.
+      const requiredWebConfig = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
+      if (requiredWebConfig.some((key) => !String(process.env[key] || '').trim())) {
+        return res.status(503).json({
+          active: false,
+          status: 'error',
+          code: 'firebase_config_missing',
+          message: 'Cloud chat capture needs the Firebase web config (VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_APP_ID) in Vercel.',
+        });
+      }
 
       // Fail setup loudly if the same Admin credentials used for queue writes cannot reach Firestore.
       const db = getFirebaseAdminDb();
@@ -262,7 +272,7 @@ export default async function handler(req, res) {
       const status = Number(error?.status) || 500;
       const message = String(error?.message || '');
       console.error('Twitch EventSub setup failed:', message.slice(0, 500));
-      const firebaseFailure = /firebase|firestore|service account|credential|permission denied|quota|project|could not get document/i.test(message);
+      const firebaseFailure = /firebase|firestore|service account|credential|permission denied|quota|project|could not get document|web config/i.test(message);
       return res.status(firebaseFailure ? 503 : (status >= 400 && status < 500 ? status : 502)).json({
         active: false,
         status: 'error',
@@ -289,7 +299,16 @@ export default async function handler(req, res) {
     } else {
       return res.status(200).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 and grant the new chat-reading permissions to enable cloud requests.' });
     }
-    // Distinguish an incomplete EventSub setup from missing server-side Firebase access.
+    // Distinguish an incomplete EventSub setup from missing client/server Firebase access.
+    const requiredWebConfig = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
+    if (requiredWebConfig.some((key) => !String(process.env[key] || '').trim())) {
+      return res.status(200).json({
+        active: false,
+        status: 'error',
+        code: 'firebase_config_missing',
+        message: 'Cloud chat capture needs the Firebase web config (VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_APP_ID) in Vercel.',
+      });
+    }
     try {
       const db = getFirebaseAdminDb();
       await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
