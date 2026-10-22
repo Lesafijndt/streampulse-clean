@@ -1049,7 +1049,7 @@ function YediHubAppContent() {
       video.platform === 'tiktok' &&
       /^\d{10,25}$/.test(String(video.videoId || '')) &&
       (genericTitle(video.title) || placeholderThumbnail(video.thumbnail)) &&
-      !attempted.has(String(video.id)
+      !attempted.has(String(video.id))
     ).slice(0, 3);
     for (const video of candidates) {
       const id = String(video.id);
@@ -3822,7 +3822,7 @@ function YediHubAppContent() {
                     <iframe
                       key={`twitch-${currentVideo.videoId}`}
                       className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
-                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=true`}
+                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
                       allowFullScreen
