@@ -2,6 +2,24 @@ const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 const YOUTUBE_ORIGIN = 'https://www.youtube.com';
 const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo', 'setVolume']);
 
+/** Autoplay can report transient mute even when the viewer never chose mute. */
+export function shouldAutoUnmuteTikTok({ mutedIntent = null, mutePreference = 'auto' } = {}) {
+  return mutedIntent !== true && mutePreference !== 'muted';
+}
+
+/** Ignore the initial autoplay mute echo until host unmute is confirmed or startup settles. */
+export function shouldIgnoreTikTokStartupMute({
+  muted,
+  startupMuteGuardActive = false,
+  startupAudioConfirmed = false,
+  explicitMutePreference = 'auto',
+} = {}) {
+  return muted === true &&
+    startupMuteGuardActive &&
+    !startupAudioConfirmed &&
+    explicitMutePreference !== 'muted';
+}
+
 /** Build a TikTok player URL that autoplays without locking its volume controls. */
 export function buildTikTokPlayerUrl(videoId, { paused = false } = {}) {
   const id = String(videoId || '').trim();

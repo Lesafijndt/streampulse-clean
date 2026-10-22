@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
+import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
@@ -88,7 +88,7 @@ test('TikTok bridge forwards the target timestamp for seekTo', () => {
 });
 
 
-test('TikTok embeds autoplay muted unless this exact video was deliberately paused', () => {
+test('TikTok embeds autoplay while keeping volume controls enabled', () => {
   const activeUrl = new URL(buildTikTokPlayerUrl('1234567890123456789'));
   assert.equal(activeUrl.searchParams.get('autoplay'), '1');
   assert.equal(activeUrl.searchParams.get('muted'), '0');
@@ -106,4 +106,38 @@ test('TikTok iframe source stays memoized across playback-state renders', async 
   assert.match(appSource, /const tiktokPlayerSrc = useMemo/);
   assert.match(appSource, /src=\{tiktokPlayerSrc\}/);
   assert.doesNotMatch(appSource, /src=\{buildTikTokPlayerUrl/);
+});
+
+
+test('TikTok startup attempts to unmute unless the viewer explicitly chose mute', () => {
+  assert.equal(shouldAutoUnmuteTikTok({ mutedIntent: null, mutePreference: 'auto' }), true);
+  assert.equal(shouldAutoUnmuteTikTok({ mutedIntent: false, mutePreference: 'unmuted' }), true);
+  assert.equal(shouldAutoUnmuteTikTok({ mutedIntent: true, mutePreference: 'muted' }), false);
+  assert.equal(shouldAutoUnmuteTikTok({ mutedIntent: null, mutePreference: 'muted' }), false);
+});
+
+test('TikTok transient autoplay mute reports do not overwrite the viewer preference during startup', () => {
+  assert.equal(shouldIgnoreTikTokStartupMute({
+    muted: true, startupMuteGuardActive: true, startupAudioConfirmed: false, explicitMutePreference: 'auto',
+  }), true);
+  assert.equal(shouldIgnoreTikTokStartupMute({
+    muted: true, startupMuteGuardActive: true, startupAudioConfirmed: false, explicitMutePreference: 'unmuted',
+  }), true);
+  assert.equal(shouldIgnoreTikTokStartupMute({
+    muted: true, startupMuteGuardActive: true, startupAudioConfirmed: false, explicitMutePreference: 'muted',
+  }), false);
+  assert.equal(shouldIgnoreTikTokStartupMute({
+    muted: true, startupMuteGuardActive: true, startupAudioConfirmed: true, explicitMutePreference: 'auto',
+  }), false);
+  assert.equal(shouldIgnoreTikTokStartupMute({
+    muted: false, startupMuteGuardActive: true, startupAudioConfirmed: false, explicitMutePreference: 'auto',
+  }), false);
+});
+
+test('TikTok mute intent is isolated from legacy autoplay mute reports and startup unmute is retried', async () => {
+  const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(appSource, /player-tiktok-mute-intent-v1-/);
+  assert.match(appSource, /shouldIgnoreTikTokStartupMute/);
+  assert.match(appSource, /requestStartupUnmute/);
+  assert.match(appSource, /tiktokAudioStateRef/);
 });
