@@ -99,7 +99,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
+import { getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
 
 
 
@@ -456,6 +456,11 @@ function YediHubAppContent() {
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
+  // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
+  // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
+  const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
+  const playbackVisibilitySnapshotRef = useRef(null);
+  const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null });
   const tiktokIframeRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
@@ -1591,6 +1596,115 @@ function YediHubAppContent() {
     const queued = videos.filter((v) => v.status === 'queue').sort(compareQueueOrder);
     return queued[0] || null;
   }, [videos]);
+
+  const getPlaybackIntentForVideo = (videoId) => {
+    const id = String(videoId || '');
+    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-' + id);
+    const current = playbackIntentRef.current;
+    if (current.videoId === id && current.storageKey === storageKey) return current;
+    let saved = null;
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      saved = raw ? JSON.parse(raw) : null;
+    } catch { /* A blocked session store should not break player controls. */ }
+    return {
+      videoId: id,
+      storageKey,
+      paused: saved?.paused === true,
+      muted: typeof saved?.muted === 'boolean' ? saved.muted : null,
+    };
+  };
+
+  const updatePlaybackIntent = (videoId, updates) => {
+    const previous = getPlaybackIntentForVideo(videoId);
+    const next = { ...previous, ...updates, videoId: String(videoId || '') };
+    playbackIntentRef.current = next;
+    try {
+      window.sessionStorage.setItem(next.storageKey, JSON.stringify({ paused: next.paused, muted: next.muted }));
+    } catch { /* Playback state remains available in memory if storage is unavailable. */ }
+    return next;
+  };
+
+  const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
+
+  // On a new queue item, restore only this tab's previous intent for that exact video.
+  useEffect(() => {
+    if (!currentVideo) {
+      playbackIntentRef.current = { videoId: '', storageKey: '', paused: false, muted: null };
+      playbackVisibilitySnapshotRef.current = null;
+      playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+      return;
+    }
+    const videoId = String(currentVideo.id);
+    const intent = getPlaybackIntentForVideo(videoId);
+    playbackIntentRef.current = intent;
+    playbackVisibilitySnapshotRef.current = null;
+    playbackRestoreGuardRef.current = intent.paused
+      ? { videoId, until: Date.now() + 2500, paused: true, muted: intent.muted }
+      : { videoId: '', until: 0, paused: false, muted: null };
+    keyboardPausedRef.current = { videoId, paused: intent.paused };
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+
+  // A hidden tab may suspend/recreate provider iframes. Remember the state before it
+  // happens and restore pause/audio only; never issue play when the tab becomes visible.
+  useEffect(() => {
+    if (!currentVideo) return undefined;
+    const videoId = String(currentVideo.id);
+    const platform = currentVideo.platform;
+    const restoreOnReturn = () => {
+      if (document.visibilityState === 'hidden') {
+        let intent = getPlaybackIntentForVideo(videoId);
+        if (platform === 'youtube' && youtubePlaybackInfoRef.current.playerState === 2) {
+          intent = updatePlaybackIntent(videoId, { paused: true });
+        }
+        const tiktokPreference = tiktokMutePreferenceRef.current.requestId === videoId
+          ? tiktokMutePreferenceRef.current.preference
+          : 'auto';
+        const muted = platform === 'youtube'
+          ? (typeof youtubePlaybackInfoRef.current.muted === 'boolean' ? youtubePlaybackInfoRef.current.muted : intent.muted)
+          : platform === 'tiktok'
+            ? (tiktokPreference === 'muted' ? true : intent.muted === true ? true : false)
+            : intent.muted;
+        const paused = intent.paused ||
+          (platform === 'youtube' && youtubePlaybackInfoRef.current.playerState === 2) ||
+          (platform === 'tiktok' && keyboardPausedRef.current.videoId === videoId && keyboardPausedRef.current.paused);
+        playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted };
+        if (paused) updatePlaybackIntent(videoId, { paused: true });
+        return;
+      }
+
+      const snapshot = playbackVisibilitySnapshotRef.current;
+      if (!snapshot || snapshot.videoId !== videoId || snapshot.platform !== platform) return;
+      const intent = getPlaybackIntentForVideo(videoId);
+      const paused = snapshot.paused || intent.paused;
+      const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
+      playbackRestoreGuardRef.current = {
+        videoId,
+        until: Date.now() + 2500,
+        paused,
+        muted: typeof muted === 'boolean' ? muted : null,
+      };
+      if (paused) updatePlaybackIntent(videoId, { paused: true });
+      if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
+
+      const commands = getVisibilityRestoreCommands(platform, { paused, muted });
+      for (const command of commands) {
+        if (platform === 'youtube') youtubePlayerRef.current?.[command]?.();
+        else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, command, null);
+      }
+      playbackVisibilitySnapshotRef.current = null;
+    };
+
+    document.addEventListener('visibilitychange', restoreOnReturn);
+    window.addEventListener('pageshow', restoreOnReturn);
+    window.addEventListener('focus', restoreOnReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', restoreOnReturn);
+      window.removeEventListener('pageshow', restoreOnReturn);
+      window.removeEventListener('focus', restoreOnReturn);
+    };
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
   // Older saved queues may have no explicit "playing" status even though their top item is visible.
@@ -2374,8 +2488,13 @@ function YediHubAppContent() {
       }
       const state = Number(player.getPlayerState());
       if (state === 1 || state === 3) {
+        updatePlaybackIntent(video.id, { paused: true });
+        keyboardPausedRef.current = { videoId: String(video.id), paused: true };
         player.pauseVideo?.();
       } else {
+        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
+        updatePlaybackIntent(video.id, { paused: false });
+        keyboardPausedRef.current = { videoId: String(video.id), paused: false };
         player.playVideo?.();
       }
       return;
@@ -2389,6 +2508,12 @@ function YediHubAppContent() {
       const sameVideo = keyboardPausedRef.current.videoId === String(video.id);
       const shouldPause = sameVideo ? !keyboardPausedRef.current.paused : true;
       keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
+      if (shouldPause) {
+        updatePlaybackIntent(video.id, { paused: true });
+      } else {
+        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
+        updatePlaybackIntent(video.id, { paused: false });
+      }
       postTikTokPlayerCommand(iframeWindow, shouldPause ? 'pause' : 'play', null);
       return;
     }
@@ -2471,6 +2596,7 @@ function YediHubAppContent() {
       getCurrentTime: () => Number(youtubePlaybackInfoRef.current.currentTime) || 0,
       getDuration: () => Number(youtubePlaybackInfoRef.current.duration) || 0,
       getVolume: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.volume)) ? Number(youtubePlaybackInfoRef.current.volume) : 100,
+      getPlayerState: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.playerState)) ? Number(youtubePlaybackInfoRef.current.playerState) : -1,
       setVolume: (value) => postCommand('setVolume', [Math.max(0, Math.min(100, Number(value) || 0))]),
       mute: () => postCommand('mute'),
       unMute: () => postCommand('unMute'),
@@ -2490,7 +2616,8 @@ function YediHubAppContent() {
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
-      postCommand('playVideo');
+      const intent = getPlaybackIntentForVideo(video.id);
+      postCommand(intent.paused ? 'pauseVideo' : 'playVideo');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -2507,6 +2634,11 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        if (typeof info.muted === 'boolean') {
+          const guard = playbackRestoreGuardRef.current;
+          const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
+          if (!restoringMute) updatePlaybackIntent(video.id, { muted: info.muted });
+        }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
         if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
@@ -2517,6 +2649,20 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        const videoId = String(video.id);
+        const intent = getPlaybackIntentForVideo(videoId);
+        const restoreGuard = playbackRestoreGuardRef.current;
+        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
+          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
+        if (stateFromEvent === 2) {
+          updatePlaybackIntent(videoId, { paused: true });
+          keyboardPausedRef.current = { videoId, paused: true };
+        } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
+          postCommand('pauseVideo');
+        } else if (stateFromEvent === 1) {
+          updatePlaybackIntent(videoId, { paused: false });
+          keyboardPausedRef.current = { videoId, paused: false };
+        }
         if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
         if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
           endedHandled = true;
@@ -2552,8 +2698,12 @@ function YediHubAppContent() {
     let cancelled = false;
     let startupUnmuteSent = false;
     const retryTimers = [];
-    tiktokMutePreferenceRef.current = { requestId: video.id, preference: 'auto' };
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
+    const initialIntent = getPlaybackIntentForVideo(video.id);
+    tiktokMutePreferenceRef.current = {
+      requestId: video.id,
+      preference: initialIntent.muted === true ? 'muted' : initialIntent.muted === false ? 'unmuted' : 'auto',
+    };
     const sendCommand = (type, targetWindow = getWindow()) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
         targetWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
@@ -2565,9 +2715,9 @@ function YediHubAppContent() {
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
-        // Start playback when ready, but wait until it reports PLAYING before unmuting.
-        // TikTok can apply its autoplay mute after the ready event, racing an immediate unMute.
-        sendCommand('play');
+        // A recreated iframe must respect a pause saved before the tab was hidden.
+        const intent = getPlaybackIntentForVideo(video.id);
+        sendCommand(intent.paused ? 'pause' : 'play');
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -2580,16 +2730,30 @@ function YediHubAppContent() {
         }
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        // Recover from TikTok's occasional autoplay mute once playback is genuinely running.
-        // This is a one-shot startup correction, not a repeating timer; explicit mute wins.
-        if (state === 1 && !startupUnmuteSent) {
+        const videoId = String(video.id);
+        const intent = getPlaybackIntentForVideo(videoId);
+        const restoreGuard = playbackRestoreGuardRef.current;
+        const suppressUnexpectedResume = state === 1 && intent.paused &&
+          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
+        if (state === 2) {
+          updatePlaybackIntent(videoId, { paused: true });
+          keyboardPausedRef.current = { videoId, paused: true };
+        } else if (state === 1 && suppressUnexpectedResume) {
+          sendCommand('pause');
+        } else if (state === 1) {
+          updatePlaybackIntent(videoId, { paused: false });
+          keyboardPausedRef.current = { videoId, paused: false };
+        }
+        // Recover TikTok's startup mute only when playback is meant to run.
+        if (state === 1 && !startupUnmuteSent && !suppressUnexpectedResume) {
           startupUnmuteSent = true;
           const preference = tiktokMutePreferenceRef.current;
-          if (preference.requestId !== video.id || preference.preference !== 'muted') {
+          const currentIntent = getPlaybackIntentForVideo(videoId);
+          if ((preference.requestId !== video.id || preference.preference !== 'muted') && currentIntent.muted !== true) {
             sendCommand('unMute');
+            updatePlaybackIntent(videoId, { muted: false });
           }
         }
-        // Never auto-unmute again on later pause/resume events.
         if (state === 0) handleMediaEndedRef.current?.(video.id);
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
@@ -3226,7 +3390,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=${isPlaybackPaused(currentVideo.id) ? 0 : 1}&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -3242,7 +3406,7 @@ function YediHubAppContent() {
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
-                        send('playVideo');
+                        send(isPlaybackPaused(currentVideo.id) ? 'pauseVideo' : 'playVideo');
                       }}
                     />
                     </div>
@@ -3253,7 +3417,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=${isPlaybackPaused(currentVideo.id) ? 0 : 1}&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
