@@ -143,3 +143,23 @@ test('activity log refreshes a persistent staff session when only the refresh co
     cookie.startsWith('yedi_twitch_refresh=fresh-refresh;') && cookie.includes('Max-Age=34560000')
   ));
 });
+
+
+test('activity log accepts the exact request-host origin when TWITCH_APP_URL is an old alias', async (t) => {
+  const previous = process.env.TWITCH_APP_URL;
+  t.after(() => {
+    if (previous === undefined) delete process.env.TWITCH_APP_URL;
+    else process.env.TWITCH_APP_URL = previous;
+  });
+  process.env.TWITCH_APP_URL = 'https://old-dashboard.example';
+
+  const req = {
+    method: 'GET',
+    headers: { host: 'streampulse-clean.vercel.app', origin: 'https://streampulse-clean.vercel.app' },
+    query: { appId: 'streampulse-live-deck' },
+  };
+  const res = responseMock();
+  await handler(req, res);
+  assert.equal(res.statusCode, 401);
+  assert.match(res.body.error, /approved staff account/i);
+});
