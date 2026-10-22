@@ -147,6 +147,8 @@ export function classifyActivityStorageError(error) {
   }
   if (/permission-denied|permission denied|missing or insufficient permissions/i.test(message) ||
       ['7', 'permission-denied'].includes(code)) return 'firestore_permission_denied';
+  if (/RESOURCE_EXHAUSTED|resource exhausted|quota exceeded|rate limit/i.test(message) ||
+      ['8', 'resource-exhausted'].includes(code)) return 'firestore_resource_exhausted';
   if (/API has not been used|serviceusage.*disabled|firestore.*disabled/i.test(message)) {
     return 'firestore_api_disabled';
   }
@@ -193,16 +195,24 @@ export default async function handler(req, res) {
   const appId = getAppId(req.method === 'GET' ? req.query?.appId : body.appId);
   if (!appId) return res.status(400).json({ error: 'Invalid activity namespace.' });
 
+  let storageOperation = 'initialize_firestore';
   try {
     const firestore = await getAdminFirestore();
     const events = firestore.collection('artifacts').doc(appId).collection('public').doc('data').collection('queue_events');
 
     if (req.method === 'GET') {
-      const snapshot = await events.orderBy('at', 'asc').get();
+      storageOperation = 'read_activity_events';
+      const rawSince = Number(req.query?.since);
+      const since = Number.isFinite(rawSince) && rawSince > 0 ? rawSince : 0;
+      const query = since
+        ? events.where('at', '>=', since).orderBy('at', 'asc')
+        : events.orderBy('at', 'asc');
+      const snapshot = await query.get();
       const rows = snapshot.docs.map((entry) => normalizeActivityEvent({ ...entry.data(), id: entry.id })).filter(Boolean);
-      return res.status(200).json({ events: rows });
+      return res.status(200).json({ events: rows, incremental: since > 0 });
     }
 
+    storageOperation = 'write_activity_event';
     const event = normalizeActivityEvent(body.event);
     if (!event || !/^[A-Za-z0-9_-]{1,140}$/.test(event.id) || event.room !== '2o3a' || !event.mediaId) {
       return res.status(400).json({ error: 'Invalid activity event.' });
@@ -217,10 +227,17 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, duplicate: result.duplicate });
   } catch (error) {
     const diagnostic = classifyActivityStorageError(error);
-    console.error('Activity log API failed:', diagnostic, error?.message || error);
+    console.error('Activity log API failed:', JSON.stringify({
+      diagnostic,
+      operation: storageOperation,
+      code: String(error?.code ?? ''),
+      name: String(error?.name ?? ''),
+      message: String(error?.message || '').slice(0, 500),
+    }));
     return res.status(503).json({
       error: 'Activity log storage is temporarily unavailable.',
       diagnostic,
+      operation: storageOperation,
     });
   }
 }
