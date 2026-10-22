@@ -103,6 +103,7 @@ import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerComm
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
+import { mergePendingQueueAdds } from './queueSync.js';
 
 
 
@@ -934,11 +935,7 @@ function YediHubAppContent() {
           const pendingRoomAdds = [...pendingQueueAddsRef.current.values()].filter(
             (video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom)
           );
-          const roomIds = new Set(roomList.map((video) => String(video.id)));
-          const visibleRoomList = [
-            ...roomList,
-            ...pendingRoomAdds.filter((video) => !roomIds.has(String(video.id))),
-          ];
+          const visibleRoomList = mergePendingQueueAdds(roomList, pendingRoomAdds);
 
           // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
           // so a future refresh or deletion cannot make a duplicate reappear.
