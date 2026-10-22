@@ -2084,3 +2084,22 @@ body { background: #03070b; }
 .gachi-theme::after {
   background: radial-gradient(ellipse at center, transparent 24%, rgba(0,0,0,.38) 100%) !important;
 }
+
+
+/* Recolor remaining blue utility backgrounds without changing semantic green/red status indicators. */
+.gachi-theme [class*="bg-cyan-"],
+.gachi-theme [class*="bg-sky-"],
+.gachi-theme [class*="bg-blue-"] {
+  background-color: rgba(255,49,95,.15) !important;
+}
+.gachi-theme [class*="from-cyan-"],
+.gachi-theme [class*="from-sky-"],
+.gachi-theme [class*="from-blue-"] {
+  --tw-gradient-from: #3b0b25 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgba(59,11,37,0) var(--tw-gradient-to-position) !important;
+}
+.gachi-theme [class*="to-cyan-"],
+.gachi-theme [class*="to-sky-"],
+.gachi-theme [class*="to-blue-"] {
+  --tw-gradient-to: #5e1a83 var(--tw-gradient-to-position) !important;
+}
