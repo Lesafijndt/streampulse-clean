@@ -1396,6 +1396,9 @@ function YediHubAppContent() {
 
     let active = true;
     let loading = false;
+    const baselineKey = roomStorageKey(channelRoom, 'activity-cloud-baseline');
+    const watermarkKey = roomStorageKey(channelRoom, 'activity-cloud-watermark');
+    let fullCloudBaselineLoaded = readStoredValue(baselineKey, false) === true;
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
     const loadActivityEvents = async () => {
@@ -1407,16 +1410,31 @@ function YediHubAppContent() {
       loading = true;
       setActivitySyncLoading(true);
       try {
-        const response = await fetch('/api/activity-log?appId=' + encodeURIComponent(appId), {
+        const previousWatermark = Number(readStoredValue(watermarkKey, 0)) || 0;
+        const useIncrementalRead = fullCloudBaselineLoaded &&
+          previousWatermark > 0 && activityEventsRef.current.length > 0;
+        const since = useIncrementalRead ? Math.max(1, previousWatermark - 60_000) : 0;
+        const query = 'appId=' + encodeURIComponent(appId) + (since ? '&since=' + encodeURIComponent(String(since)) : '');
+        const response = await fetch('/api/activity-log?' + query, {
           credentials: 'same-origin',
           cache: 'no-store'
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.events)) {
-          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}${result.diagnostic ? ' (' + result.diagnostic + ')' : ''}`);
+          const details = [result.diagnostic, result.operation].filter(Boolean).join('; ');
+          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}${details ? ' (' + details + ')' : ''}`);
         }
         const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
-        activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
+        const fullSnapshot = !useIncrementalRead;
+        if (fullSnapshot) {
+          activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
+          fullCloudBaselineLoaded = true;
+          writeStoredValue(baselineKey, true);
+        } else {
+          cloudEvents.forEach((event) => activityCloudIdsRef.current.add(String(event.id)));
+        }
+        const newestCloudAt = cloudEvents.reduce((latest, event) => Math.max(latest, Number(event.at) || 0), 0);
+        writeStoredValue(watermarkKey, Math.max(previousWatermark, newestCloudAt, Date.now()));
         activityCloudReadyRef.current = true;
         setActivityCloudReady(true);
         setActivitySyncError(false);
@@ -1425,9 +1443,15 @@ function YediHubAppContent() {
         activityEventsRef.current = merged;
         setActivityEvents(merged);
         writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-        merged.forEach((event) => {
-          if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
-        });
+        // A full baseline can find every old unsynced event. Incremental reads only
+        // reconcile the recent overlap; do not misclassify all historical local rows
+        // as missing just because they were not part of this small delta response.
+        const candidates = (fullSnapshot ? merged : merged.filter((event) => Number(event.at) >= since))
+          .filter((event) => !activityCloudIdsRef.current.has(String(event.id)));
+        for (let offset = 0; offset < candidates.length; offset += 3) {
+          if (!active) break;
+          await Promise.all(candidates.slice(offset, offset + 3).map((event) => syncActivityEventToCloud(event)));
+        }
       } catch (error) {
         if (active) {
           console.warn('Activity log sync will retry automatically:', error);
@@ -1442,7 +1466,8 @@ function YediHubAppContent() {
       }
     };
     void loadActivityEvents();
-    const interval = window.setInterval(loadActivityEvents, 30000);
+    // Activity is synced incrementally; avoid repeatedly scanning the lifetime log.
+    const interval = window.setInterval(loadActivityEvents, 120000);
     return () => {
       active = false;
       window.clearInterval(interval);
