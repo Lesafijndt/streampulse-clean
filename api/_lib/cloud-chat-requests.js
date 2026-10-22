@@ -234,13 +234,20 @@ function activityEvent({ id, type, at, item, requester }) {
     source: 'twitch-chat',
   };
 }
-function versionUpdate(settings, at, healthPatch = null) {
+export function versionUpdate(settings, at, healthPatch = null) {
   const oldHealth = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
     ? settings.chatIntakeHealth : {};
   return {
     queueVersion: (Number(settings?.queueVersion) || 0) + 1,
     queueUpdatedAt: at,
-    ...(healthPatch ? { chatIntakeHealth: { ...oldHealth, ...healthPatch } } : {}),
+    // Every successful transactional queue mutation refreshes the write heartbeat,
+    // including remove/vote/skip, not only brand-new media requests.
+    chatIntakeHealth: {
+      ...oldHealth,
+      lastWriteAt: at,
+      lastWriteStatus: 'ok',
+      ...(healthPatch || {}),
+    },
   };
 }
 async function readRoomQueue(db, appId) {

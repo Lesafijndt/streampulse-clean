@@ -8,7 +8,7 @@ import {
   parseMediaStartSeconds,
   stripMediaTimestampSuffix,
 } from '../src/mediaUtils.js';
-import { isEventSubChatCandidate } from '../api/_lib/cloud-chat-requests.js';
+import { isEventSubChatCandidate, versionUpdate } from '../api/_lib/cloud-chat-requests.js';
 import { isValidEventSubSignature } from '../api/twitch/eventsub.js';
 
 const NOW = Date.parse('2026-10-22T12:00:00.000Z');
@@ -47,6 +47,24 @@ test('history cooldown does not expire early and active entries never qualify', 
   assert.equal(isMediaHistoryCooldownExpired({ status: 'watched' }, NOW), false);
 });
 
+
+test('successful server queue mutations refresh the write heartbeat and preserve webhook health', () => {
+  const existing = {
+    queueVersion: 7,
+    chatIntakeHealth: {
+      lastWebhookAt: NOW - 500,
+      lastWriteAt: NOW - 1000,
+      lastProcessingError: 'a prior failed request',
+    },
+  };
+  const update = versionUpdate(existing, NOW);
+  assert.equal(update.queueVersion, 8);
+  assert.equal(update.queueUpdatedAt, NOW);
+  assert.equal(update.chatIntakeHealth.lastWriteAt, NOW);
+  assert.equal(update.chatIntakeHealth.lastWriteStatus, 'ok');
+  assert.equal(update.chatIntakeHealth.lastWebhookAt, NOW - 500);
+  assert.equal(update.chatIntakeHealth.lastProcessingError, 'a prior failed request');
+});
 
 test('EventSub API candidate filter accepts media requests and supported queue commands only', () => {
   const makeEvent = (text, overrides = {}) => ({

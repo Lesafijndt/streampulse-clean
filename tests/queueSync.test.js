@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergePendingQueueAdds } from '../src/queueSync.js';
+import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from '../src/queueSync.js';
+
+test('obsolete browser-only sync notification is suppressed without hiding ordinary notices', () => {
+  assert.equal(shouldSuppressLocalOnlySyncToast(
+    'Your request was saved in the dashboard browser, but cloud sync failed. The streamer may not see it until sync recovers.'
+  ), true);
+  assert.equal(shouldSuppressLocalOnlySyncToast('Your request was added to the queue.'), false);
+});
 
 test('pending local requests survive an empty or stale cloud snapshot', () => {
   const pending = [{ id: 'local-a', title: 'New chat request' }];

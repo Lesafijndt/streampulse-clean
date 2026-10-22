@@ -36,7 +36,7 @@ The allowlist is enforced by the Vercel OAuth/session API, not a client-side rol
 | Moderator/broadcaster: `!skip` | Advance to the next video. |
 | Moderator/broadcaster: `!volume up/down`, `!volume 0-100`, `!volup`, `!voldown`, `!mute`, `!unmute` | Control supported player audio. TikTok remote commands support mute/unmute and volume 0/100; use the in-player slider for intermediate volume. Twitch Clips use their own controls. |
 
-Requests are blocked while the streamer has closed the queue. Queue/playing items cannot be requested twice, and videos in History become requestable again 16 hours after their last `watchedAt` time. Media identity stays consistent across URL formats and tracking parameters. YouTube start timestamps are stored with queue items and applied when their embeds load.
+Requests are blocked while the streamer has closed the queue. Queue/playing items cannot be requested twice, and videos in History become requestable again 16 hours after their last `watchedAt` time. Media identity stays consistent across URL formats and tracking parameters. Twitch chat requests accept timestamps such as `1:23`, `1:02:03`, `83s`, or YouTube `?t=83` / `#t=1m23s` markers. The dashboard request form also has a dedicated YouTube start-time field; its offset is applied when the embed loads. Other provider embeds do not expose a consistent timestamp-seek API.
 
 ## Twitch OAuth setup
 

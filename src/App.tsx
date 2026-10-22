@@ -101,7 +101,7 @@ import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerComm
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
-import { mergePendingQueueAdds } from './queueSync.js';
+import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
 
 
@@ -545,6 +545,7 @@ function YediHubAppContent() {
 
   // Manual Request Form State
   const [reqUrl, setReqUrl] = useState('');
+  const [reqStartAt, setReqStartAt] = useState('');
   const [reqTitle, setReqTitle] = useState('');
   const [reqCategory, setReqCategory] = useState('Auto');
   const [reqNote, setReqNote] = useState('');
@@ -562,6 +563,9 @@ function YediHubAppContent() {
   // Notifications
   const [toasts, setToasts] = useState([]);
   const addToast = (message, type = 'info') => {
+    // Old local-only queue warning was misleading to viewers; sync status is shown in
+    // Connection details instead, so never surface that copy as a toast.
+    if (shouldSuppressLocalOnlySyncToast(message)) return;
     // Seamless mode: suppress routine informational/success popups.
     if (type === 'info' || type === 'success') return;
     const id = 'toast-' + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -1697,7 +1701,7 @@ function YediHubAppContent() {
         }
         console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
         setCloudSynced(false);
-        setSyncStatusText('Cloud write failed — request saved in this browser');
+        setSyncStatusText('Cloud write failed — sync needs attention');
         if (String(localItem.note || '').toLowerCase().includes('twitch chat')) {
           sendTwitchChatReply('@' + normalizeTwitchLogin(localItem.requestedBy) + ' I could not save your request to the shared cloud queue. Please retry later; it is not confirmed for the streamer.');
         }
@@ -2799,7 +2803,11 @@ function YediHubAppContent() {
       addedAt: new Date(requestedAt).toISOString(),
       queueOrder: getNextQueueOrder(),
       timestamp: requestedAt,
-      startSeconds: Math.max(0, Number(startSeconds) || parseMediaStartSeconds(normalizedUrl) || 0),
+      startSeconds: parsed.platform === 'youtube'
+        ? (startSeconds === null || startSeconds === undefined
+          ? (parseMediaStartSeconds(normalizedUrl) || 0)
+          : Math.max(0, Number(startSeconds) || 0))
+        : 0,
       note: note || `Added to ${channelRoom} deck`,
       thumbnail: resolvedThumbnail || parsed.thumbnail,
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
@@ -4478,10 +4486,12 @@ function YediHubAppContent() {
                   note: reqNote,
                   requestedBy: reqUsername || twitchAuth.username,
                   userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
-                  manualCategory: reqCategory
+                  manualCategory: reqCategory,
+                  startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null
                 });
                 if (ok) {
                   setReqUrl('');
+                  setReqStartAt('');
                   setReqTitle('');
                   setReqNote('');
                   setShowRequestModal(false);
@@ -4501,7 +4511,22 @@ function YediHubAppContent() {
                   placeholder="YouTube, Twitch Clip, or TikTok share/video URL…"
                   className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
                 />
-                <p className="mt-1 text-[10px] text-slate-500">YouTube links can include ?t=83, ?start=83, #t=1m23s, or a timestamp after the link (1:23).</p>
+                <p className="mt-1 text-[10px] text-slate-500">YouTube links can include ?t=83 or #t=1m23s. You can also set the start time below.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Start at (YouTube only, optional)
+                </label>
+                <input
+                  type="text"
+                  value={reqStartAt}
+                  onChange={(e) => setReqStartAt(e.target.value)}
+                  placeholder="1:23, 1:02:03, or 83s"
+                  aria-label="YouTube start timestamp"
+                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
+                />
+                <p className="mt-1 text-[10px] text-slate-500">Examples: 1:23 (83 seconds), 1:02:03, or 83s. This overrides a timestamp in the URL.</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
