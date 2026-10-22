@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
+import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
@@ -82,4 +82,17 @@ test('TikTok bridge forwards the target timestamp for seekTo', () => {
     data: { type: 'seekTo', value: 42.5, 'x-tiktok-player': true },
     origin: 'https://www.tiktok.com',
   });
+});
+
+
+test('TikTok embeds autoplay muted unless this exact video was deliberately paused', () => {
+  const activeUrl = new URL(buildTikTokPlayerUrl('1234567890123456789'));
+  assert.equal(activeUrl.searchParams.get('autoplay'), '1');
+  assert.equal(activeUrl.searchParams.get('muted'), '1');
+  assert.equal(activeUrl.searchParams.get('controls'), '1');
+
+  const pausedUrl = new URL(buildTikTokPlayerUrl('1234567890123456789', { paused: true }));
+  assert.equal(pausedUrl.searchParams.get('autoplay'), '0');
+  assert.equal(pausedUrl.searchParams.get('muted'), '1');
+  assert.equal(buildTikTokPlayerUrl(''), '');
 });
