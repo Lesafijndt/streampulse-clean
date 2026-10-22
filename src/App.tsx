@@ -341,6 +341,8 @@ function YediHubAppContent() {
   const [auth, setAuth] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
+  const [cloudChatListener, setCloudChatListener] = useState({ status: 'checking', active: false, code: '', message: 'Checking cloud chat listener…' });
+  const cloudChatListenerReadyRef = useRef(false);
   const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const networkOnlineRef = useRef(networkOnline);
   const [cloudReconnectTick, setCloudReconnectTick] = useState(0);
@@ -760,7 +762,7 @@ function YediHubAppContent() {
       const explanation = botError === 'wrong_account'
         ? 'Please authorize Twitch account @gachibot69 for chat messages.'
         : botError === 'missing_scope'
-        ? 'Twitch did not grant chat-write permission. Reconnect the bot and approve the requested permission.'
+        ? 'Twitch did not grant the required chat permissions. Reconnect the bot and approve all requested permissions.'
         : 'The chat-bot Twitch login did not complete. Please try again.';
       addToast(explanation, 'warning');
       params.delete('bot_error');
@@ -775,6 +777,73 @@ function YediHubAppContent() {
       window.removeEventListener('focus', refreshBotSession);
     };
   }, []);
+
+  // Set up Twitch EventSub once from the streamer's authenticated dashboard. After the webhook
+  // is active, Twitch delivers requests straight to the server; neither browser has to stay open.
+  useEffect(() => {
+    if (!twitchAuth.authenticated) {
+      cloudChatListenerReadyRef.current = false;
+      setCloudChatListener({ status: 'signed_out', active: false, code: 'signed_out', message: 'Sign in to check cloud chat capture.' });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    const isStreamer = normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL;
+
+    const refreshCloudChatListener = async (setup = false) => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      try {
+        const response = await fetch('/api/twitch/eventsub-setup', {
+          method: setup ? 'POST' : 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(12000),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        const active = Boolean(response.ok && result.active === true);
+        cloudChatListenerReadyRef.current = active;
+        setCloudChatListener({
+          status: String(result.status || (response.ok ? 'inactive' : 'error')),
+          active,
+          code: String(result.code || ''),
+          message: String(result.message || (active
+            ? 'Cloud chat listener is active. Requests save even when the dashboard is closed.'
+            : 'Cloud chat listener is not active yet.')),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        cloudChatListenerReadyRef.current = false;
+        setCloudChatListener({
+          status: 'unavailable',
+          active: false,
+          code: 'status_unavailable',
+          message: 'Could not check the cloud chat listener. Requests may rely on the open streamer dashboard until it is healthy.',
+        });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    // Let the existing session/bot refresh effects renew their HttpOnly tokens first.
+    const initialTimer = window.setTimeout(() => {
+      void refreshCloudChatListener(isStreamer);
+    }, isStreamer ? 2200 : 500);
+    const pollTimer = window.setInterval(() => {
+      void refreshCloudChatListener(false);
+    }, 25000);
+    const onFocus = () => void refreshCloudChatListener(false);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(pollTimer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [twitchAuth.authenticated, twitchAuth.username]);
 
   // Firebase is initialized without anonymous sign-in. Only the server-issued custom token
   // for the currently authenticated allowlisted Twitch account can open the cloud queue.
@@ -1505,7 +1574,7 @@ function YediHubAppContent() {
         setCloudSynced(false);
         setSyncStatusText('Cloud write failed — request saved in this browser');
         if (String(localItem.note || '').toLowerCase().includes('twitch chat')) {
-          sendTwitchChatReply('@' + normalizeTwitchLogin(localItem.requestedBy) + ' your request was saved in the dashboard browser, but cloud sync failed. The streamer may not see it until sync recovers.');
+          sendTwitchChatReply('@' + normalizeTwitchLogin(localItem.requestedBy) + ' I could not save your request to the shared cloud queue. Please retry later; it is not confirmed for the streamer.');
         }
       }
     }
@@ -2167,6 +2236,14 @@ function YediHubAppContent() {
   // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
   const connectTwitchIrc = (targetChan, options = {}) => {
+    // Only the broadcaster browser is authoritative for commands/playback. The server-side
+    // EventSub webhook is the durable path for request intake while the dashboard is closed.
+    if (normalizeTwitchLogin(twitchAuth.username) !== PRIVATE_CHANNEL) {
+      shouldReconnectIrcRef.current = false;
+      setIrcConnected(false);
+      if (!options.silent) addToast('The local Twitch command bridge runs on the 2o3a player dashboard only.', 'warning');
+      return;
+    }
     const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
     if (!cleanChan) {
       addToast('Please enter a valid Twitch channel name.', 'warning');
@@ -2238,7 +2315,11 @@ function YediHubAppContent() {
           const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
           const volumeCommand = parseModVolumeCommand(lowerText);
           if (isRequestCommand || isDirectVideoUrl) {
-            handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
+            // EventSub owns request ingestion once enabled; the browser listener is only a
+            // temporary fallback during setup and must not double-add cloud requests.
+            if (!cloudChatListenerReadyRef.current) {
+              handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
+            }
           } else if (lowerText === '!remove' || lowerText === '!unrequest') {
             handleRemoveOwnRequestRef.current?.(voterLogin || username);
           } else if (lowerText === '!queue') {
@@ -2296,13 +2377,15 @@ function YediHubAppContent() {
     setIrcConnected(false);
   };
 
-  // Persisted channel room => the browser/OBS source automatically reconnects the bridge.
-  // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
+  // The local IRC bridge is reserved for 2o3a's player browser. Other staff sessions can
+  // monitor/moderate the shared queue without opening a second command processor.
+  // Durable media requests are handled by the server-side EventSub webhook when active.
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    shouldReconnectIrcRef.current = Boolean(twitchAuth.authenticated);
-    if (!twitchAuth.authenticated) {
+    const isPlayerController = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL;
+    shouldReconnectIrcRef.current = Boolean(isPlayerController);
+    if (!isPlayerController) {
       disconnectTwitchIrc(false);
       return undefined;
     }
@@ -2313,7 +2396,7 @@ function YediHubAppContent() {
     };
     // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated]);
+  }, [twitchAuth.authenticated, twitchAuth.username]);
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -2327,7 +2410,7 @@ function YediHubAppContent() {
       if (!online || (!wasOffline && !force)) return;
       setCloudReconnectTick((tick) => tick + 1);
       setActivityReconnectTick((tick) => tick + 1);
-      if (twitchAuth.authenticated && shouldReconnectIrcRef.current) {
+      if (twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && shouldReconnectIrcRef.current) {
         const socket = ircSocketRef.current;
         if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
           connectTwitchIrc(ircTargetRef.current || PRIVATE_CHANNEL, { silent: true });
@@ -2857,8 +2940,11 @@ function YediHubAppContent() {
   handleMediaEndedRef.current = (videoId) => {
     const playing = currentVideoRef.current || currentVideo;
     if (!playing || String(playing.id) !== String(videoId)) return;
-    if (streamSettings.autoPlayNext) handleSkipNextRef.current?.('completed');
-    else recordActivity('playback_completed', playing, { source: 'player-ended' });
+    if (streamSettings.autoPlayNext && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL) {
+      handleSkipNextRef.current?.('completed');
+    } else {
+      recordActivity('playback_completed', playing, { source: 'player-ended' });
+    }
   };
 
   const togglePlaybackFromKeyboard = () => {
@@ -3786,10 +3872,22 @@ function YediHubAppContent() {
         </div>
 
         {connectionDetailsExpanded && (
-          <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-5">
             <div className="min-w-0">
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
               <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud chat intake</div>
+              <div className={cloudChatListener.active ? 'text-emerald-300' : cloudChatListener.status === 'error' || cloudChatListener.status === 'unavailable' ? 'text-rose-200' : 'text-amber-200'}>
+                {cloudChatListener.message}
+              </div>
+              {!cloudChatListener.active && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && ['staff_scope_missing', 'staff_reauth_required'].includes(cloudChatListener.code) ? (
+                <a href="/api/twitch/login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Authorize 2o3a for cloud chat</a>
+              ) : null}
+              {!cloudChatListener.active && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && ['bot_scope_missing', 'bot_reauth_required'].includes(cloudChatListener.code) ? (
+                <a href="/api/twitch/bot-login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Reconnect @gachibot69</a>
+              ) : null}
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
