@@ -2436,7 +2436,7 @@ function YediHubAppContent() {
       window.removeEventListener('offline', onOffline);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [twitchAuth.authenticated]);
+  }, [twitchAuth.authenticated, twitchAuth.username]);
 
     // ==========================================
   // REQUEST CREATION & DISPATCH
@@ -3829,10 +3829,10 @@ function YediHubAppContent() {
                 <div className="rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
-                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : 'RECONNECTING'}</span>
+                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'RECONNECTING' : 'STREAMER ONLY'}</span>
                   </div>
-                  <button type="button" onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10">
-                    <RefreshCw className="h-3 w-3" /> Restart command bridge
+                  <button type="button" disabled={normalizeTwitchLogin(twitchAuth.username) !== PRIVATE_CHANNEL} onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:cursor-not-allowed disabled:opacity-50">
+                    <RefreshCw className="h-3 w-3" /> {normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'Restart command bridge' : 'Streamer browser only'}
                   </button>
                 </div>
                 <div className="mt-1 rounded-xl px-3 py-2">
@@ -3891,7 +3891,7 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : 'Reconnecting / offline'}</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'Reconnecting / offline' : 'Streamer browser only'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
