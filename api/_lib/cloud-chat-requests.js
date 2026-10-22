@@ -208,7 +208,9 @@ export async function processEventSubChatMessage({ event, messageId }) {
     voters: [],
     pinned: false,
     addedAt: new Date(requestedAt).toISOString(),
-    queueOrder: requestedAt,
+    // Keep server-ingested items at the tail of the numeric queue order. Client-side
+    // additions then append using getNextQueueOrder() without jumping ahead of webhook items.
+    queueOrder: requestedAt * 1000,
     timestamp: requestedAt,
     note,
     thumbnail,
