@@ -7,7 +7,7 @@ WHALE CUM is a private Vite + React dashboard for running a community media queu
 - **Shared queue:** Accepts supported YouTube videos and Shorts, TikTok videos, Twitch Clips, and Kick Clips. The dashboard can also add media directly; title-based chat requests search YouTube and use the best match returned by the search route.
 - **Queue management:** Active Queue, Watch Later, and History views; search; category and media-type filters; sorting for non-active lists; upvotes; pinned priority; drag-and-drop ordering and move controls; Play Now; Previous Video and Next Video; and automatic advance when the player reports that media ended.
 - **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
-- **Twitch chat bridge:** An authenticated dashboard tab or OBS browser source listens to chat without rendering a public chat transcript. Requests are accepted through the chat commands below.
+- **Twitch chat requests:** Twitch EventSub sends chat requests to a server-side webhook and saves them directly to the shared Firestore queue. Once enabled, requests keep working with every dashboard/browser closed; the local IRC bridge is a temporary fallback during setup and is reserved for the `2o3a` player browser.
 - **Stats & analytics:** Request totals, completions, skips, votes, estimated queue runway, and a Top 10 Requesters list. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
 - **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
 
@@ -20,7 +20,7 @@ Only the Twitch accounts below are allowed to sign in to the dashboard:
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. An authenticated session is required to start the private Twitch IRC bridge. The bridge runs in the open dashboard/OBS browser source; Vercel does not keep a browser WebSocket alive after every browser has been closed.
+The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. Only `2o3a` runs the local IRC command bridge and owns automatic playback advance. Cloud chat request intake runs through Twitch EventSub after the one-time setup in the dashboard's **Cloud chat intake** connection status. Until that status says active, request capture can still depend on the streamer dashboard being open.
 
 ## Chat commands
 
@@ -59,6 +59,14 @@ Cloud sync is optional. Without a valid Firebase web configuration and server se
 4. Publish this repository's `firestore.rules` to the same Firebase project. The rules require the server-issued authorization claims; do not restore permissive anonymous client access.
 5. Redeploy after changing Firebase variables or rules.
 
+### Enable cloud chat intake (one time)
+
+1. Open the production WHALE CUM dashboard and sign in as `2o3a`. In **Connection details → Cloud chat intake**, use **Authorize 2o3a for cloud chat** if prompted. Twitch must grant `channel:bot` to this app.
+2. Use **Reconnect @gachibot69** if the dashboard prompts for it. That account must grant `user:read:chat`, `user:write:chat`, and `user:bot` to the same Twitch developer application.
+3. Keep the dashboard open until **Cloud chat intake** reports **active**. Vercel creates a webhook subscription for `channel.chat.message`; Twitch verifies the callback and the app reports whether the subscription is active.
+4. Once active, EventSub processes supported media links and `!assr <URL or YouTube title>` on the server, writes the queue item and request-stat event into Firestore, and deduplicates repeated deliveries. The streamer's browser does not need to be open to capture requests; the shared queue appears when `2o3a` next opens the dashboard.
+5. If the status mentions Firestore unavailable, check service-account project/permissions and the Firebase usage/quota dashboard. Server-side writes still depend on the Firebase project being available and within quota; a webhook cannot save to the cloud when Firestore rejects the write.
+
 The server issues a Firebase custom token only after validating an approved Twitch session. The token carries `yediAuthorized`, `twitchLogin`, and `role` claims. Firebase writes require these server-issued claims.
 
 ## Backups and troubleshooting
@@ -66,7 +74,7 @@ The server issues a Firebase custom token only after validating an approved Twit
 - Export a queue backup before major changes. The dashboard supports importing a valid JSON backup and restoring the last local safety snapshot.
 - Treat the cloud-sync indicator as authoritative for cross-browser sync. A local save protects this browser, but local-only changes do not guarantee that another browser has received them.
 - A provider may block autoplay with sound until a staff member starts playback manually. TikTok, Twitch Clips, and Kick Clips expose different embed/control capabilities; some items may have to be opened from their source page.
-- If a request flashes into the queue and then disappears, check the cloud-sync indicator and browser console. The dashboard now retains pending local additions across stale snapshots and reloads; if Firestore rejects a write, the bot tells the requester that the item is local-only and other browsers will not see it until cloud sync succeeds. The Firebase usage/quota page is worth checking if write failures recur.
+- If cloud chat intake is not **active**, check the connection-details message for the missing Twitch scope, bot authorization, EventSub setup, or Firebase availability. The local fallback no longer claims a request is confirmed when the shared cloud write fails. Pending dashboard-only items are recovery data, not proof that the streamer can see them.
 
 ## Development and verification
 
