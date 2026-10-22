@@ -1278,11 +1278,21 @@ function YediHubAppContent() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || 'Activity event could not be saved'}${result.diagnostic ? ' (' + result.diagnostic + ')' : ''}`);
       activityCloudIdsRef.current.add(eventId);
+      const pendingKey = roomStorageKey(channelRoom, 'activity-pending-ids');
+      const pendingValues = readStoredValue(pendingKey, []);
+      const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
+      pendingIds.delete(eventId);
+      writeStoredValue(pendingKey, [...pendingIds]);
       setActivitySyncError(false);
       setActivitySyncErrorMessage('');
       return true;
     } catch (error) {
       const message = String(error?.message || 'Activity event could not be saved').slice(0, 220);
+      const pendingKey = roomStorageKey(channelRoom, 'activity-pending-ids');
+      const pendingValues = readStoredValue(pendingKey, []);
+      const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
+      pendingIds.add(eventId);
+      writeStoredValue(pendingKey, [...pendingIds].slice(-5000));
       console.warn('Activity event remains saved locally; cloud retry is pending.', error);
       setActivitySyncError(true);
       setActivitySyncErrorMessage(message);
@@ -1315,9 +1325,20 @@ function YediHubAppContent() {
 
   const flushPendingActivityEvents = () => {
     if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !networkOnline) return;
-    activityEventsRef.current.forEach((event) => {
-      if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
+    const pendingValues = readStoredValue(roomStorageKey(channelRoom, 'activity-pending-ids'), []);
+    const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
+    const hasFullBaseline = readStoredValue(roomStorageKey(channelRoom, 'activity-cloud-baseline'), false) === true;
+    const candidates = activityEventsRef.current.filter((event) => {
+      const id = String(event.id);
+      if (activityCloudIdsRef.current.has(id)) return false;
+      return pendingIds.has(id) || !hasFullBaseline;
     });
+    void (async () => {
+      for (let offset = 0; offset < candidates.length; offset += 3) {
+        if (!networkOnline) break;
+        await Promise.all(candidates.slice(offset, offset + 3).map((event) => syncActivityEventToCloud(event)));
+      }
+    })();
   };
 
   const handleRetryActivitySync = () => {
@@ -1446,7 +1467,11 @@ function YediHubAppContent() {
         // A full baseline can find every old unsynced event. Incremental reads only
         // reconcile the recent overlap; do not misclassify all historical local rows
         // as missing just because they were not part of this small delta response.
-        const candidates = (fullSnapshot ? merged : merged.filter((event) => Number(event.at) >= since))
+        const pendingValues = readStoredValue(roomStorageKey(channelRoom, 'activity-pending-ids'), []);
+        const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
+        const candidates = (fullSnapshot
+          ? merged
+          : merged.filter((event) => Number(event.at) >= since || pendingIds.has(String(event.id))))
           .filter((event) => !activityCloudIdsRef.current.has(String(event.id)));
         for (let offset = 0; offset < candidates.length; offset += 3) {
           if (!active) break;
