@@ -2336,3 +2336,14 @@ body { background: #03070b; }
   .gachi-queue-details h4 { font-size: .76rem !important; }
   .gachi-queue-actions { justify-content: flex-end !important; }
 }
+
+
+/* Keep queue controls aligned with the card's left edge, not stranded at the far right. */
+.gachi-queue-actions {
+  justify-content: flex-start !important;
+}
+@media (max-width: 767px) {
+  .gachi-queue-actions {
+    justify-content: flex-start !important;
+  }
+}
