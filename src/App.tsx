@@ -393,6 +393,7 @@ function YediHubAppContent() {
   const activitySyncInFlightRef = useRef(new Set());
   const [activityCloudReady, setActivityCloudReady] = useState(false);
   const [activitySyncError, setActivitySyncError] = useState(false);
+  const [activitySyncLoading, setActivitySyncLoading] = useState(false);
   const activitySessionIdRef = useRef('');
   if (!activitySessionIdRef.current) {
     const sessionKey = roomStorageKey(channelRoom, 'activity-session');
@@ -1316,6 +1317,8 @@ function YediHubAppContent() {
   };
 
   const handleRetryActivitySync = () => {
+    if (!networkOnline || activitySyncLoading) return;
+    setActivitySyncLoading(true);
     setActivityReconnectTick((tick) => tick + 1);
     setCloudReconnectTick((tick) => tick + 1);
     flushPendingActivityEvents();
@@ -1383,6 +1386,7 @@ function YediHubAppContent() {
       activityCloudReadyRef.current = false;
       activityCloudIdsRef.current = new Set();
       setActivityCloudReady(false);
+      setActivitySyncLoading(false);
       return undefined;
     }
 
@@ -1391,8 +1395,13 @@ function YediHubAppContent() {
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
     const loadActivityEvents = async () => {
-      if (!active || loading || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      if (!active || loading) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setActivitySyncLoading(false);
+        return;
+      }
       loading = true;
+      setActivitySyncLoading(true);
       try {
         const response = await fetch('/api/activity-log?appId=' + encodeURIComponent(appId), {
           credentials: 'same-origin',
@@ -1423,6 +1432,7 @@ function YediHubAppContent() {
         }
       } finally {
         loading = false;
+        if (active) setActivitySyncLoading(false);
       }
     };
     void loadActivityEvents();
@@ -1908,6 +1918,8 @@ function YediHubAppContent() {
   );
   const activitySyncStatus = !networkOnline
     ? 'Offline · local save'
+    : activitySyncLoading
+    ? 'Syncing activity'
     : activitySyncError
     ? 'Retry needed'
     : twitchAuth.authenticated
@@ -1915,7 +1927,7 @@ function YediHubAppContent() {
     : 'Local-only';
   const activitySyncTone = !networkOnline || activitySyncError
     ? 'warning'
-    : twitchAuth.authenticated && activityCloudReady
+    : twitchAuth.authenticated && activityCloudReady && !activitySyncLoading
     ? 'success'
     : 'neutral';
   const nextQueuedVideo = useMemo(
@@ -3586,7 +3598,8 @@ function YediHubAppContent() {
             activitySyncStatus={activitySyncStatus}
             activitySyncTone={activitySyncTone}
             activitySyncError={activitySyncError}
-            canRetryActivitySync={Boolean(twitchAuth.authenticated)}
+            activitySyncLoading={activitySyncLoading}
+            canRetryActivitySync={Boolean(twitchAuth.authenticated && networkOnline)}
             onRetryActivitySync={handleRetryActivitySync}
             networkOnline={networkOnline}
           />
