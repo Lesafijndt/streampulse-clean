@@ -19,7 +19,7 @@ export default function handler(req, res) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'user:write:chat',
+    scope: 'user:read:chat user:write:chat user:bot',
     state,
     force_verify: 'true'
   });
