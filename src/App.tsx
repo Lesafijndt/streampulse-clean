@@ -393,6 +393,7 @@ function YediHubAppContent() {
   const activitySyncInFlightRef = useRef(new Set());
   const [activityCloudReady, setActivityCloudReady] = useState(false);
   const [activitySyncError, setActivitySyncError] = useState(false);
+  const [activitySyncErrorMessage, setActivitySyncErrorMessage] = useState('');
   const [activitySyncLoading, setActivitySyncLoading] = useState(false);
   const activitySessionIdRef = useRef('');
   if (!activitySessionIdRef.current) {
@@ -1275,13 +1276,16 @@ function YediHubAppContent() {
         body: JSON.stringify({ appId, event })
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || 'Activity event could not be saved');
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || 'Activity event could not be saved'}`);
       activityCloudIdsRef.current.add(eventId);
       setActivitySyncError(false);
+      setActivitySyncErrorMessage('');
       return true;
     } catch (error) {
+      const message = String(error?.message || 'Activity event could not be saved').slice(0, 220);
       console.warn('Activity event remains saved locally; cloud retry is pending.', error);
       setActivitySyncError(true);
+      setActivitySyncErrorMessage(message);
       return false;
     } finally {
       activitySyncInFlightRef.current.delete(eventId);
@@ -1409,13 +1413,14 @@ function YediHubAppContent() {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.events)) {
-          throw new Error(result.error || 'Activity log sync is unavailable');
+          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}`);
         }
         const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
         activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
         activityCloudReadyRef.current = true;
         setActivityCloudReady(true);
         setActivitySyncError(false);
+        setActivitySyncErrorMessage('');
         const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
         activityEventsRef.current = merged;
         setActivityEvents(merged);
@@ -1429,6 +1434,7 @@ function YediHubAppContent() {
           setActivityCloudReady(false);
           activityCloudReadyRef.current = false;
           setActivitySyncError(true);
+          setActivitySyncErrorMessage(String(error?.message || 'Activity log sync is unavailable').slice(0, 220));
         }
       } finally {
         loading = false;
@@ -3598,6 +3604,7 @@ function YediHubAppContent() {
             activitySyncStatus={activitySyncStatus}
             activitySyncTone={activitySyncTone}
             activitySyncError={activitySyncError}
+            activitySyncErrorMessage={activitySyncErrorMessage}
             activitySyncLoading={activitySyncLoading}
             canRetryActivitySync={Boolean(twitchAuth.authenticated && networkOnline)}
             onRetryActivitySync={handleRetryActivitySync}
