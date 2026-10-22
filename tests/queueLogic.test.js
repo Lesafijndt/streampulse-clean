@@ -252,3 +252,25 @@ test('Stats platform, genre and requester rankings use all retained items', asyn
   assert.deepEqual(stats.mostActiveRequester, { label: 'alice', count: 2 });
   assert.equal(stats.totalRequesters, 3, 'overall unique counts are only for retained items');
 });
+
+
+test('duration retry policy backs off after failures and retries legacy failed records', async () => {
+  const { createDurationLookupOutcome, getDurationRetryDelayMs, shouldRetryDurationLookup } = await import('../src/durationLookup.js');
+  const first = createDurationLookupOutcome({ status: 'unavailable', platform: 'tiktok', at: 1000, reason: 'blocked' });
+  assert.equal(first.attempts, 1);
+  assert.equal(first.nextRetryAt, 1000 + 60_000);
+  assert.equal(shouldRetryDurationLookup(first, first.nextRetryAt - 1), false);
+  assert.equal(shouldRetryDurationLookup(first, first.nextRetryAt), true);
+  assert.equal(shouldRetryDurationLookup('unavailable', 1000), true);
+  assert.equal(shouldRetryDurationLookup(first, 1001, true), true);
+  const second = createDurationLookupOutcome({ status: 'error', platform: 'youtube', previous: first, at: 2000 });
+  assert.equal(second.attempts, 2);
+  assert.equal(second.nextRetryAt, 2000 + getDurationRetryDelayMs(2));
+});
+
+test('duration enrichment retries missing YouTube/TikTok durations but skips valid or unrelated items', async () => {
+  const { videoNeedsDurationLookup } = await import('../src/durationLookup.js');
+  assert.equal(videoNeedsDurationLookup({ id: 'tt', url: 'https://www.tiktok.com/@u/video/1234567890123', platform: 'tiktok' }), true);
+  assert.equal(videoNeedsDurationLookup({ id: 'yt', url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', duration: '3:01', durationSec: 181, durationSource: 'metadata' }), false);
+  assert.equal(videoNeedsDurationLookup({ id: 'web', url: 'https://example.com/v', platform: 'web' }), false);
+});

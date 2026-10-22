@@ -1,3 +1,5 @@
+import { MAX_MEDIA_DURATION_SECONDS } from './durationLookup.js';
+
 export function formatMediaDuration(totalSeconds) {
   const seconds = Number(totalSeconds);
   if (!Number.isFinite(seconds) || seconds <= 0) return '';
@@ -181,7 +183,7 @@ export function getDurationEstimate(video) {
   const durationLabel = String(video?.duration || '').trim();
   const storedSeconds = Number(video?.durationSec);
   const hasProviderDuration = ['metadata', 'player'].includes(String(video?.durationSource || '')) &&
-    Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400;
+    Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= MAX_MEDIA_DURATION_SECONDS;
 
   if (hasProviderDuration) {
     const source = String(video?.durationSource || '') === 'player' ? 'player' : 'metadata';
@@ -197,14 +199,14 @@ export function getDurationEstimate(video) {
     ['03:45', '3:45'].includes(durationLabel)
   ));
 
-  if (!legacyPlaceholder && Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= 86400) {
+  if (!legacyPlaceholder && Number.isFinite(storedSeconds) && storedSeconds > 0 && storedSeconds <= MAX_MEDIA_DURATION_SECONDS) {
     return { seconds: Math.round(storedSeconds), estimated: false, source: 'saved' };
   }
 
   const match = durationLabel.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
   if (!legacyPlaceholder && match && !['00:45', '03:45'].includes(durationLabel)) {
     const seconds = (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
-    if (Number.isFinite(seconds) && seconds > 0 && seconds <= 86400) {
+    if (Number.isFinite(seconds) && seconds > 0 && seconds <= MAX_MEDIA_DURATION_SECONDS) {
       return { seconds, estimated: false, source: 'saved' };
     }
   }
@@ -362,7 +364,7 @@ function readReliableDuration(video) {
   const trustedSource = source === 'metadata' || source === 'player';
   const label = String(video.duration || '').trim();
   let seconds = Number(video.durationSec);
-  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) {
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MAX_MEDIA_DURATION_SECONDS) {
     const match = label.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
     if (!match) return null;
     seconds = Number(match[1] || 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
@@ -372,7 +374,7 @@ function readReliableDuration(video) {
     (seconds === 45 && label === '00:45' && ['tiktok', 'twitch', 'kick'].includes(platform)) ||
     (seconds === 225 && ['03:45', '3:45'].includes(label))
   );
-  if (legacyPlaceholder || seconds <= 0 || seconds > 86400) return null;
+  if (legacyPlaceholder || seconds <= 0 || seconds > MAX_MEDIA_DURATION_SECONDS) return null;
   return {
     seconds: Math.round(seconds),
     duration: formatMediaDuration(seconds),
@@ -435,7 +437,7 @@ export function applyCachedVideoDurations(videos = [], cache = {}) {
     const entry = key ? cache[key] : null;
     const seconds = Math.round(Number(entry?.seconds));
     const source = String(entry?.source || 'metadata');
-    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400 ||
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MAX_MEDIA_DURATION_SECONDS ||
         !['metadata', 'player'].includes(source)) return video;
     const existing = getDurationEstimate(video);
     const hasTrustedExisting = ['metadata', 'player'].includes(String(video?.durationSource || '')) &&

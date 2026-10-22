@@ -100,6 +100,7 @@ import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 
 
 
@@ -373,9 +374,9 @@ function YediHubAppContent() {
   // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
   videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
-  const durationEnrichmentAttemptedRef = useRef(new Set());
   const durationEnrichmentInFlightRef = useRef(new Set());
   const [durationRefreshCount, setDurationRefreshCount] = useState(0);
+  const durationRefreshProcessedRef = useRef(0);
   const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
     return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
@@ -989,8 +990,7 @@ function YediHubAppContent() {
   const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
     const seconds = Math.round(Number(rawDurationSeconds));
     const key = getDurationCacheKey(video);
-    if (!key || !Number.isFinite(seconds) || seconds <= 0 || seconds > 86400 ||
-        !['metadata', 'player'].includes(source)) return;
+    if (!key || !isValidMediaDuration(seconds) || !['metadata', 'player'].includes(source)) return;
     const cacheKey = roomStorageKey(channelRoom, 'duration-cache');
     const stored = readStoredValue(cacheKey, {});
     const cache = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
@@ -1009,7 +1009,7 @@ function YediHubAppContent() {
 
   const reportPlayerDuration = (videoId, rawDurationSeconds) => {
     const seconds = Math.round(Number(rawDurationSeconds));
-    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) return;
+    if (!isValidMediaDuration(seconds)) return;
     const target = videosRef.current.find((video) => String(video.id) === String(videoId));
     if (!target) return;
     const label = formatMediaDuration(seconds);
@@ -1028,73 +1028,73 @@ function YediHubAppContent() {
     });
   };
 
-  // Backfill existing queue/history items added before provider durations were retrieved.
-  // Run a few requests at a time; a manual refresh retries items whose provider hides duration.
+  // Backfill queue/history items. Failed lookups get bounded automatic retries instead of
+  // becoming permanently stuck; in-flight IDs are locked before state updates to prevent races.
   const durationScanKey = videos.map((video) =>
-    String(video.id) + ':' + String(video.durationSource || '') + ':' +
-    String(video.durationSec || '') + ':' + String(video.duration || '')
+    String(video.id) + ':' + String(video.platform || '') + ':' + String(video.url || '') + ':' +
+    String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
   ).join('|');
   useEffect(() => {
+    const forceRetry = durationRefreshProcessedRef.current !== durationRefreshCount;
+    durationRefreshProcessedRef.current = durationRefreshCount;
     const candidates = videosRef.current.filter((video) => {
-      if (!video?.id || !video?.url ||
-          !['youtube', 'tiktok', 'twitch', 'kick'].includes(String(video.platform || '').toLowerCase())) return false;
-      const id = String(video.id);
-      if (durationEnrichmentAttemptedRef.current.has(id) || durationEnrichmentInFlightRef.current.has(id)) return false;
-      const priorLookup = durationLookupOutcomes[id];
-      const priorStatus = typeof priorLookup === 'string' ? priorLookup : priorLookup?.status;
-      const priorAt = Number(typeof priorLookup === 'object' ? priorLookup?.at : 0) || 0;
-      const failedRecently = ['unavailable', 'error'].includes(priorStatus) &&
-        priorAt > 0 && Date.now() - priorAt < 6 * 60 * 60 * 1000 &&
-        durationRefreshCount === 0;
-      if (failedRecently) return false;
-      const seconds = Number(video.durationSec) || 0;
-      const label = String(video.duration || '').trim();
-      const trustedSource = ['metadata', 'player'].includes(String(video.durationSource || ''));
-      const placeholder = !trustedSource && (
-        (seconds === 45 && label === '00:45') ||
-        (seconds === 225 && ['03:45', '3:45'].includes(label))
-      );
-      const hasUsefulSeconds = seconds > 0 && !placeholder;
-      const hasUsefulLabel = /^(?:\d+:)?\d{1,2}:\d{2}$/.test(label) &&
-        (trustedSource || !['00:45', '03:45', '3:45'].includes(label));
-      return !hasUsefulSeconds && !hasUsefulLabel;
+      const id = String(video?.id || '');
+      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsDurationLookup(video)) return false;
+      return shouldRetryDurationLookup(durationLookupOutcomes[id], Date.now(), forceRetry);
     }).slice(0, 160);
+    if (!candidates.length) return undefined;
+
+    const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[String(video.id)] || null]));
+    const startedAt = Date.now();
+    candidates.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
+    setDurationLookupOutcomes((prev) => ({
+      ...prev,
+      ...Object.fromEntries(candidates.map((video) => {
+        const id = String(video.id);
+        return [id, createDurationLookupOutcome({
+          status: 'pending', platform: video.platform, previous: previousOutcomes.get(id), at: startedAt,
+        })];
+      }))
+    }));
 
     const enrich = async () => {
       for (let offset = 0; offset < candidates.length; offset += 3) {
-        const batch = candidates.slice(offset, offset + 3).filter((video) => {
-          const id = String(video.id);
-          return !durationEnrichmentAttemptedRef.current.has(id) && !durationEnrichmentInFlightRef.current.has(id);
-        });
-        batch.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
-        if (batch.length) setDurationLookupOutcomes((prev) => ({
-          ...prev,
-          ...Object.fromEntries(batch.map((video) => [String(video.id), {
-            status: 'pending', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
-          }]))
-        }));
+        const batch = candidates.slice(offset, offset + 3);
         await Promise.all(batch.map(async (video) => {
           const id = String(video.id);
+          const platform = String(video.platform || 'external').toLowerCase();
           try {
             const response = await fetch('/api/media-metadata?url=' + encodeURIComponent(video.url), {
               credentials: 'same-origin',
               cache: 'no-store',
-              signal: AbortSignal.timeout(8500)
+              signal: AbortSignal.timeout(9000)
             });
-            if (!response.ok) {
-              setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
-                status: 'error', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
-              } }));
-              return;
-            }
             const metadata = await response.json().catch(() => null);
-            const seconds = Math.round(Number(metadata?.durationSec));
-            if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) {
-              setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
-                status: 'unavailable', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
-              } }));
+            if (!response.ok) {
+              setDurationLookupOutcomes((prev) => ({
+                ...prev,
+                [id]: createDurationLookupOutcome({
+                  status: 'error', platform, previous: previousOutcomes.get(id),
+                  reason: metadata?.error || ('Metadata endpoint returned HTTP ' + response.status + '.'),
+                  at: Date.now(),
+                })
+              }));
               return;
             }
+            const seconds = Number(metadata?.durationSec);
+            if (!isValidMediaDuration(seconds)) {
+              setDurationLookupOutcomes((prev) => ({
+                ...prev,
+                [id]: createDurationLookupOutcome({
+                  status: 'unavailable', platform, previous: previousOutcomes.get(id),
+                  reason: metadata?.durationReason || 'The provider did not return a valid duration.',
+                  provider: metadata?.durationProvider || '',
+                  at: Date.now(),
+                })
+              }));
+              return;
+            }
+
             const current = videosRef.current.find((item) => String(item.id) === id);
             if (!current) return;
             cacheVideoDuration(current, seconds, 'metadata');
@@ -1102,26 +1102,56 @@ function YediHubAppContent() {
               void syncUpdateVideo(id, {
                 duration: formatMediaDuration(seconds),
                 durationSec: seconds,
-                durationSource: 'metadata'
+                durationSource: 'metadata',
+                durationProvider: String(metadata?.durationProvider || ''),
               });
             }
-            setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
-              status: 'found', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
-            } }));
-          } catch {
-            console.debug('Duration backfill did not return a duration for this item.', id);
-            setDurationLookupOutcomes((prev) => ({ ...prev, [id]: {
-              status: 'error', at: Date.now(), platform: String(video.platform || 'external').toLowerCase()
-            } }));
+            setDurationLookupOutcomes((prev) => ({
+              ...prev,
+              [id]: createDurationLookupOutcome({
+                status: 'found', platform, previous: previousOutcomes.get(id),
+                provider: metadata?.durationProvider || '', at: Date.now(),
+              })
+            }));
+          } catch (error) {
+            const reason = error?.name === 'TimeoutError'
+              ? 'Duration lookup timed out while contacting the metadata endpoint.'
+              : String(error?.message || 'Network error during duration lookup.');
+            setDurationLookupOutcomes((prev) => ({
+              ...prev,
+              [id]: createDurationLookupOutcome({
+                status: 'error', platform, previous: previousOutcomes.get(id), reason, at: Date.now(),
+              })
+            }));
           } finally {
-            durationEnrichmentAttemptedRef.current.add(id);
             durationEnrichmentInFlightRef.current.delete(id);
           }
         }));
       }
     };
     void enrich();
+    return undefined;
   }, [durationScanKey, channelRoom, durationRefreshCount, durationLookupOutcomes]);
+
+  // Retry failed duration lookups even when the dashboard stays open. Persisted retry times
+  // let a reload resume a bounded backoff schedule rather than leaving failed entries stuck.
+  useEffect(() => {
+    const currentIds = new Set(videos.map((video) => String(video.id)));
+    const retryTimes = Object.entries(durationLookupOutcomes)
+      .filter(([id, outcome]) => currentIds.has(String(id)) &&
+        ['unavailable', 'error'].includes(typeof outcome === 'string' ? outcome : outcome?.status))
+      .filter(([id]) => {
+        const video = videosRef.current.find((item) => String(item.id) === String(id));
+        return videoNeedsDurationLookup(video) && !durationEnrichmentInFlightRef.current.has(String(id));
+      })
+      .map(([, outcome]) => Number(typeof outcome === 'object' ? outcome?.nextRetryAt : 0) || 0)
+      .filter((time) => time > Date.now())
+      .sort((a, b) => a - b);
+    if (!retryTimes.length) return undefined;
+    const delay = Math.max(1000, Math.min(2_147_000_000, retryTimes[0] - Date.now()));
+    const timer = window.setTimeout(() => setDurationRefreshCount((count) => count + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [durationLookupOutcomes, durationScanKey]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setStatsNow(Date.now()), 60_000);
@@ -1827,17 +1857,26 @@ function YediHubAppContent() {
     const entries = Object.entries(durationLookupOutcomes).filter(([id]) => currentIds.has(String(id)));
     const statuses = entries.map(([, value]) => typeof value === 'string' ? value : value?.status);
     const failedByPlatform = {};
-    entries.forEach(([, value]) => {
+    let retrying = 0;
+    let latestFailure = null;
+    entries.forEach(([id, value]) => {
       const status = typeof value === 'string' ? value : value?.status;
       if (!['unavailable', 'error'].includes(status)) return;
       const platform = String(typeof value === 'object' ? value?.platform : 'external').toLowerCase() || 'external';
       failedByPlatform[platform] = (failedByPlatform[platform] || 0) + 1;
+      const nextRetryAt = Number(typeof value === 'object' ? value?.nextRetryAt : 0) || 0;
+      if (nextRetryAt > statsNow) retrying += 1;
+      if (!latestFailure || (Number(value?.at) || 0) > (Number(latestFailure.value?.at) || 0)) {
+        latestFailure = { id, value: typeof value === 'object' ? value : { status, platform } };
+      }
     });
     return {
       pending: statuses.filter((status) => status === 'pending').length,
       unavailable: statuses.filter((status) => status === 'unavailable').length,
       errors: statuses.filter((status) => status === 'error').length,
       found: statuses.filter((status) => status === 'found').length,
+      retrying,
+      latestFailureReason: latestFailure?.value?.reason || '',
       failedByPlatform: Object.entries(failedByPlatform)
         .sort((a, b) => b[1] - a[1])
         .map(([platform, count]) => platform + ' ' + count)
@@ -1846,7 +1885,6 @@ function YediHubAppContent() {
 
   const handleRefreshDurations = () => {
     // Keep active lookups marked in-flight to avoid spawning duplicate metadata requests.
-    durationEnrichmentAttemptedRef.current.clear();
     setDurationLookupOutcomes((prev) => Object.fromEntries(
       Object.entries(prev).filter(([, value]) => (typeof value === 'object' ? value?.status : value) === 'found')
     ));
@@ -2226,7 +2264,6 @@ function YediHubAppContent() {
     let deferredMetadataPromise = mediaMetadataPromise;
     if (needsBasicMetadata) {
       const metadata = await mediaMetadataPromise;
-      deferredMetadataPromise = null;
       if (metadata) {
         if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
         if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
@@ -2291,33 +2328,46 @@ function YediHubAppContent() {
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
-    if (resolvedDurationSec) cacheVideoDuration(newVideo, resolvedDurationSec, 'metadata');
-    if (needsBasicMetadata) {
-      durationEnrichmentAttemptedRef.current.add(String(newVideo.id));
+    if (resolvedDurationSec) {
+      cacheVideoDuration(newVideo, resolvedDurationSec, 'metadata');
       setDurationLookupOutcomes((prev) => ({
         ...prev,
-        [String(newVideo.id)]: resolvedDurationSec
-          ? { status: 'found', at: Date.now(), platform: parsed.platform }
-          : { status: 'unavailable', at: Date.now(), platform: parsed.platform }
+        [String(newVideo.id)]: createDurationLookupOutcome({
+          status: 'found', platform: parsed.platform, previous: prev[String(newVideo.id)] || null,
+          provider: 'metadata', at: Date.now(),
+        })
       }));
-    }
-    if (deferredMetadataPromise) {
-      durationEnrichmentInFlightRef.current.add(String(newVideo.id));
-      setDurationLookupOutcomes((prev) => ({ ...prev, [String(newVideo.id)]: {
-        status: 'pending', at: Date.now(), platform: String(newVideo.platform || 'external').toLowerCase()
-      } }));
+    } else if (deferredMetadataPromise) {
+      const pendingId = String(newVideo.id);
+      const previousLookup = durationLookupOutcomes[pendingId] || null;
+      durationEnrichmentInFlightRef.current.add(pendingId);
+      setDurationLookupOutcomes((prev) => ({
+        ...prev,
+        [pendingId]: createDurationLookupOutcome({
+          status: 'pending', platform: parsed.platform, previous: prev[pendingId] || previousLookup, at: Date.now(),
+        })
+      }));
     }
     void syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
 
-    if (deferredMetadataPromise) {
+    if (deferredMetadataPromise && !resolvedDurationSec) {
       const newVideoId = String(newVideo.id);
+      const previousLookup = durationLookupOutcomes[newVideoId] || null;
       void deferredMetadataPromise.then((metadata) => {
         const candidateDuration = Number(metadata?.durationSec);
-        if (!Number.isFinite(candidateDuration) || candidateDuration <= 0 || candidateDuration > 86400) {
-          setDurationLookupOutcomes((prev) => ({ ...prev, [newVideoId]: {
-            status: metadata ? 'unavailable' : 'error', at: Date.now(), platform: parsed.platform
-          } }));
+        if (!isValidMediaDuration(candidateDuration)) {
+          setDurationLookupOutcomes((prev) => ({
+            ...prev,
+            [newVideoId]: createDurationLookupOutcome({
+              status: metadata ? 'unavailable' : 'error',
+              platform: parsed.platform,
+              previous: previousLookup,
+              reason: metadata?.durationReason || 'The provider did not return a valid duration.',
+              provider: metadata?.durationProvider || '',
+              at: Date.now(),
+            })
+          }));
           return;
         }
         const current = videosRef.current.find((video) => String(video.id) === newVideoId);
@@ -2326,13 +2376,25 @@ function YediHubAppContent() {
         void syncUpdateVideo(newVideoId, {
           duration: formatMediaDuration(candidateDuration),
           durationSec: candidateDuration,
-          durationSource: 'metadata'
+          durationSource: 'metadata',
+          durationProvider: String(metadata?.durationProvider || ''),
         });
-        setDurationLookupOutcomes((prev) => ({ ...prev, [newVideoId]: {
-          status: 'found', at: Date.now(), platform: parsed.platform
-        } }));
+        setDurationLookupOutcomes((prev) => ({
+          ...prev,
+          [newVideoId]: createDurationLookupOutcome({
+            status: 'found', platform: parsed.platform,
+            previous: previousLookup, provider: metadata?.durationProvider || '', at: Date.now(),
+          })
+        }));
+      }).catch((error) => {
+        setDurationLookupOutcomes((prev) => ({
+          ...prev,
+          [newVideoId]: createDurationLookupOutcome({
+            status: 'error', platform: parsed.platform, previous: previousLookup,
+            reason: String(error?.message || 'Network error during duration lookup.'), at: Date.now(),
+          })
+        }));
       }).finally(() => {
-        durationEnrichmentAttemptedRef.current.add(newVideoId);
         durationEnrichmentInFlightRef.current.delete(newVideoId);
       });
     }
