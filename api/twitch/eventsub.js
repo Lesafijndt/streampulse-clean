@@ -108,7 +108,7 @@ export default async function handler(req, res) {
     return res.status(503).send('Could not persist chat request');
   }
   try {
-    waitUntil(processPendingEventSubChatMessages(1).catch((error) => {
+    waitUntil(processPendingEventSubChatMessages(2).catch((error) => {
       console.error('EventSub inbox worker failed; messages remain pending:', String(error?.message || error).slice(0, 400));
     }));
   } catch (error) {

@@ -392,8 +392,16 @@ export const MEDIA_HISTORY_COOLDOWN_MS = 16 * 60 * 60 * 1000;
 function historyTimestamp(video = {}) {
   const watchedAt = Date.parse(String(video.watchedAt || ""));
   if (Number.isFinite(watchedAt) && watchedAt > 0) return watchedAt;
-  const playedAt = Number(video.playedAt);
-  return Number.isFinite(playedAt) && playedAt > 0 ? playedAt : null;
+  // Older queue records may have no watchedAt. Use the best known playback/creation
+  // timestamp so legacy History entries eventually become requestable instead of locking forever.
+  for (const value of [video.playedAt, video.timestamp, video.createdAt]) {
+    const timestamp = Number(value);
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+    const parsed = Date.parse(String(value || ""));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const addedAt = Date.parse(String(video.addedAt || ""));
+  return Number.isFinite(addedAt) && addedAt > 0 ? addedAt : null;
 }
 
 export function getMediaHistoryCooldownRemainingMs(video = {}, now = Date.now(), cooldownMs = MEDIA_HISTORY_COOLDOWN_MS) {

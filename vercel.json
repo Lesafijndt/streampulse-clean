@@ -1,3 +1,7 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json"
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/twitch/eventsub.js": { "maxDuration": 60 },
+    "api/twitch/eventsub-setup.js": { "maxDuration": 60 }
+  }
 }

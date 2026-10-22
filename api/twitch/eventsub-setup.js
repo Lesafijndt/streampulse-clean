@@ -330,7 +330,7 @@ export default async function handler(req, res) {
     const lastWebhookAt = Number(health.lastWebhookAt) || 0;
     const writeAge = lastWriteAt > 0 ? Math.max(0, Math.floor((Date.now() - lastWriteAt) / 60000)) : null;
     const healthMessage = lastWriteAt > 0
-      ? ' Last successful queue write: ' + (writeAge < 1 ? 'under 1 minute ago.' : writeAge + ' minute(s) ago.')
+      ? ' Last successful server queue write: ' + (writeAge < 1 ? 'under 1 minute ago.' : writeAge + ' minute(s) ago.')
       : ' Waiting for the first successful queue write.';
     const withHealth = {
       ...currentStatus,
@@ -343,7 +343,7 @@ export default async function handler(req, res) {
     };
     if (currentStatus.active || currentStatus.status === 'pending') {
       try {
-        waitUntil(processPendingEventSubChatMessages(1).catch((error) => {
+        waitUntil(processPendingEventSubChatMessages(2).catch((error) => {
           console.error('EventSub status-triggered inbox drain failed:', String(error?.message || error).slice(0, 300));
         }));
       } catch (error) {

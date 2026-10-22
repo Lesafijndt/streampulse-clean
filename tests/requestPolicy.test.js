@@ -8,7 +8,7 @@ import {
   parseMediaStartSeconds,
   stripMediaTimestampSuffix,
 } from '../src/mediaUtils.js';
-import { isEventSubChatCandidate, versionUpdate } from '../api/_lib/cloud-chat-requests.js';
+import { getInboxRetryState, isEventSubChatCandidate, versionUpdate } from '../api/_lib/cloud-chat-requests.js';
 import { isValidEventSubSignature } from '../api/twitch/eventsub.js';
 
 const NOW = Date.parse('2026-10-22T12:00:00.000Z');
@@ -45,6 +45,30 @@ test('history cooldown does not expire early and active entries never qualify', 
   assert.equal(getMediaHistoryCooldownRemainingMs(recent, NOW), 1000);
   assert.equal(isMediaHistoryCooldownExpired({ status: 'queue', watchedAt: new Date(NOW - MEDIA_HISTORY_COOLDOWN_MS * 2).toISOString() }, NOW), false);
   assert.equal(isMediaHistoryCooldownExpired({ status: 'watched' }, NOW), false);
+});
+
+test('legacy History records without watchedAt eventually become requestable', () => {
+  assert.equal(isMediaHistoryCooldownExpired({
+    status: 'watched', playedAt: NOW - MEDIA_HISTORY_COOLDOWN_MS - 1,
+  }, NOW), true);
+  assert.equal(isMediaHistoryCooldownExpired({
+    status: 'watched', timestamp: NOW - MEDIA_HISTORY_COOLDOWN_MS - 1,
+  }, NOW), true);
+  assert.equal(isMediaHistoryCooldownExpired({
+    status: 'watched', timestamp: NOW - 1000,
+  }, NOW), false);
+});
+
+test('EventSub inbox retries use exponential backoff and stop after five failures', () => {
+  assert.deepEqual(getInboxRetryState(1, NOW), {
+    status: 'pending', retryAt: NOW + 30_000, failedAt: null,
+  });
+  assert.deepEqual(getInboxRetryState(2, NOW), {
+    status: 'pending', retryAt: NOW + 60_000, failedAt: null,
+  });
+  assert.deepEqual(getInboxRetryState(5, NOW), {
+    status: 'failed', retryAt: null, failedAt: NOW,
+  });
 });
 
 

@@ -302,14 +302,23 @@ export async function persistEventSubInbox({ event, messageId }) {
   return { id: safeId };
 }
 
+export function getInboxRetryState(attemptNumber, now = Date.now()) {
+  const attempts = Math.max(1, Math.floor(Number(attemptNumber) || 1));
+  if (attempts >= 5) return { status: 'failed', retryAt: null, failedAt: now };
+  const delayMs = Math.min(15 * 60 * 1000, 30 * 1000 * (2 ** (attempts - 1)));
+  return { status: 'pending', retryAt: now + delayMs, failedAt: null };
+}
+
 async function claimInboxItem(db, ref) {
   return db.runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
     if (!snapshot.exists) return null;
     const data = snapshot.data() || {};
-    const stale = data.status === 'processing' && Date.now() - (Number(data.claimedAt) || 0) > 60000;
+    const now = Date.now();
+    const stale = data.status === 'processing' && now - (Number(data.claimedAt) || 0) > 60000;
     if (data.status !== 'pending' && !stale) return null;
-    tx.update(ref, { status: 'processing', claimedAt: Date.now(), attempts: (Number(data.attempts) || 0) + 1 });
+    if (data.status === 'pending' && (Number(data.retryAt) || 0) > now) return null;
+    tx.update(ref, { status: 'processing', claimedAt: now, attempts: (Number(data.attempts) || 0) + 1 });
     return data;
   });
 }
@@ -324,8 +333,13 @@ export async function processPendingEventSubChatMessages(limit = 5) {
   const staleRefs = stuck.docs.filter((entry) =>
     Date.now() - (Number(entry.data()?.claimedAt) || 0) > 60000
   ).slice(0, max).map((entry) => entry.ref);
-  const pending = await db.collection(path).where('status', '==', 'pending').limit(max).get();
-  const refs = [...pending.docs.map((entry) => entry.ref), ...staleRefs]
+  const pending = await db.collection(path).where('status', '==', 'pending').limit(max * 10).get();
+  const now = Date.now();
+  const duePendingRefs = pending.docs
+    .filter((entry) => (Number(entry.data()?.retryAt) || 0) <= now)
+    .slice(0, max)
+    .map((entry) => entry.ref);
+  const refs = [...duePendingRefs, ...staleRefs]
     .filter((ref, index, all) => all.findIndex((other) => other.path === ref.path) === index)
     .slice(0, max);
   let completed = 0;
@@ -337,21 +351,42 @@ export async function processPendingEventSubChatMessages(limit = 5) {
       if (!data?.event || !data?.messageId) continue;
       try {
         const outcome = await processEventSubChatMessage({ event: data.event, messageId: data.messageId });
+        const processedAt = Date.now();
         await ref.update({
-          status: 'processed', processedAt: Date.now(),
+          status: 'processed', processedAt, retryAt: null,
           result: String(outcome?.reason || (outcome?.queued ? 'queued' : outcome?.ignored ? 'ignored' : 'handled')).slice(0, 80),
           lastError: null,
+        });
+        // Update processing health without making a health-write error reprocess a completed command.
+        const settingsRef = db.doc(settingsPath(appId));
+        await db.runTransaction(async (tx) => {
+          const settingsSnapshot = await tx.get(settingsRef);
+          const settings = settingsSnapshot.exists ? settingsSnapshot.data() : {};
+          const health = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+            ? settings.chatIntakeHealth : {};
+          tx.set(settingsRef, {
+            chatIntakeHealth: {
+              ...health,
+              lastProcessedAt: processedAt,
+              lastProcessingStatus: 'ok',
+              lastProcessingError: null,
+            },
+          }, { merge: true });
+        }).catch((healthError) => {
+          console.warn('Could not update EventSub processing health:', String(healthError?.message || healthError).slice(0, 240));
         });
         completed += 1;
       } catch (error) {
         const failure = String(error?.message || error).slice(0, 400);
         const attemptNumber = (Number(data.attempts) || 0) + 1;
-        const nextStatus = attemptNumber >= 3 ? 'failed' : 'pending';
+        const retryState = getInboxRetryState(attemptNumber, Date.now());
+        const nextStatus = retryState.status;
         await ref.update({
           status: nextStatus,
+          retryAt: retryState.retryAt,
           lastError: failure,
           lastFailedAt: Date.now(),
-          failedAt: nextStatus === 'failed' ? Date.now() : null,
+          failedAt: retryState.failedAt,
         }).catch(() => {});
         const settingsRef = db.doc(settingsPath(appId));
         const settingsSnapshot = await settingsRef.get().catch(() => null);
@@ -359,7 +394,12 @@ export async function processPendingEventSubChatMessages(limit = 5) {
         const health = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
           ? settings.chatIntakeHealth : {};
         await settingsRef.set({
-          chatIntakeHealth: { ...health, lastProcessingError: failure, lastProcessingErrorAt: Date.now() },
+          chatIntakeHealth: {
+            ...health,
+            lastProcessingError: failure,
+            lastProcessingErrorAt: Date.now(),
+            lastProcessingStatus: retryState.status === 'failed' ? 'failed' : 'retrying',
+          },
         }, { merge: true }).catch(() => {});
         console.error('EventSub inbox processing failed; retry status:', { status: nextStatus, attempts: attemptNumber, failure });
       }
