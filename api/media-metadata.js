@@ -237,7 +237,7 @@ function getTikTokVideoId(source) {
     source.searchParams.get('video_id') ||
     source.searchParams.get('itemId') || '';
 }
-async function fetchTikTokApiDuration(source) {
+async function fetchTikTokItem(source) {
   const videoId = getTikTokVideoId(source);
   if (!videoId) return null;
   try {
@@ -259,12 +259,18 @@ async function fetchTikTokApiDuration(source) {
     });
     if (!response.ok) return null;
     const payload = await response.json().catch(() => ({}));
-    const seconds = Number(payload?.itemInfo?.itemStruct?.video?.duration);
-    return isValidMediaDuration(seconds) ? Math.round(seconds) : null;
+    const item = payload?.itemInfo?.itemStruct;
+    return item && typeof item === 'object' ? item : null;
   } catch { return null; }
 }
 
-async function fetchMediaDuration(source, host) {
+async function fetchTikTokApiDuration(source, itemPromise = null) {
+  const item = await (itemPromise || fetchTikTokItem(source));
+  const seconds = Number(item?.video?.duration);
+  return isValidMediaDuration(seconds) ? Math.round(seconds) : null;
+}
+
+async function fetchMediaDuration(source, host, tiktokItemPromise = null) {
   const normalizedHost = String(host || '').toLowerCase();
   const isYouTube = normalizedHost === 'youtu.be' || normalizedHost.endsWith('youtube.com');
   const isTikTok = normalizedHost === 'tiktok.com' || normalizedHost.endsWith('.tiktok.com');
@@ -297,7 +303,7 @@ async function fetchMediaDuration(source, host) {
       seconds: null, provider: 'tiktok', reason: 'The URL did not contain a resolved TikTok video ID.'
     };
     const [fromApi, fromPage] = await Promise.all([
-      fetchTikTokApiDuration(source),
+      fetchTikTokApiDuration(source, tiktokItemPromise),
       fetchDurationFromPage(source),
     ]);
     if (fromApi) return { seconds: fromApi, provider: 'tiktok-item-api', reason: '' };
@@ -337,24 +343,37 @@ export default async function handler(req, res) {
   } else if (host === 'clips.twitch.tv' || (host.endsWith('twitch.tv') && source.pathname.includes('/clip/'))) {
     endpoint = 'https://clips.twitch.tv/oembed?url=' + encodeURIComponent(source.href) + '&format=json';
   }
+  const tiktokItemPromise = host === 'tiktok.com' || host.endsWith('.tiktok.com')
+    ? fetchTikTokItem(source)
+    : Promise.resolve(null);
   const metadataPromise = endpoint
     ? fetch(endpoint, {
       headers: { Accept: 'application/json', 'User-Agent': 'WhaleCumMetadata/1.0' },
       signal: AbortSignal.timeout(5000)
     }).then(async (response) => response.ok ? response.json().catch(() => ({})) : {}).catch(() => ({}))
     : Promise.resolve({});
-  const durationPromise = fetchMediaDuration(source, host);
-  const [data, durationResult] = await Promise.all([metadataPromise, durationPromise]);
+  const durationPromise = fetchMediaDuration(source, host, tiktokItemPromise);
+  const [oembed, durationResult, tiktokItem] = await Promise.all([metadataPromise, durationPromise, tiktokItemPromise]);
+  const data = oembed && typeof oembed === 'object' ? oembed : {};
+  const tiktokVideo = tiktokItem?.video && typeof tiktokItem.video === 'object' ? tiktokItem.video : {};
+  const tiktokAuthor = tiktokItem?.author && typeof tiktokItem.author === 'object' ? tiktokItem.author : {};
+  const title = (typeof data.title === 'string' && data.title.trim()) ||
+    (typeof tiktokItem?.desc === 'string' && tiktokItem.desc.trim()) ||
+    (typeof tiktokAuthor.nickname === 'string' && tiktokAuthor.nickname.trim() ? tiktokAuthor.nickname.trim() + ' on TikTok' : '');
+  const authorName = (typeof data.author_name === 'string' && data.author_name.trim()) ||
+    String(tiktokAuthor.nickname || tiktokAuthor.uniqueId || '').trim();
+  const thumbnailUrl = (typeof data.thumbnail_url === 'string' && data.thumbnail_url.trim()) ||
+    String(tiktokVideo.cover || tiktokVideo.originCover || tiktokVideo.dynamicCover || '').trim();
   const durationSec = isValidMediaDuration(durationResult?.seconds) ? Math.round(durationResult.seconds) : null;
   return res.status(200).json({
-    title: typeof data.title === 'string' ? data.title.slice(0, 400) : '',
-    authorName: typeof data.author_name === 'string' ? data.author_name.slice(0, 100) : '',
-    thumbnailUrl: typeof data.thumbnail_url === 'string' ? data.thumbnail_url : '',
+    title: String(title).slice(0, 400),
+    authorName: String(authorName).slice(0, 100),
+    thumbnailUrl,
     durationSec,
     duration: durationSec ? formatDuration(durationSec) : '',
     durationSource: durationSec ? 'metadata' : 'unknown',
     durationProvider: String(durationResult?.provider || ''),
     durationReason: durationSec ? '' : String(durationResult?.reason || 'The provider did not return duration metadata.').slice(0, 360),
-    metadataAvailable: Boolean(data.title || durationSec)
+    metadataAvailable: Boolean(title || thumbnailUrl || durationSec)
   });
 }
