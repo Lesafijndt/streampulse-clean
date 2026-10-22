@@ -248,13 +248,6 @@ export default async function handler(req, res) {
       if (!bot.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
       const missingScope = getMissingScopeMessage(staff, bot);
       if (missingScope) return res.status(403).json(missingScope);
-      if (existing?.id) {
-        // Remove stale failed/revoked subscriptions before retrying setup, to avoid a dead
-        // subscription permanently blocking a fresh verification attempt.
-        await twitchApi('eventsub/subscriptions?id=' + encodeURIComponent(String(existing.id)), { method: 'DELETE' });
-      }
-      if (missingScope) return res.status(403).json(missingScope);
-
       // The dashboard must have its public Firebase configuration as well as Admin
       // credentials, otherwise the server could accept requests that no browser can display.
       const requiredWebConfig = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
@@ -270,6 +263,12 @@ export default async function handler(req, res) {
       // Fail setup loudly if the same Admin credentials used for queue writes cannot reach Firestore.
       const db = await getFirebaseAdminDb();
       await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
+
+      if (existing?.id) {
+        // Remove stale failed/revoked subscriptions only after authorization and Firestore
+        // have been verified, so the working setup is never discarded prematurely.
+        await twitchApi('eventsub/subscriptions?id=' + encodeURIComponent(String(existing.id)), { method: 'DELETE' });
+      }
 
       const callback = `${origin}/api/twitch/eventsub`;
       const secret = eventSubSecret();
