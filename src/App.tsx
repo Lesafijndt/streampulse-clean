@@ -2637,7 +2637,8 @@ function YediHubAppContent() {
         if (typeof info.muted === 'boolean') {
           const guard = playbackRestoreGuardRef.current;
           const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
-          if (!restoringMute) updatePlaybackIntent(video.id, { muted: info.muted });
+          const intent = getPlaybackIntentForVideo(video.id);
+          if (!restoringMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted });
         }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
@@ -3390,7 +3391,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=${isPlaybackPaused(currentVideo.id) ? 0 : 1}&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=0&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -3417,7 +3418,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=${isPlaybackPaused(currentVideo.id) ? 0 : 1}&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=0&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
