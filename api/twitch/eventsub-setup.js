@@ -63,7 +63,7 @@ async function loadUserSession(req, res, kind) {
   const isStaff = kind === 'staff';
   const accessCookie = isStaff ? 'yedi_twitch_access' : 'yedi_twitch_bot_access';
   const refreshCookie = isStaff ? 'yedi_twitch_refresh' : 'yedi_twitch_bot_refresh';
-  const expectedLogin = isStaff ? STREAMER_LOGIN : BOT_LOGIN;
+  const expectedLogin = isStaff ? '' : BOT_LOGIN;
   let accessToken = cookies[accessCookie] || '';
   let refreshToken = cookies[refreshCookie] || '';
   let validation = await validateAccessToken(accessToken);
@@ -95,12 +95,10 @@ async function loadUserSession(req, res, kind) {
     }
   }
 
+  const validatedLogin = String(validation?.login || '').toLowerCase();
   if (!clientId || !validation || validation.client_id !== clientId ||
-      String(validation.login || '').toLowerCase() !== expectedLogin) {
+      (isStaff ? !ALLOWED_STAFF.has(validatedLogin) : validatedLogin !== expectedLogin)) {
     return { ok: false, code: isStaff ? 'staff_reauth_required' : 'bot_reauth_required' };
-  }
-  if (isStaff && !ALLOWED_STAFF.has(String(validation.login || '').toLowerCase())) {
-    return { ok: false, code: 'staff_reauth_required' };
   }
   return {
     ok: true,
