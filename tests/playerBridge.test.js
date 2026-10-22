@@ -6,9 +6,11 @@ test('TikTok commands are allowlisted and target the official embed origin', () 
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
   assert.equal(postTikTokPlayerCommand(target, 'pause'), true);
   assert.equal(postTikTokPlayerCommand(target, 'mute'), true);
+  assert.equal(postTikTokPlayerCommand(target, 'unMute'), true);
   assert.equal(postTikTokPlayerCommand(target, 'executeArbitraryCode'), false);
-  assert.equal(messages.length, 2); assert.equal(messages[0].origin, 'https://www.tiktok.com');
+  assert.equal(messages.length, 3); assert.equal(messages[0].origin, 'https://www.tiktok.com');
   assert.deepEqual(messages[0].data, { type: 'pause', value: null, 'x-tiktok-player': true });
+  assert.deepEqual(messages[2].data, { type: 'unMute', value: null, 'x-tiktok-player': true });
 });
 
 test('YouTube commands use the expected IFrame Player API message format', () => {
@@ -88,11 +90,11 @@ test('TikTok bridge forwards the target timestamp for seekTo', () => {
 test('TikTok embeds autoplay muted unless this exact video was deliberately paused', () => {
   const activeUrl = new URL(buildTikTokPlayerUrl('1234567890123456789'));
   assert.equal(activeUrl.searchParams.get('autoplay'), '1');
-  assert.equal(activeUrl.searchParams.get('muted'), '1');
+  assert.equal(activeUrl.searchParams.get('muted'), '0');
   assert.equal(activeUrl.searchParams.get('controls'), '1');
 
   const pausedUrl = new URL(buildTikTokPlayerUrl('1234567890123456789', { paused: true }));
   assert.equal(pausedUrl.searchParams.get('autoplay'), '0');
-  assert.equal(pausedUrl.searchParams.get('muted'), '1');
+  assert.equal(pausedUrl.searchParams.get('muted'), '0');
   assert.equal(buildTikTokPlayerUrl(''), '');
 });
