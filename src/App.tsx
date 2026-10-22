@@ -3346,9 +3346,9 @@ function YediHubAppContent() {
           HEADER: BROADCASTER IDENTITY & SYNC STATUS
           ========================================== */}
       <header className="sticky top-0 z-40 bg-[#0e121a]/95 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-2.5">
-        <div className="w-full max-w-none mx-auto flex flex-wrap items-center justify-between gap-3">
+        <div className="gachi-topbar-inner w-full max-w-none mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
-          <div className="flex items-center gap-3">
+          <div className="gachi-topbar-brand flex min-w-0 items-center gap-3">
             <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
               <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
             </div>
@@ -3380,7 +3380,7 @@ function YediHubAppContent() {
             title="Show connection details"
             aria-label={`Connection details: ${syncStatusText}`}
             aria-expanded={connectionDetailsExpanded}
-            className={`flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
+            className={`gachi-topbar-sync flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
           >
             <span className="flex shrink-0 items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400'}`} />
@@ -3395,7 +3395,7 @@ function YediHubAppContent() {
 
 
           {/* All top-bar actions live inside a single compact dropdown. */}
-          <div className="relative z-50" ref={topMenuRef}>
+          <div className="gachi-topbar-menu relative z-50" ref={topMenuRef}>
             <button
               type="button"
               onClick={() => setTopMenuOpen((open) => !open)}
