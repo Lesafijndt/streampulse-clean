@@ -1975,3 +1975,76 @@ body { background: #03070b; }
   color: #ffe3c0;
 }
 .gachi-theme .gachi-category-count { background: rgba(255,255,255,.045); border: 1px solid var(--gachi-surface-line); color: #e3cbd5; }
+
+
+/* Responsive top bar: keep the brand/actions aligned and give status its own row when space is tight. */
+.gachi-topbar-inner {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "brand sync menu";
+  align-items: center;
+  gap: .75rem !important;
+}
+.gachi-topbar-brand {
+  grid-area: brand;
+  min-width: 0;
+}
+.gachi-topbar-brand > div:last-child {
+  min-width: 0;
+}
+.gachi-topbar-sync {
+  grid-area: sync;
+  justify-self: end;
+  max-width: 100%;
+}
+.gachi-topbar-menu {
+  grid-area: menu;
+  justify-self: end;
+}
+.gachi-topbar-menu > button {
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .gachi-topbar-inner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand menu"
+      "sync sync";
+    row-gap: .55rem !important;
+    column-gap: .75rem !important;
+  }
+  .gachi-topbar-sync {
+    justify-self: start;
+  }
+}
+@media (max-width: 640px) {
+  .gachi-topbar-inner {
+    column-gap: .5rem !important;
+    row-gap: .5rem !important;
+  }
+  .gachi-topbar-brand {
+    gap: .55rem !important;
+  }
+  .gachi-topbar-brand .gachi-mode-badge,
+  .gachi-topbar-brand .gachi-deadpan-badge {
+    display: none !important;
+  }
+  .gachi-topbar-brand .yedi-soap-logo {
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    flex: 0 0 2.25rem;
+  }
+  .gachi-topbar-brand .yedi-hub-wordmark {
+    font-size: 1.05rem !important;
+  }
+  .gachi-topbar-sync {
+    justify-self: start;
+    width: fit-content;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .gachi-topbar-menu > button {
+    gap: .4rem !important;
+    padding: .55rem .65rem !important;
+  }
+}
