@@ -1,4 +1,4 @@
-const MEDIA_LINK_PATTERN = /(?<![\\w.-])(?:https?:\\/\\/)?(?:(?:www|m)\\.)?(?:music\\.youtube\\.com|youtube\\.com|youtu\\.be|vm\\.tiktok\\.com|vt\\.tiktok\\.com|tiktok\\.com|clips\\.twitch\\.tv|twitch\\.tv|clip\\.kick\\.com|kick\\.com)\\/[^\\s<>"'`]+/gi;
+const MEDIA_LINK_PATTERN = /(?<![\w.-])(?:https?:\/\/)?(?:(?:www|m)\.)?(?:music\.youtube\.com|youtube\.com|youtu\.be|vm\.tiktok\.com|vt\.tiktok\.com|tiktok\.com|clips\.twitch\.tv|twitch\.tv|clip\.kick\.com|kick\.com)\/[^\s<>"']+/gi;
 const ALLOWED_MEDIA_HOSTS = new Set([
   'youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be',
   'tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com',
@@ -73,10 +73,10 @@ export function extractSupportedMediaUrl(rawText = '') {
   const matches = text.matchAll(new RegExp(MEDIA_LINK_PATTERN.source, 'gi'));
   for (const match of matches) {
     // Strip sentence punctuation and closing wrappers commonly added after pasted links.
-    const candidate = String(match[0] || '').replace(/[.,!?;:)\]}>\u0027"]+$/g, '');
+    const candidate = String(match[0] || '').replace(/[.,!?;:)\]}>']+$/g, '');
     if (!candidate) continue;
     try {
-      const normalized = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+      const normalized = /^https?:\/\//i.test(candidate) ? candidate : 'https://' + candidate;
       const parsed = new URL(normalized);
       const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
       if (!['http:', 'https:'].includes(parsed.protocol) || !ALLOWED_MEDIA_HOSTS.has(hostname)) continue;
