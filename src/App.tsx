@@ -411,6 +411,7 @@ function YediHubAppContent() {
   // Queue items are added optimistically. Keep unconfirmed writes separately so a stale
   // Firestore/cache snapshot cannot immediately erase a request when a cloud write fails.
   const pendingQueueAddsRef = useRef(null);
+  const pendingQueueAddAttemptAtRef = useRef(new Map());
   if (pendingQueueAddsRef.current === null) {
     const savedPendingAdds = readStoredValue(roomStorageKey(channelRoom, 'pending-queue-adds'), []);
     pendingQueueAddsRef.current = new Map(
@@ -929,12 +930,40 @@ function YediHubAppContent() {
           // Only retire an optimistic local addition after Firestore has confirmed that document
           // on the server (not merely in the local pending-write view).
           if (cloudConfirmed) {
-            cloudDocumentIds.forEach((id) => pendingQueueAddsRef.current.delete(id));
+            cloudDocumentIds.forEach((id) => {
+              pendingQueueAddsRef.current.delete(id);
+              pendingQueueAddAttemptAtRef.current.delete(id);
+            });
             persistPendingQueueAdds();
           }
           const pendingRoomAdds = [...pendingQueueAddsRef.current.values()].filter(
             (video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom)
           );
+
+          // Retry only a small batch of local-only requests on a server-backed snapshot, and
+          // throttle each ID to once per five minutes. This recovers after transient outages
+          // without hammering Firestore if the project is still over quota.
+          if (cloudConfirmed && db && firebaseUser && networkOnlineRef.current) {
+            const now = Date.now();
+            const retryBatch = pendingRoomAdds
+              .filter((video) => !cloudDocumentIds.has(String(video.id)) &&
+                now - (pendingQueueAddAttemptAtRef.current.get(String(video.id)) || 0) >= 5 * 60 * 1000)
+              .slice(0, 3);
+            retryBatch.forEach((video) => {
+              const id = String(video.id);
+              pendingQueueAddAttemptAtRef.current.set(id, now);
+              const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id);
+              void setDoc(itemRef, { ...video, createdAt: video.timestamp || now }, { merge: true })
+                .catch((error) => {
+                  console.warn('Retrying a locally pending queue item failed.', error);
+                  if (active) {
+                    setCloudSynced(false);
+                    setSyncStatusText('Cloud write failed — pending request remains saved in this browser');
+                  }
+                });
+            });
+          }
+
           const visibleRoomList = mergePendingQueueAdds(roomList, pendingRoomAdds);
 
           // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
@@ -1467,7 +1496,9 @@ function YediHubAppContent() {
 
     if (db && firebaseUser) {
       try {
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
+        const itemId = String(localItem.id);
+        pendingQueueAddAttemptAtRef.current.set(itemId, Date.now());
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
         await setDoc(itemRef, { ...localItem, createdAt: Date.now() }, { merge: true });
       } catch (error) {
         console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
@@ -1489,6 +1520,7 @@ function YediHubAppContent() {
     // A viewer/mod deleting an unconfirmed local add must also remove it from the
     // optimistic-write journal, otherwise the next cloud snapshot could resurrect it.
     pendingQueueAddsRef.current.delete(String(videoId));
+    pendingQueueAddAttemptAtRef.current.delete(String(videoId));
     persistPendingQueueAdds();
     videosRef.current = videosRef.current.filter((v) => String(v.id) !== String(videoId));
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
