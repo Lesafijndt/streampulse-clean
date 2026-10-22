@@ -96,8 +96,9 @@ function normalizeLogin(value) {
 
 function getPublicOrigin() {
   const configured = String(process.env.TWITCH_APP_URL || '').trim();
-  const vercelHost = String(process.env.VERCEL_URL || '').trim();
-  const candidate = configured || (vercelHost ? `https://${vercelHost}` : 'https://streampulse-clean.vercel.app');
+  // Internal calls should use the stable public production hostname, not VERCEL_URL's
+  // deployment-specific hostname (which may be protected or point at an expired preview).
+  const candidate = configured || 'https://streampulse-clean.vercel.app';
   const parsed = new URL(candidate);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
     throw new Error('TWITCH_APP_URL must be a public HTTPS origin');
@@ -148,7 +149,9 @@ async function resolveTiktokIfNeeded(url, parsed, origin) {
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.videoId || !result.url) {
-    throw new Error('TikTok short link could not be resolved to a video ID');
+    if (response.status >= 500) throw new Error('TikTok short-link resolution is temporarily unavailable');
+    await sendEventSubChatReply({ broadcaster_user_id: PRIVATE_CHANNEL }, 'TikTok link failed; try the full /video/ URL.');
+    return null;
   }
   const normalizedUrl = String(result.url);
   const normalizedParsed = parseMediaUrl(normalizedUrl);
@@ -210,7 +213,10 @@ export async function processEventSubChatMessage({ event, messageId }) {
     }
     const searchResult = await searchResponse.json().catch(() => ({}));
     if (!searchResponse.ok || !Array.isArray(searchResult.results) || !searchResult.results.length) {
-      throw new Error('YouTube title search returned no results');
+      // Mirror the old bridge's user feedback rather than asking EventSub to redeliver
+      // the same unsearchable title repeatedly. A direct URL remains the reliable option.
+      await sendEventSubChatReply(event, `@${requester} Search unavailable; try a direct URL.`);
+      return { ignored: true, reason: 'youtube_search_unavailable' };
     }
     normalizedUrl = String(searchResult.results[0].url || '');
     title = String(searchResult.results[0].title || '').slice(0, 180);
@@ -222,6 +228,7 @@ export async function processEventSubChatMessage({ event, messageId }) {
     throw new Error('Request URL is invalid');
   }
   const tiktok = await resolveTiktokIfNeeded(normalizedUrl, parsed, origin);
+  if (!tiktok) return { ignored: true, reason: 'invalid_tiktok' };
   normalizedUrl = tiktok.url;
   parsed = tiktok.parsed;
   const metadataUrl = tiktok.metadataUrl;
