@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/activity-log.js';
+import handler, { classifyActivityStorageError } from '../api/activity-log.js';
 
 function responseMock() {
   const headers = {};
@@ -162,4 +162,13 @@ test('activity log accepts the exact request-host origin when TWITCH_APP_URL is 
   await handler(req, res);
   assert.ok([401, 503].includes(res.statusCode), 'same-origin request should reach authentication, not be rejected by the origin guard');
   if (res.statusCode === 401) assert.match(res.body.error, /approved staff account/i);
+});
+
+
+test('activity storage diagnostics classify common Firebase Admin failures safely', () => {
+  assert.equal(classifyActivityStorageError(new Error('Firebase Admin is not configured')), 'unknown_storage_error');
+  assert.equal(classifyActivityStorageError(new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not configured')), 'missing_service_account');
+  assert.equal(classifyActivityStorageError(Object.assign(new Error('Permission denied'), { code: 7 })), 'firestore_permission_denied');
+  assert.equal(classifyActivityStorageError(Object.assign(new Error('The service is unavailable'), { code: 14 })), 'firestore_temporarily_unavailable');
+  assert.equal(classifyActivityStorageError(new Error('Cannot find package firebase-admin/firestore')), 'firebase_admin_import_failed');
 });
