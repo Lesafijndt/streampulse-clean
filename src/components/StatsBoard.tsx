@@ -29,7 +29,7 @@ function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
 
 export default function StatsBoard({
   queueStats, activityEvents = [], currentSessionId = '', statsNow = Date.now(), statsExpanded, onToggle, onRefreshStats,
-  activitySyncStatus, activitySyncTone, activitySyncError, activitySyncLoading, canRetryActivitySync,
+  activitySyncStatus, activitySyncTone, activitySyncError, activitySyncErrorMessage, activitySyncLoading, canRetryActivitySync,
   onRetryActivitySync, networkOnline
 }) {
   const [statsPeriod, setStatsPeriod] = useState('lifetime');
@@ -93,7 +93,10 @@ export default function StatsBoard({
         <div className="mb-2 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Top requesters</span><span className="text-[9px] text-slate-500">{activityStats.removed} requests removed</span></div>
         {activityStats.requesters.length ? <div className="space-y-1.5">{activityStats.requesters.slice(0, 3).map((item, index) => <div key={item.label} className="flex items-center justify-between gap-2 text-[10px]"><span className="min-w-0 truncate text-slate-200">{index + 1}. @{item.label}</span><span className="font-mono font-bold text-amber-100">{item.count}</span></div>)}</div> : <p className="text-[10px] text-slate-600">No requester data recorded yet</p>}
       </div>
-      {activitySyncError && canRetryActivitySync && <button type="button" disabled={activitySyncLoading} onClick={onRetryActivitySync} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold disabled:cursor-wait disabled:opacity-70"><RefreshCw className={`h-3.5 w-3.5 ${activitySyncLoading ? 'animate-spin' : ''}`} /> {activitySyncLoading ? 'Retrying activity sync…' : 'Retry activity sync'}</button>}
+      {activitySyncError && canRetryActivitySync && <div className="space-y-2">
+        {activitySyncErrorMessage && <div role="status" className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-2.5 py-2 text-[9px] leading-4 text-rose-200 break-words"><span className="font-bold">Sync error:</span> {activitySyncErrorMessage}</div>}
+        <button type="button" disabled={activitySyncLoading} onClick={onRetryActivitySync} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold disabled:cursor-wait disabled:opacity-70"><RefreshCw className={`h-3.5 w-3.5 ${activitySyncLoading ? 'animate-spin' : ''}`} /> {activitySyncLoading ? 'Retrying activity sync…' : 'Retry activity sync'}</button>
+      </div>}
       <div className="text-[9px] leading-4 text-slate-500">{periodLabel} filters recorded requests, people, completion, skips, votes, and rankings. Waiting count and queue runway always describe the current queue. Events are recorded as they happen; legacy queue/history items may be imported when available, and completion is counted only when the player reports an ended event.</div>
     </div>}
   </section>;
