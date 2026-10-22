@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
@@ -97,4 +98,12 @@ test('TikTok embeds autoplay muted unless this exact video was deliberately paus
   assert.equal(pausedUrl.searchParams.get('autoplay'), '0');
   assert.equal(pausedUrl.searchParams.get('muted'), '0');
   assert.equal(buildTikTokPlayerUrl(''), '');
+});
+
+
+test('TikTok iframe source stays memoized across playback-state renders', async () => {
+  const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(appSource, /const tiktokPlayerSrc = useMemo/);
+  assert.match(appSource, /src=\{tiktokPlayerSrc\}/);
+  assert.doesNotMatch(appSource, /src=\{buildTikTokPlayerUrl/);
 });
