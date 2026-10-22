@@ -178,7 +178,7 @@ export async function processEventSubChatMessage({ event, messageId }) {
   const requestText = rawText.replace(/^!assr\\s*/i, '').trim();
   if (!extractedUrl && requestText.length < 2) return { ignored: true };
 
-  const db = getFirebaseAdminDb();
+  const db = await getFirebaseAdminDb();
   const appId = getFirebaseNamespace();
   const origin = getPublicOrigin();
 
