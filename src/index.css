@@ -1953,6 +1953,15 @@ body { background: #03070b; }
   outline: 2px solid rgba(255, 189, 112, .5);
   outline-offset: 1px;
 }
+/* Native dropdown options need their own colors; select background styles do not cover them. */
+.gachi-theme select option {
+  color: #f3e8ed !important;
+  background-color: #160913 !important;
+}
+.gachi-theme select option:checked {
+  color: #ffffff !important;
+  background-color: #6b1230 !important;
+}
 .gachi-theme .gachi-input::placeholder { color: #a48d98; }
 .gachi-theme .gachi-inline-icon-btn { color: #bca6af; transition: color .15s ease; }
 .gachi-theme .gachi-inline-icon-btn:hover { color: #ffbd70; }
