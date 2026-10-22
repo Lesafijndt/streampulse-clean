@@ -121,6 +121,33 @@ const DEFAULT_STREAM_SETTINGS = {
   maxDurationMinutes: 12,
 };
 
+const WORKSPACE_LAYOUT_STORAGE_KEY = `${STORAGE_PREFIX}:workspace-layout:v1`;
+const WORKSPACE_PANEL_IDS = ['queue', 'player', 'stats'];
+const DEFAULT_WORKSPACE_LAYOUT = {
+  // Queue left, player center, stats right.
+  order: ['queue', 'player', 'stats'],
+  visible: { queue: true, player: true, stats: true },
+};
+const WORKSPACE_PANEL_META = {
+  queue: { title: 'Queue & library', detail: 'Requests, watch later, history, filters and sorting' },
+  player: { title: 'Player', detail: 'Video playback, track details and transport controls' },
+  stats: { title: 'Stats & analytics', detail: 'Queue metrics and top requesters' },
+};
+
+function normalizeWorkspaceLayout(value) {
+  const rawOrder = Array.isArray(value?.order)
+    ? value.order.filter((id) => WORKSPACE_PANEL_IDS.includes(id))
+    : [];
+  const order = [...rawOrder, ...WORKSPACE_PANEL_IDS.filter((id) => !rawOrder.includes(id))]
+    .filter((id, index, items) => items.indexOf(id) === index);
+  const visible = Object.fromEntries(WORKSPACE_PANEL_IDS.map((id) => [
+    id,
+    typeof value?.visible?.[id] === 'boolean' ? value.visible[id] : true,
+  ]));
+  if (!WORKSPACE_PANEL_IDS.some((id) => visible[id])) visible.player = true;
+  return { order, visible };
+}
+
 function readStoredValue(key, fallback) {
   if (typeof window === 'undefined') return fallback;
   try {
@@ -341,6 +368,14 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [showLayoutCustomizer, setShowLayoutCustomizer] = useState(false);
+  const [workspaceLayout, setWorkspaceLayout] = useState(() =>
+    normalizeWorkspaceLayout(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, DEFAULT_WORKSPACE_LAYOUT))
+  );
+  const [draggedWorkspacePanel, setDraggedWorkspacePanel] = useState('');
+  useEffect(() => {
+    writeStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, workspaceLayout);
+  }, [workspaceLayout]);
 
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
@@ -3503,6 +3538,37 @@ function YediHubAppContent() {
   // ==========================================
   // MAIN APP INTERFACE
   // ==========================================
+  const workspaceVisibleOrder = workspaceLayout.order.filter((panelId) => workspaceLayout.visible[panelId]);
+  const workspaceHasPlayer = workspaceVisibleOrder.includes('player');
+  const workspaceGridColumns = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).map((panelId) => {
+    if (workspaceVisibleOrder.length === 1 || !workspaceHasPlayer) return 'minmax(0, 1fr)';
+    if (panelId === 'player') return 'minmax(0, 1fr)';
+    return panelId === 'queue' ? 'minmax(320px, 30vw)' : 'minmax(220px, 20vw)';
+  }).join(' ');
+  const workspaceGridAreas = `"${(workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).join(' ')}"`;
+  const workspaceMobileAreas = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player'])
+    .map((panelId) => `"${panelId}"`).join(' ');
+  const workspaceVisiblePanelCount = workspaceVisibleOrder.length;
+
+  const moveWorkspacePanel = (panelId, destinationIndex) => {
+    setWorkspaceLayout((current) => {
+      const order = [...current.order];
+      const fromIndex = order.indexOf(panelId);
+      if (fromIndex < 0) return current;
+      const [moved] = order.splice(fromIndex, 1);
+      const toIndex = Math.max(0, Math.min(order.length, Number(destinationIndex) || 0));
+      order.splice(toIndex, 0, moved);
+      return { ...current, order };
+    });
+  };
+  const toggleWorkspacePanel = (panelId) => {
+    setWorkspaceLayout((current) => {
+      const visibleCount = WORKSPACE_PANEL_IDS.filter((id) => current.visible[id]).length;
+      if (current.visible[panelId] && visibleCount <= 1) return current;
+      return { ...current, visible: { ...current.visible, [panelId]: !current.visible[panelId] } };
+    });
+  };
+
   return (
     <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
       {/* ==========================================
@@ -3590,6 +3656,10 @@ function YediHubAppContent() {
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
                   <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
                 </button>
+                <button type="button" onClick={() => { setTopMenuOpen(false); setShowLayoutCustomizer(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-rose-500/25 hover:bg-rose-500/10">
+                  <Layers className="h-4 w-4 text-rose-300" />
+                  <span className="flex-1">Customize layout <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Reorder or hide panels for this browser</span></span>
+                </button>
                 <div className="my-2 border-t border-white/10" />
                 <div className="rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
@@ -3670,8 +3740,8 @@ function YediHubAppContent() {
         </div>
       </section>
 
-      <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5">
-        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
+      <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5" style={{ '--workspace-grid-columns': workspaceGridColumns, '--workspace-grid-areas': workspaceGridAreas, '--workspace-mobile-areas': workspaceMobileAreas }}>
+        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4" style={{ display: workspaceLayout.visible.stats ? undefined : 'none' }}>
           <StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents}
@@ -3681,7 +3751,7 @@ function YediHubAppContent() {
             onToggle={() => setStatsExpanded((expanded) => !expanded)}
           />
         </aside>
-        <div className="gachi-player-column flex flex-col gap-4 min-w-0">
+        <div className="gachi-player-column flex flex-col gap-4 min-w-0" style={{ display: workspaceLayout.visible.player ? undefined : 'none' }}>
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
@@ -3931,7 +4001,7 @@ function YediHubAppContent() {
 
         </div>
 
-        <div className="gachi-queue-column min-w-0">
+        <div className="gachi-queue-column min-w-0" style={{ display: workspaceLayout.visible.queue ? undefined : 'none' }}>
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
@@ -3997,6 +4067,68 @@ function YediHubAppContent() {
 
         {/* Twitch IRC runs invisibly as a command bridge; incoming chat is not rendered. */}
       </div>
+
+      {showLayoutCustomizer && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowLayoutCustomizer(false); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="workspace-layout-title" className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-rose-500/35 bg-[#0d0a12] p-4 shadow-2xl shadow-black/70 sm:p-6">
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
+              <div>
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-rose-300"><Layers className="h-4 w-4" /> Workspace builder</div>
+                <h2 id="workspace-layout-title" className="mt-1 text-xl font-black text-white">Build your layout</h2>
+                <p className="mt-1 max-w-lg text-xs leading-5 text-slate-400">Drag panels into your preferred order, use the arrows for precise placement, or hide panels you don't use. Your setup saves in this browser and doesn't change anyone else's view.</p>
+              </div>
+              <button type="button" onClick={() => setShowLayoutCustomizer(false)} aria-label="Close layout customizer" className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {workspaceLayout.order.map((panelId, index) => {
+                const meta = WORKSPACE_PANEL_META[panelId];
+                const isVisible = workspaceLayout.visible[panelId];
+                const onlyVisiblePanel = isVisible && workspaceVisiblePanelCount <= 1;
+                return (
+                  <div
+                    key={panelId}
+                    draggable
+                    onDragStart={(event) => { setDraggedWorkspacePanel(panelId); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', panelId); }}
+                    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourcePanel = draggedWorkspacePanel || event.dataTransfer.getData('text/plain');
+                      if (sourcePanel && sourcePanel !== panelId) moveWorkspacePanel(sourcePanel, index);
+                      setDraggedWorkspacePanel('');
+                    }}
+                    onDragEnd={() => setDraggedWorkspacePanel('')}
+                    className={`flex items-center gap-3 rounded-xl border p-3 transition ${draggedWorkspacePanel === panelId ? 'border-rose-400/70 bg-rose-500/10 opacity-60' : 'border-slate-800 bg-[#12101a] hover:border-rose-500/35'}`}
+                  >
+                    <div className="flex shrink-0 flex-col gap-1">
+                      <button type="button" disabled={index === 0} onClick={() => moveWorkspacePanel(panelId, index - 1)} aria-label={`Move ${meta.title} up`} title="Move up" className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-20"><ArrowUp className="h-3.5 w-3.5" /></button>
+                      <button type="button" disabled={index === workspaceLayout.order.length - 1} onClick={() => moveWorkspacePanel(panelId, index + 1)} aria-label={`Move ${meta.title} down`} title="Move down" className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-20"><ArrowDown className="h-3.5 w-3.5" /></button>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-black text-white">{meta.title}</span>
+                        <span className={`rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider ${isVisible ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-800/50 text-slate-500'}`}>{isVisible ? 'Visible' : 'Hidden'}</span>
+                      </div>
+                      <p className="mt-0.5 text-[10px] leading-4 text-slate-500">{meta.detail}</p>
+                    </div>
+                    <label className="flex shrink-0 items-center gap-2 text-[10px] font-bold text-slate-300">
+                      <input type="checkbox" checked={isVisible} disabled={onlyVisiblePanel} onChange={() => toggleWorkspacePanel(panelId)} className="h-4 w-4 accent-rose-500" />
+                      Show
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4">
+              <button type="button" onClick={() => { setWorkspaceLayout(normalizeWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT)); setDraggedWorkspacePanel(''); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#16131d] px-3 py-2 text-[10px] font-black text-slate-200 hover:border-rose-500/40">
+                <RotateCcw className="h-3.5 w-3.5" /> Reset layout
+              </button>
+              <button type="button" onClick={() => setShowLayoutCustomizer(false)} className="rounded-lg bg-rose-600 px-5 py-2.5 text-[10px] font-black text-white transition hover:bg-rose-500">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ==========================================
           MODAL 1: SUBMIT VIDEO REQUEST (WEB)
