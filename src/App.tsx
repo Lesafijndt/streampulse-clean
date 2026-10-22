@@ -2782,6 +2782,12 @@ function YediHubAppContent() {
         sendCommand(intent.paused ? 'pause' : 'play');
         if (intent.muted === true) sendCommand('mute');
         else if (intent.muted === false) sendCommand('unMute');
+      } else if (data.type === 'onMute' && typeof data.value === 'boolean') {
+        updatePlaybackIntent(video.id, { muted: data.value });
+        tiktokMutePreferenceRef.current = {
+          requestId: video.id,
+          preference: data.value ? 'muted' : 'unmuted',
+        };
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
