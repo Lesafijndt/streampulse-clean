@@ -164,18 +164,15 @@ export default function QueueVideoCard({
                             <span>
                               by <strong className="text-slate-200 font-semibold">@{video.requestedBy}</strong>
                             </span>
-                            <span>•</span>
                             <span title={formatAbsoluteTimestamp(video.timestamp)}>Requested {formatRelativeTimestamp(video.timestamp, now)}</span>
                             {(video.status === 'watched' || Boolean(video.watchedAt)) && (
                               <>
-                                <span>•</span>
                                 <span className="text-emerald-400 font-medium" title={formatAbsoluteTimestamp(video.playedAt || video.watchedAt)}>Played {formatRelativeTimestamp(video.playedAt || video.watchedAt, now)}</span>
                               </>
                             )}
                             {video.note && (
                               <>
-                                <span>•</span>
-                                <span className="text-slate-300 italic truncate max-w-xs">"{video.note}"</span>
+                                <span className="text-slate-300 italic max-w-xs">"{video.note}"</span>
                               </>
                             )}
                           </div>
