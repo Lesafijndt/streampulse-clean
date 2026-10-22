@@ -166,7 +166,7 @@ test('activity log accepts the exact request-host origin when TWITCH_APP_URL is 
 
 
 test('activity storage diagnostics classify common Firebase Admin failures safely', () => {
-  assert.equal(classifyActivityStorageError(new Error('Firebase Admin is not configured')), 'unknown_storage_error');
+  assert.equal(classifyActivityStorageError(new Error('Firebase Admin is not configured')), 'missing_service_account');
   assert.equal(classifyActivityStorageError(new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not configured')), 'missing_service_account');
   assert.equal(classifyActivityStorageError(Object.assign(new Error('Permission denied'), { code: 7 })), 'firestore_permission_denied');
   assert.equal(classifyActivityStorageError(Object.assign(new Error('The service is unavailable'), { code: 14 })), 'firestore_temporarily_unavailable');
