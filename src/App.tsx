@@ -1012,20 +1012,41 @@ function YediHubAppContent() {
     if (!isValidMediaDuration(seconds)) return;
     const target = videosRef.current.find((video) => String(video.id) === String(videoId));
     if (!target) return;
+    const id = String(target.id);
+    const platform = String(target.platform || 'external').toLowerCase();
     const label = formatMediaDuration(seconds);
     const storedSeconds = Number(target.durationSec) || 0;
-    if (Math.abs(storedSeconds - seconds) <= 1 &&
-        String(target.duration || '') === label &&
-        ['metadata', 'player'].includes(String(target.durationSource || ''))) return;
+    const durationAlreadyAccurate = Math.abs(storedSeconds - seconds) <= 1 &&
+      String(target.duration || '') === label &&
+      ['metadata', 'player'].includes(String(target.durationSource || ''));
+
+    // A real provider player report is stronger than an earlier failed server lookup.
+    // Clear the stale error even when the value was already saved from metadata.
+    const markPlayerDurationFound = () => setDurationLookupOutcomes((prev) => ({
+      ...prev,
+      [id]: createDurationLookupOutcome({
+        status: 'found',
+        platform,
+        previous: prev[id] || null,
+        provider: platform + '-player',
+        at: Date.now(),
+      })
+    }));
+    if (durationAlreadyAccurate) {
+      markPlayerDurationFound();
+      return;
+    }
     const source = target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
       ? 'metadata'
       : 'player';
     cacheVideoDuration(target, seconds, source);
-    void syncUpdateVideo(String(target.id), {
+    void syncUpdateVideo(id, {
       duration: label,
       durationSec: seconds,
-      durationSource: source
+      durationSource: source,
+      durationProvider: platform + '-player'
     });
+    markPlayerDurationFound();
   };
 
   // Backfill queue/history items. Failed lookups get bounded automatic retries instead of
@@ -1853,15 +1874,22 @@ function YediHubAppContent() {
     ? 'success'
     : 'neutral';
   const durationLookupStats = useMemo(() => {
-    const currentIds = new Set(videos.map((video) => String(video.id)));
+    const videoById = new Map(videos.map((video) => [String(video.id), video]));
+    const currentIds = new Set(videoById.keys());
     const entries = Object.entries(durationLookupOutcomes).filter(([id]) => currentIds.has(String(id)));
-    const statuses = entries.map(([, value]) => typeof value === 'string' ? value : value?.status);
+    const statuses = entries.map(([id, value]) => {
+      const status = typeof value === 'string' ? value : value?.status;
+      // Don't count a stale server failure if the provider player has since delivered the real length.
+      return ['unavailable', 'error'].includes(status) && !videoNeedsDurationLookup(videoById.get(String(id)))
+        ? 'found'
+        : status;
+    });
     const failedByPlatform = {};
     let retrying = 0;
     let latestFailure = null;
     entries.forEach(([id, value]) => {
       const status = typeof value === 'string' ? value : value?.status;
-      if (!['unavailable', 'error'].includes(status)) return;
+      if (!['unavailable', 'error'].includes(status) || !videoNeedsDurationLookup(videoById.get(String(id)))) return;
       const platform = String(typeof value === 'object' ? value?.platform : 'external').toLowerCase() || 'external';
       failedByPlatform[platform] = (failedByPlatform[platform] || 0) + 1;
       const nextRetryAt = Number(typeof value === 'object' ? value?.nextRetryAt : 0) || 0;
@@ -1881,7 +1909,7 @@ function YediHubAppContent() {
         .sort((a, b) => b[1] - a[1])
         .map(([platform, count]) => platform + ' ' + count)
     };
-  }, [durationLookupOutcomes, videos]);
+  }, [durationLookupOutcomes, videos, statsNow]);
 
   const handleRefreshDurations = () => {
     // Keep active lookups marked in-flight to avoid spawning duplicate metadata requests.
