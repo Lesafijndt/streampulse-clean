@@ -22,8 +22,8 @@ body { min-width: 320px; background: #090308; }
   --gachi-hot: #ff2858;
   --gachi-hot-soft: rgba(255, 40, 88, .18);
   --gachi-amber: #ffbd70;
-  --yedi-sweden-blue: #006aa7;
-  --yedi-sweden-yellow: #fecc00;
+  --yedi-sweden-blue: #681236;
+  --yedi-sweden-yellow: #ff315f;
   --gachi-panel: rgba(22, 5, 13, .94);
   position: relative;
   isolation: isolate;
@@ -33,8 +33,8 @@ body { min-width: 320px; background: #090308; }
     url('/gachi-arena-bg.webp'),
     radial-gradient(ellipse at 12% 0%, rgba(194, 21, 70, .20), transparent 38%),
     radial-gradient(ellipse at 86% 28%, rgba(255, 103, 32, .08), transparent 34%),
-    radial-gradient(ellipse at 6% 76%, rgba(0, 106, 167, .16), transparent 31%),
-    radial-gradient(ellipse at 94% 14%, rgba(254, 204, 0, .095), transparent 24%);
+    radial-gradient(ellipse at 6% 76%, rgba(132, 18, 67, .16), transparent 31%),
+    radial-gradient(ellipse at 94% 14%, rgba(255, 49, 95, .095), transparent 24%);
   background-size: cover, cover, auto, auto, auto, auto;
   background-position: center, center top, 12% 0%, 86% 28%, 6% 76%, 94% 14%;
   background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
@@ -70,28 +70,28 @@ body { min-width: 320px; background: #090308; }
   right: 0;
   bottom: 0;
   background: linear-gradient(90deg,
-    #006aa7 0 42%, #fecc00 42% 47%, #006aa7 47% 53%,
-    #fecc00 53% 58%, #006aa7 58% 100%);
-  box-shadow: 0 0 12px rgba(254, 204, 0, .27), 0 0 20px rgba(255, 40, 88, .24);
+    #681236 0 42%, #ff315f 42% 47%, #681236 47% 53%,
+    #ff315f 53% 58%, #681236 58% 100%);
+  box-shadow: 0 0 12px rgba(255, 49, 95, .27), 0 0 20px rgba(255, 40, 88, .24);
   pointer-events: none;
 }
 
 .yedi-soap-logo {
-  border: 1px solid rgba(254, 204, 0, .85);
-  background: linear-gradient(135deg, #006aa7 0 43%, #fecc00 43% 57%, #006aa7 57% 100%);
+  border: 1px solid rgba(255, 49, 95, .85);
+  background: linear-gradient(135deg, #681236 0 43%, #ff315f 43% 57%, #681236 57% 100%);
   box-shadow: 0 0 12px rgba(255, 40, 88, .4), inset 0 0 0 2px rgba(6, 5, 12, .75);
 }
 .yedi-soap-mark { font-size: 1.4rem; line-height: 1; filter: drop-shadow(0 2px 2px rgba(0,0,0,.65)); }
 .yedi-hub-wordmark {
-  background-image: linear-gradient(90deg, #fff5f7 0%, #ff6d95 52%, #fecc00 100%);
+  background-image: linear-gradient(90deg, #fff5f7 0%, #ff6d95 52%, #ff315f 100%);
   text-shadow: 0 0 16px rgba(255, 40, 88, .25);
 }
 .gachi-deadpan-badge {
   color: #ffe36c;
-  background: linear-gradient(100deg, rgba(0, 106, 167, .36), rgba(254, 204, 0, .12));
-  border: 1px solid rgba(254, 204, 0, .46);
-  box-shadow: inset 0 0 12px rgba(0, 106, 167, .12), 0 0 12px rgba(255, 40, 88, .09);
-  text-shadow: 0 0 8px rgba(254, 204, 0, .17);
+  background: linear-gradient(100deg, rgba(132, 18, 67, .36), rgba(255, 49, 95, .12));
+  border: 1px solid rgba(255, 49, 95, .46);
+  box-shadow: inset 0 0 12px rgba(132, 18, 67, .12), 0 0 12px rgba(255, 40, 88, .09);
+  text-shadow: 0 0 8px rgba(255, 49, 95, .17);
 }
 
 .gachi-theme section,
@@ -211,8 +211,8 @@ body { min-width: 320px; background: #090308; }
   --yh-glass: rgba(15, 13, 22, .84);
   --yh-line: rgba(255, 255, 255, .085);
   --yh-pink: #ff315f;
-  --yh-gold: #ffd56a;
-  --yh-blue: #3b9fd3;
+  --yh-gold: #ff91ac;
+  --yh-blue: #a32dd4;
 }
 
 html { scroll-behavior: smooth; scrollbar-color: rgba(255,49,95,.58) #0b0810; scrollbar-width: thin; }
@@ -223,8 +223,8 @@ body { overflow-x: hidden; }
     radial-gradient(ellipse at 50% -15%, rgba(255, 39, 92, .23), transparent 44%),
     linear-gradient(180deg, rgba(7, 4, 10, .50) 0%, rgba(7, 4, 10, .72) 45%, rgba(7, 4, 10, .91) 100%),
     url('/gachi-arena-bg.webp'),
-    radial-gradient(ellipse at 8% 75%, rgba(0,106,167,.18), transparent 34%),
-    radial-gradient(ellipse at 94% 20%, rgba(254,204,0,.09), transparent 25%) !important;
+    radial-gradient(ellipse at 8% 75%, rgba(132,18,67,.18), transparent 34%),
+    radial-gradient(ellipse at 94% 20%, rgba(255,49,95,.09), transparent 25%) !important;
   background-size: auto, cover, cover, auto, auto !important;
   background-position: center, center, center top, 8% 75%, 94% 20% !important;
 }
@@ -243,8 +243,8 @@ body { overflow-x: hidden; }
 .gachi-theme header::after { height: 2px; opacity: .92; }
 .yedi-soap-logo {
   position: relative; overflow: hidden; border-radius: 13px !important;
-  background: linear-gradient(140deg, #0b7cb0 0%, #07517d 46%, #f4c900 47%, #ffe36d 54%, #07517d 55%, #087eb1 100%) !important;
-  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 5px 20px rgba(0,106,167,.22), 0 0 22px rgba(255,49,95,.18), inset 0 1px 0 rgba(255,255,255,.25) !important;
+  background: linear-gradient(140deg, #0b7cb0 0%, #07517d 46%, #fa1f65 47%, #ffb6c9 54%, #07517d 55%, #087eb1 100%) !important;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 5px 20px rgba(132,18,67,.22), 0 0 22px rgba(255,49,95,.18), inset 0 1px 0 rgba(255,255,255,.25) !important;
 }
 .yedi-soap-logo::after { content:""; position:absolute; inset:-60% 45% -60% -30%; transform:rotate(28deg); background:rgba(255,255,255,.17); pointer-events:none; }
 .yedi-soap-mark { filter: drop-shadow(0 2px 2px rgba(0,0,0,.75)); }
@@ -325,7 +325,7 @@ body { overflow-x: hidden; }
 .gachi-theme [class*="overflow-y-auto"]::-webkit-scrollbar-thumb, .gachi-theme [class*="overflow-auto"]::-webkit-scrollbar-thumb { background: rgba(255,49,95,.48); border: 2px solid rgba(10,7,13,.8); border-radius: 99px; }
 .gachi-theme [class*="text-green-"] { color: #8cf0ba !important; }
 .gachi-theme [class*="bg-green-"] { background-color: rgba(34,197,94,.15) !important; }
-.gachi-theme [class*="text-yellow-"] { color: #ffe18b !important; }
+.gachi-theme [class*="text-yellow-"] { color: #ffb6c9 !important; }
 .gachi-theme [class*="text-red-"] { color: #ff829d !important; }
 
 @keyframes yh-rise-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
@@ -353,27 +353,27 @@ body { overflow-x: hidden; }
 :root {
   --yh-ink: #03070b;
   --yh-glass: rgba(4, 12, 19, .91);
-  --yh-line: rgba(92, 191, 244, .19);
+  --yh-line: rgba(255, 49, 95, .19);
   --yh-pink: #ff315f;
-  --yh-gold: #fecc00;
-  --yh-blue: #006aa7;
+  --yh-gold: #ff315f;
+  --yh-blue: #681236;
 }
-html { scrollbar-color: rgba(254,204,0,.58) #03070b; }
+html { scrollbar-color: rgba(255,49,95,.58) #03070b; }
 body { background: #03070b; }
 
 .gachi-theme {
-  --gachi-hot: #fecc00;
-  --gachi-hot-soft: rgba(254,204,0,.16);
-  --gachi-amber: #78d3ff;
+  --gachi-hot: #ff315f;
+  --gachi-hot-soft: rgba(255,49,95,.16);
+  --gachi-amber: #ff89a8;
   --gachi-panel: rgba(3, 10, 16, .95);
   color: #f5f9ff !important;
   background-color: #03070b !important;
   background-image:
-    radial-gradient(ellipse at 8% 0%, rgba(0,106,167,.34), transparent 34%),
-    radial-gradient(ellipse at 92% 10%, rgba(254,204,0,.15), transparent 24%),
+    radial-gradient(ellipse at 8% 0%, rgba(132,18,67,.34), transparent 34%),
+    radial-gradient(ellipse at 92% 10%, rgba(255,49,95,.15), transparent 24%),
     linear-gradient(180deg, rgba(2,6,10,.47), rgba(2,5,9,.84) 54%, rgba(1,3,6,.96)),
     url('/gachi-arena-bg.webp'),
-    repeating-linear-gradient(118deg, transparent 0 54px, rgba(0,106,167,.045) 54px 55px, transparent 55px 108px) !important;
+    repeating-linear-gradient(118deg, transparent 0 54px, rgba(132,18,67,.045) 54px 55px, transparent 55px 108px) !important;
   background-size: auto, auto, cover, cover, auto !important;
   background-position: 8% 0%, 92% 10%, center, center top, center !important;
   background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, repeat !important;
@@ -384,108 +384,108 @@ body { background: #03070b; }
   opacity: .23;
   background-image:
     repeating-linear-gradient(0deg, transparent 0 5px, rgba(255,255,255,.025) 5px 6px),
-    repeating-linear-gradient(118deg, transparent 0 50px, rgba(254,204,0,.045) 50px 51px, transparent 51px 100px);
+    repeating-linear-gradient(118deg, transparent 0 50px, rgba(255,49,95,.045) 50px 51px, transparent 51px 100px);
 }
 .gachi-theme::after {
   background:
     radial-gradient(ellipse at center, transparent 24%, rgba(0,0,0,.55) 100%),
-    linear-gradient(90deg, rgba(0,106,167,.035), transparent 27% 73%, rgba(254,204,0,.03));
+    linear-gradient(90deg, rgba(132,18,67,.035), transparent 27% 73%, rgba(255,49,95,.03));
 }
 .gachi-theme header {
-  background: linear-gradient(105deg, rgba(2,7,11,.98), rgba(0,45,73,.96) 47%, rgba(3,8,13,.98)) !important;
-  border-bottom: 1px solid rgba(254,204,0,.38) !important;
-  box-shadow: 0 12px 40px rgba(0,0,0,.6), 0 1px 0 rgba(254,204,0,.09) inset, 0 0 32px rgba(0,106,167,.18) !important;
+  background: linear-gradient(105deg, rgba(2,7,11,.98), rgba(43,8,28,.96) 47%, rgba(3,8,13,.98)) !important;
+  border-bottom: 1px solid rgba(255,49,95,.38) !important;
+  box-shadow: 0 12px 40px rgba(0,0,0,.6), 0 1px 0 rgba(255,49,95,.09) inset, 0 0 32px rgba(132,18,67,.18) !important;
 }
 .gachi-theme header::after {
   height: 4px;
   background: linear-gradient(90deg,
-    #006aa7 0 27%, #fecc00 27% 30%, #006aa7 30% 53%,
-    #fecc00 53% 56%, #006aa7 56% 100%) !important;
-  box-shadow: 0 0 12px rgba(254,204,0,.35), 0 0 20px rgba(0,106,167,.35) !important;
+    #681236 0 27%, #ff315f 27% 30%, #681236 30% 53%,
+    #ff315f 53% 56%, #681236 56% 100%) !important;
+  box-shadow: 0 0 12px rgba(255,49,95,.35), 0 0 20px rgba(132,18,67,.35) !important;
 }
 .yedi-soap-logo {
-  border: 1px solid rgba(254,204,0,.95) !important;
+  border: 1px solid rgba(255,49,95,.95) !important;
   background-image:
-    linear-gradient(90deg, transparent 0 29%, #fecc00 29% 42%, transparent 42%),
-    linear-gradient(0deg, transparent 0 42%, #fecc00 42% 58%, transparent 58%),
-    linear-gradient(#006aa7,#006aa7) !important;
-  box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 18px rgba(0,106,167,.34), inset 0 0 0 1px rgba(255,255,255,.16) !important;
+    linear-gradient(90deg, transparent 0 29%, #ff315f 29% 42%, transparent 42%),
+    linear-gradient(0deg, transparent 0 42%, #ff315f 42% 58%, transparent 58%),
+    linear-gradient(#681236,#681236) !important;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 18px rgba(132,18,67,.34), inset 0 0 0 1px rgba(255,255,255,.16) !important;
 }
 .yedi-soap-mark { filter: drop-shadow(0 2px 2px rgba(0,0,0,.8)); }
 .yedi-hub-wordmark {
-  background-image: linear-gradient(90deg, #fff 0%, #83d5ff 44%, #fecc00 100%) !important;
-  text-shadow: 0 0 24px rgba(0,106,167,.4) !important;
+  background-image: linear-gradient(90deg, #fff 0%, #ff9ab4 44%, #ff315f 100%) !important;
+  text-shadow: 0 0 24px rgba(132,18,67,.4) !important;
 }
 .gachi-deadpan-badge {
-  color: #ffe36b !important;
-  background: linear-gradient(110deg, rgba(0,106,167,.45), rgba(0,36,60,.72)) !important;
-  border: 1px solid rgba(254,204,0,.74) !important;
-  box-shadow: 0 0 15px rgba(0,106,167,.18), inset 0 1px 0 rgba(255,255,255,.09) !important;
-  text-shadow: 0 0 8px rgba(254,204,0,.25) !important;
+  color: #ffb6c9 !important;
+  background: linear-gradient(110deg, rgba(132,18,67,.45), rgba(0,36,60,.72)) !important;
+  border: 1px solid rgba(255,49,95,.74) !important;
+  box-shadow: 0 0 15px rgba(132,18,67,.18), inset 0 1px 0 rgba(255,255,255,.09) !important;
+  text-shadow: 0 0 8px rgba(255,49,95,.25) !important;
 }
 .gachi-theme .gachi-mode-badge {
-  color: #ffe36b !important;
-  background: linear-gradient(110deg, rgba(0,106,167,.32), rgba(0,0,0,.7)) !important;
-  border-color: rgba(254,204,0,.62) !important;
-  box-shadow: 0 0 16px rgba(0,106,167,.2), inset 0 1px 0 rgba(255,255,255,.06) !important;
+  color: #ffb6c9 !important;
+  background: linear-gradient(110deg, rgba(132,18,67,.32), rgba(0,0,0,.7)) !important;
+  border-color: rgba(255,49,95,.62) !important;
+  box-shadow: 0 0 16px rgba(132,18,67,.2), inset 0 1px 0 rgba(255,255,255,.06) !important;
 }
 .gachi-theme .gachi-mode-badge::before,
-.gachi-theme .gachi-mode-badge::after { color: #fecc00; text-shadow: 0 0 10px rgba(254,204,0,.3); }
+.gachi-theme .gachi-mode-badge::after { color: #ff315f; text-shadow: 0 0 10px rgba(255,49,95,.3); }
 
 .gachi-theme section,
 .gachi-theme aside {
   background: linear-gradient(145deg, rgba(5,19,29,.96), rgba(3,7,12,.96) 72%) !important;
-  border-color: rgba(0,106,167,.46) !important;
+  border-color: rgba(132,18,67,.46) !important;
   border-radius: 14px !important;
-  box-shadow: 0 18px 50px rgba(0,0,0,.48), 0 1px 0 rgba(255,255,255,.035) inset, 0 0 0 1px rgba(254,204,0,.035) !important;
+  box-shadow: 0 18px 50px rgba(0,0,0,.48), 0 1px 0 rgba(255,255,255,.035) inset, 0 0 0 1px rgba(255,49,95,.035) !important;
 }
 .gachi-theme section::before,
 .gachi-theme aside::before {
   left: 0; right: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(0,106,167,.95) 26%, rgba(254,204,0,.95) 50%, rgba(0,106,167,.95) 74%, transparent) !important;
+  background: linear-gradient(90deg, transparent, rgba(132,18,67,.95) 26%, rgba(255,49,95,.95) 50%, rgba(132,18,67,.95) 74%, transparent) !important;
 }
 .gachi-theme section:hover,
 .gachi-theme aside:hover {
-  border-color: rgba(254,204,0,.42) !important;
-  box-shadow: 0 20px 58px rgba(0,0,0,.56), 0 0 24px rgba(0,106,167,.14) !important;
+  border-color: rgba(255,49,95,.42) !important;
+  box-shadow: 0 20px 58px rgba(0,0,0,.56), 0 0 24px rgba(132,18,67,.14) !important;
 }
 .gachi-theme section > div:first-child,
-.gachi-theme aside > div:first-child { border-color: rgba(0,106,167,.3) !important; }
+.gachi-theme aside > div:first-child { border-color: rgba(132,18,67,.3) !important; }
 .gachi-theme h1, .gachi-theme h2, .gachi-theme h3 {
   text-transform: uppercase;
   letter-spacing: .055em;
-  text-shadow: 2px 2px 0 rgba(0,0,0,.55), 0 0 18px rgba(0,106,167,.12);
+  text-shadow: 2px 2px 0 rgba(0,0,0,.55), 0 0 18px rgba(132,18,67,.12);
 }
 .gachi-theme section h2::before {
-  color: #fecc00 !important;
-  text-shadow: 0 0 10px rgba(254,204,0,.4) !important;
+  color: #ff315f !important;
+  text-shadow: 0 0 10px rgba(255,49,95,.4) !important;
 }
 .gachi-theme [class*="bg-gradient-to-r"],
 .gachi-theme [class*="bg-gradient-to-tr"] {
-  background-image: linear-gradient(105deg, #00466f 0%, #006aa7 56%, #b89000 100%) !important;
+  background-image: linear-gradient(105deg, #3b0b25 0%, #681236 56%, #a51b50 100%) !important;
 }
-.gachi-theme [class*="bg-purple-"] { background-color: rgba(0,106,167,.2) !important; }
+.gachi-theme [class*="bg-purple-"] { background-color: rgba(132,18,67,.2) !important; }
 .gachi-theme .bg-purple-600,
-.gachi-theme .hover\\:bg-purple-500:hover { background-color: #006aa7 !important; }
+.gachi-theme .hover\\:bg-purple-500:hover { background-color: #681236 !important; }
 .gachi-theme [class*="text-purple-"],
-.gachi-theme [class*="text-indigo-"] { color: #83d5ff !important; }
+.gachi-theme [class*="text-indigo-"] { color: #ff9ab4 !important; }
 .gachi-theme [class*="border-purple-"],
-.gachi-theme [class*="border-indigo-"] { border-color: rgba(0,106,167,.68) !important; }
+.gachi-theme [class*="border-indigo-"] { border-color: rgba(132,18,67,.68) !important; }
 .gachi-theme [class*="text-amber-"],
-.gachi-theme [class*="text-yellow-"] { color: #ffe36b !important; }
+.gachi-theme [class*="text-yellow-"] { color: #ffb6c9 !important; }
 .gachi-theme [class*="border-amber-"],
-.gachi-theme [class*="border-yellow-"] { border-color: rgba(254,204,0,.55) !important; }
+.gachi-theme [class*="border-yellow-"] { border-color: rgba(255,49,95,.55) !important; }
 .gachi-theme [class*="bg-amber-"],
-.gachi-theme [class*="bg-yellow-"] { background-color: rgba(254,204,0,.13) !important; }
-.gachi-theme [class*="text-cyan-"] { color: #83d5ff !important; }
-.gachi-theme [class*="border-cyan-"] { border-color: rgba(0,106,167,.55) !important; }
+.gachi-theme [class*="bg-yellow-"] { background-color: rgba(255,49,95,.13) !important; }
+.gachi-theme [class*="text-cyan-"] { color: #ff9ab4 !important; }
+.gachi-theme [class*="border-cyan-"] { border-color: rgba(132,18,67,.55) !important; }
 .gachi-theme input, .gachi-theme select, .gachi-theme textarea {
   background-color: rgba(1,5,8,.94) !important;
-  border-color: rgba(0,106,167,.52) !important;
+  border-color: rgba(132,18,67,.52) !important;
 }
 .gachi-theme input:focus, .gachi-theme select:focus, .gachi-theme textarea:focus {
-  border-color: #fecc00 !important;
-  box-shadow: 0 0 0 3px rgba(254,204,0,.13), 0 0 20px rgba(0,106,167,.12) !important;
+  border-color: #ff315f !important;
+  box-shadow: 0 0 0 3px rgba(255,49,95,.13), 0 0 20px rgba(132,18,67,.12) !important;
 }
 .gachi-theme button {
   text-transform: uppercase;
@@ -493,17 +493,17 @@ body { background: #03070b; }
   font-weight: 800;
 }
 .gachi-theme button:not(:disabled):hover {
-  box-shadow: 0 0 0 1px rgba(254,204,0,.15), 0 7px 22px rgba(0,106,167,.18);
+  box-shadow: 0 0 0 1px rgba(255,49,95,.15), 0 7px 22px rgba(132,18,67,.18);
 }
 .gachi-theme button:focus-visible, .gachi-theme a:focus-visible {
-  outline: 2px solid #fecc00 !important;
+  outline: 2px solid #ff315f !important;
   outline-offset: 3px;
 }
 .gachi-theme [class*="overflow-y-auto"]::-webkit-scrollbar-thumb,
 .gachi-theme [class*="overflow-auto"]::-webkit-scrollbar-thumb {
-  background: linear-gradient(#fecc00, #006aa7);
+  background: linear-gradient(#ff315f, #681236);
 }
-.gachi-theme .gachi-tiktok-player { box-shadow: 0 0 0 1px rgba(254,204,0,.16), 0 18px 45px rgba(0,0,0,.65) !important; }
+.gachi-theme .gachi-tiktok-player { box-shadow: 0 0 0 1px rgba(255,49,95,.16), 0 18px 45px rgba(0,0,0,.65) !important; }
 @media (max-width: 640px) {
   .gachi-theme { background-attachment: scroll, scroll, scroll, scroll, scroll !important; }
 }
@@ -2004,47 +2004,83 @@ body { background: #03070b; }
 .gachi-topbar-menu > button {
   white-space: nowrap;
 }
-@media (max-width: 1100px) {
-  .gachi-topbar-inner {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "brand menu"
-      "sync sync";
-    row-gap: .55rem !important;
-    column-gap: .75rem !important;
-  }
-  .gachi-topbar-sync {
-    justify-self: start;
-  }
+
+
+
+
+/* Final WHALE CUM palette: black leather, blood crimson, dark wine and violet. */
+.gachi-theme {
+  --gachi-hot: #ff315f !important;
+  --gachi-hot-soft: rgba(255,49,95,.16) !important;
+  --gachi-amber: #ff9ab4 !important;
+  --yedi-sweden-blue: #681236 !important;
+  --yedi-sweden-yellow: #ff315f !important;
+  --yh-gold: #ff315f !important;
+  --yh-blue: #681236 !important;
+  background-image:
+    linear-gradient(180deg, rgba(8,2,10,.50) 0%, rgba(8,2,10,.72) 50%, rgba(5,2,7,.91) 100%),
+    url('/gachi-arena-bg.webp'),
+    radial-gradient(ellipse at 10% 0%, rgba(173,18,73,.16), transparent 38%),
+    radial-gradient(ellipse at 88% 26%, rgba(119,25,144,.10), transparent 34%) !important;
+  background-size: cover, cover, auto, auto !important;
+  background-position: center, center top, 10% 0%, 88% 26% !important;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat !important;
+  background-attachment: scroll, scroll, scroll, scroll !important;
 }
-@media (max-width: 640px) {
-  .gachi-topbar-inner {
-    column-gap: .5rem !important;
-    row-gap: .5rem !important;
-  }
-  .gachi-topbar-brand {
-    gap: .55rem !important;
-  }
-  .gachi-topbar-brand .gachi-mode-badge,
-  .gachi-topbar-brand .gachi-deadpan-badge {
-    display: none !important;
-  }
-  .gachi-topbar-brand .yedi-soap-logo {
-    width: 2.25rem !important;
-    height: 2.25rem !important;
-    flex: 0 0 2.25rem;
-  }
-  .gachi-topbar-brand .yedi-hub-wordmark {
-    font-size: 1.05rem !important;
-  }
-  .gachi-topbar-sync {
-    justify-self: start;
-    width: fit-content;
-    max-width: 100%;
-    flex-wrap: wrap;
-  }
-  .gachi-topbar-menu > button {
-    gap: .4rem !important;
-    padding: .55rem .65rem !important;
-  }
+.gachi-theme header {
+  background: linear-gradient(105deg, rgba(8,3,9,.98), rgba(39,7,24,.97) 52%, rgba(10,4,14,.98)) !important;
+  border-bottom-color: rgba(255,49,95,.5) !important;
+}
+.gachi-theme header::after {
+  height: 3px !important;
+  background: linear-gradient(90deg, #260818 0%, #681236 30%, #ff315f 50%, #8b174a 70%, #260818 100%) !important;
+  box-shadow: 0 0 12px rgba(255,49,95,.35), 0 0 20px rgba(139,23,74,.22) !important;
+}
+.yedi-soap-logo {
+  border: 1px solid rgba(255,49,95,.85) !important;
+  background: linear-gradient(140deg, #170711 0%, #4e102e 42%, #ff315f 43%, #9e174e 57%, #210916 58%, #10060d 100%) !important;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.62), 0 0 16px rgba(255,49,95,.24), inset 0 1px 0 rgba(255,255,255,.12) !important;
+}
+.yedi-hub-wordmark {
+  background-image: linear-gradient(90deg, #fff4f7 0%, #ff91ae 48%, #b94ad8 100%) !important;
+  text-shadow: 0 0 20px rgba(255,49,95,.3) !important;
+}
+.gachi-deadpan-badge {
+  color: #ffb6c9 !important;
+  background: linear-gradient(100deg, rgba(93,13,48,.42), rgba(34,7,31,.6)) !important;
+  border-color: rgba(255,49,95,.38) !important;
+  box-shadow: inset 0 0 10px rgba(255,49,95,.06), 0 0 10px rgba(255,49,95,.06) !important;
+  text-shadow: none !important;
+}
+.gachi-theme [class*="bg-gradient-to-r"],
+.gachi-theme [class*="bg-gradient-to-tr"] {
+  background-image: linear-gradient(105deg, #3b0b25 0%, #961545 54%, #5e1a83 100%) !important;
+}
+.gachi-theme [class*="text-cyan-"] { color: #ff9ab4 !important; }
+.gachi-theme [class*="border-cyan-"] { border-color: rgba(255,49,95,.35) !important; }
+.gachi-theme [class*="text-amber-"],
+.gachi-theme [class*="text-yellow-"] { color: #ffb6c9 !important; }
+.gachi-theme [class*="border-amber-"],
+.gachi-theme [class*="border-yellow-"] { border-color: rgba(255,49,95,.42) !important; }
+.gachi-theme [class*="bg-amber-"],
+.gachi-theme [class*="bg-yellow-"] { background-color: rgba(255,49,95,.12) !important; }
+.gachi-theme button:focus-visible,
+.gachi-theme a:focus-visible { outline-color: #ff315f !important; }
+.gachi-theme input:focus,
+.gachi-theme select:focus,
+.gachi-theme textarea:focus {
+  border-color: #ff315f !important;
+  box-shadow: 0 0 0 2px rgba(255,49,95,.13), 0 0 18px rgba(123,24,82,.12) !important;
+}
+.gachi-theme [class*="overflow-y-auto"]::-webkit-scrollbar-thumb,
+.gachi-theme [class*="overflow-auto"]::-webkit-scrollbar-thumb {
+  background: linear-gradient(#ff315f, #681236) !important;
+}
+/* Reduce expensive static blur/backdrop work; motion stays intentionally restrained. */
+.gachi-theme header,
+.gachi-theme .gachi-overlay {
+  backdrop-filter: none !important;
+}
+.gachi-theme::after {
+  background: radial-gradient(ellipse at center, transparent 24%, rgba(0,0,0,.38) 100%) !important;
 }
