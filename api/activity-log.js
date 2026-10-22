@@ -146,7 +146,14 @@ export default async function handler(req, res) {
     configuredOrigin = new URL(process.env.TWITCH_APP_URL || `https://${req.headers.host}`).origin;
   } catch { return res.status(503).json({ error: 'The app origin is not configured.' }); }
   const requestOrigin = req.headers.origin;
-  if ((requestOrigin && requestOrigin !== configuredOrigin) || (req.method === 'POST' && !requestOrigin)) {
+  // Vercel can serve the same project through multiple valid aliases. Keep the
+  // exact-origin check, but also accept the origin that matches this request's
+  // actual host so a stale TWITCH_APP_URL does not break same-origin sync.
+  let requestHostOrigin = '';
+  try { requestHostOrigin = new URL(`https://${req.headers.host}`).origin; }
+  catch { return res.status(503).json({ error: 'The dashboard host is invalid.' }); }
+  if ((requestOrigin && requestOrigin !== configuredOrigin && requestOrigin !== requestHostOrigin) ||
+      (req.method === 'POST' && !requestOrigin)) {
     return res.status(403).json({ error: 'Activity requests must originate from the dashboard.' });
   }
 
