@@ -135,7 +135,7 @@ function isAlreadyExists(error) {
     /already exists|ALREADY_EXISTS/i.test(String(error?.message || ''));
 }
 
-async function resolveTiktokIfNeeded(url, parsed, origin) {
+async function resolveTiktokIfNeeded(url, parsed, origin, event, requester) {
   if (parsed.platform !== 'tiktok' || parsed.videoId) return { url, parsed, metadataUrl: url };
   const endpoint = new URL('/api/resolve-tiktok?url=' + encodeURIComponent(url), origin);
   let response;
@@ -150,7 +150,7 @@ async function resolveTiktokIfNeeded(url, parsed, origin) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.videoId || !result.url) {
     if (response.status >= 500) throw new Error('TikTok short-link resolution is temporarily unavailable');
-    await sendEventSubChatReply({ broadcaster_user_id: PRIVATE_CHANNEL }, 'TikTok link failed; try the full /video/ URL.');
+    await sendEventSubChatReply(event, `@${requester} TikTok link failed; try the full /video/ URL.`);
     return null;
   }
   const normalizedUrl = String(result.url);
@@ -227,7 +227,7 @@ export async function processEventSubChatMessage({ event, messageId }) {
   if (!normalizedUrl.startsWith('https://') || !parsed.platform) {
     throw new Error('Request URL is invalid');
   }
-  const tiktok = await resolveTiktokIfNeeded(normalizedUrl, parsed, origin);
+  const tiktok = await resolveTiktokIfNeeded(normalizedUrl, parsed, origin, event, requester);
   if (!tiktok) return { ignored: true, reason: 'invalid_tiktok' };
   normalizedUrl = tiktok.url;
   parsed = tiktok.parsed;
