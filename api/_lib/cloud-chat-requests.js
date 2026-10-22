@@ -17,6 +17,79 @@ const KNOWN_CHAT_BOTS = new Set([
   'streamcaptain', 'streamstickers', 'gachibot69',
 ]);
 
+let cachedReplyAppToken = { value: '', expiresAt: 0 };
+let cachedBotUserId = '';
+
+async function getReplyAppToken() {
+  if (cachedReplyAppToken.value && cachedReplyAppToken.expiresAt > Date.now() + 60000) {
+    return cachedReplyAppToken.value;
+  }
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error('Twitch OAuth is not configured');
+  const response = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }),
+    signal: AbortSignal.timeout(2500),
+    cache: 'no-store',
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.access_token) throw new Error('Could not obtain Twitch app access token for chat replies');
+  cachedReplyAppToken = {
+    value: result.access_token,
+    expiresAt: Date.now() + Math.max(60, Number(result.expires_in) || 3600) * 1000,
+  };
+  return cachedReplyAppToken.value;
+}
+
+async function sendEventSubChatReply(event, message) {
+  try {
+    const clientId = process.env.TWITCH_CLIENT_ID;
+    const accessToken = await getReplyAppToken();
+    if (!clientId || !event?.broadcaster_user_id) return false;
+    if (!cachedBotUserId) {
+      const usersResponse = await fetch('https://api.twitch.tv/helix/users?login=gachibot69', {
+        headers: { 'Client-Id': clientId, Authorization: 'Bearer ' + accessToken },
+        signal: AbortSignal.timeout(1800),
+        cache: 'no-store',
+      });
+      const users = await usersResponse.json().catch(() => ({}));
+      if (!usersResponse.ok || !users.data?.[0]?.id) throw new Error('Could not resolve the chat bot user ID');
+      cachedBotUserId = String(users.data[0].id);
+    }
+
+    const response = await fetch('https://api.twitch.tv/helix/chat/messages', {
+      method: 'POST',
+      headers: {
+        'Client-Id': clientId,
+        Authorization: 'Bearer ' + accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        broadcaster_id: String(event.broadcaster_user_id),
+        sender_id: cachedBotUserId,
+        message: String(message || '').slice(0, 450),
+      }),
+      signal: AbortSignal.timeout(2200),
+      cache: 'no-store',
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.data?.[0]?.is_sent === false) {
+      console.warn('Twitch cloud chat reply failed:', {
+        status: response.status,
+        reason: String(result.message || result.data?.[0]?.drop_reason?.message || 'send failed').slice(0, 180),
+      });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    // Replies are best-effort. A reply outage must never prevent the request from being queued.
+    console.warn('Twitch cloud chat reply failed:', String(error?.message || error).slice(0, 240));
+    return false;
+  }
+}
+
 function normalizeLogin(value) {
   return String(value || '').trim().toLowerCase().replace(/^@/, '').replace(/[^a-z0-9_]/g, '');
 }
@@ -116,7 +189,10 @@ export async function processEventSubChatMessage({ event, messageId }) {
     ? settingsSnapshot.data().streamSettings
     : {};
 
-  if (streamSettings.queueOpen === false) return { ignored: true, reason: 'queue_closed' };
+  if (streamSettings.queueOpen === false) {
+    await sendEventSubChatReply(event, `@${requester} Requests are closed.`);
+    return { ignored: true, reason: 'queue_closed' };
+  }
 
   let normalizedUrl = extractedUrl || requestText;
   let title = '';
@@ -157,7 +233,10 @@ export async function processEventSubChatMessage({ event, messageId }) {
       : (parsed.platform === 'twitch' || parsed.platform === 'kick')
         ? streamSettings.allowTwitch !== false
         : true;
-  if (!allowedBySettings) return { ignored: true, reason: 'platform_disabled' };
+  if (!allowedBySettings) {
+    await sendEventSubChatReply(event, `@${requester} Requests for this platform are disabled by the streamer.`);
+    return { ignored: true, reason: 'platform_disabled' };
+  }
 
   // Metadata enriches the queue item when it is quick, but a slow provider must not
   // prevent Twitch EventSub from receiving an acknowledgement in time.
@@ -243,7 +322,14 @@ export async function processEventSubChatMessage({ event, messageId }) {
     await batch.commit();
     return { queued: true, id: itemId, title: cleanTitle };
   } catch (error) {
-    if (isAlreadyExists(error)) return { ignored: true, reason: 'duplicate' };
+    if (isAlreadyExists(error)) {
+      // A repeated webhook delivery for the same Twitch message ID is silent; a distinct
+      // chat message for an already-requested video gets the same feedback as the old bridge.
+      const priorEvent = await eventRef.get().catch(() => null);
+      if (priorEvent?.exists) return { ignored: true, reason: 'duplicate_delivery' };
+      await sendEventSubChatReply(event, `@${requester} That video has already been requested.`);
+      return { ignored: true, reason: 'duplicate' };
+    }
     console.error('Twitch EventSub queue write failed:', {
       code: String(error?.code || 'unknown'),
       message: String(error?.message || error).slice(0, 500),
