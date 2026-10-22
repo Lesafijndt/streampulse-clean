@@ -15,6 +15,41 @@ const extractVideoId = (value) => {
   }
 };
 
+
+const videoMetadataUrl = (value, expectedId) => {
+  try {
+    const url = value instanceof URL ? value : new URL(String(value));
+    const valid = url.protocol === 'https:' && isTikTokHost(url.hostname) &&
+      /\/(?:@[^/]+\/)?video\/(\d{10,25})/i.test(url.pathname) &&
+      extractVideoId(url) === String(expectedId);
+    return valid ? url.toString() : 'https://www.tiktok.com/video/' + expectedId;
+  } catch {
+    return 'https://www.tiktok.com/video/' + expectedId;
+  }
+};
+
+const extractCanonicalVideoUrl = (html, baseUrl, expectedId) => {
+  const source = String(html || '');
+  const readAttr = (tag, name) => {
+    const doubleQuoted = new RegExp('\\b' + name + '\\s*=\\s*"([^"]*)"', 'i').exec(String(tag || ''));
+    if (doubleQuoted) return doubleQuoted[1];
+    return new RegExp("\\b" + name + "\\s*=\\s*'([^']*)'", 'i').exec(String(tag || ''))?.[1] || '';
+  };
+  const canonicalTag = source.match(/<link\b(?=[^>]*\brel=["']canonical["'])[^>]*>/i)?.[0] || '';
+  const openGraphTag = source.match(/<meta\b(?=[^>]*\bproperty=["']og:url["'])[^>]*>/i)?.[0] || '';
+  const rawCandidate = readAttr(canonicalTag, 'href') || readAttr(openGraphTag, 'content');
+  if (!rawCandidate) return 'https://www.tiktok.com/video/' + expectedId;
+  try {
+    const resolved = new URL(rawCandidate.replace(/&amp;/g, '&'), baseUrl);
+    if (resolved.protocol === 'https:' && isTikTokHost(resolved.hostname) &&
+        /\/(?:@[^/]+\/)?video\/(\d{10,25})/i.test(resolved.pathname) &&
+        extractVideoId(resolved) === String(expectedId)) {
+      return resolved.toString();
+    }
+  } catch { /* The page may omit or obfuscate canonical metadata. */ }
+  return 'https://www.tiktok.com/video/' + expectedId;
+};
+
 async function readPrefix(response, maxChars = 180000) {
   if (!response.body) return '';
   const reader = response.body.getReader();
@@ -51,7 +86,15 @@ export default async function handler(req, res) {
   }
 
   const initialId = extractVideoId(current);
-  if (initialId) return res.status(200).json({ url: current.toString(), videoId: initialId });
+  if (initialId) {
+    const metadataUrl = videoMetadataUrl(current, initialId);
+    const isVideoPage = /\/video\//i.test(current.pathname);
+    return res.status(200).json({
+      url: isVideoPage ? current.toString() : 'https://www.tiktok.com/player/v1/' + initialId,
+      videoId: initialId,
+      metadataUrl
+    });
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
@@ -77,7 +120,15 @@ export default async function handler(req, res) {
         }
         current = next;
         const redirectedId = extractVideoId(current);
-        if (redirectedId) return res.status(200).json({ url: current.toString(), videoId: redirectedId });
+        if (redirectedId) {
+          const metadataUrl = videoMetadataUrl(current, redirectedId);
+          const isVideoPage = /\/video\//i.test(current.pathname);
+          return res.status(200).json({
+            url: isVideoPage ? current.toString() : 'https://www.tiktok.com/player/v1/' + redirectedId,
+            videoId: redirectedId,
+            metadataUrl
+          });
+        }
         continue;
       }
 
@@ -90,8 +141,13 @@ export default async function handler(req, res) {
       const idFromHtml = html.match(/\/video\/(\d{10,25})/i)?.[1]
         || html.match(/(?:itemId|item_id|videoId|video_id)["'\s:=]+(\d{10,25})/i)?.[1];
       if (idFromHtml) {
-        const canonical = `https://www.tiktok.com/player/v1/${idFromHtml}`;
-        return res.status(200).json({ url: canonical, videoId: idFromHtml });
+        const metadataUrl = extractCanonicalVideoUrl(html, current, idFromHtml);
+        const isVideoPage = /\/video\//i.test(new URL(metadataUrl).pathname);
+        return res.status(200).json({
+          url: isVideoPage ? metadataUrl : 'https://www.tiktok.com/player/v1/' + idFromHtml,
+          videoId: idFromHtml,
+          metadataUrl
+        });
       }
       return res.status(422).json({ error: 'Could not find a public TikTok video ID in this link. Try copying the full TikTok video URL.' });
     }

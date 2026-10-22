@@ -25,3 +25,16 @@ test('activity event payloads reject unsupported types and do not store source U
   const event = createActivityEvent({ id: 'bounded', type: 'request_added', at: 1_700_000_000_000, video: { id: '1', title: ' A title ', url: 'https://example.invalid', requestedBy: '@TestUser', platform: 'youtube', category: 'Music' } });
   assert.equal(event.requester, 'testuser'); assert.equal(event.title, 'A title'); assert.equal('url' in event, false);
 });
+
+test('activity statistics retain the top ten requesters for the Stats board', () => {
+  const events = Array.from({ length: 12 }, (_, index) => createActivityEvent({
+    id: 'requester-' + index,
+    type: 'request_added',
+    at: 1_800_000_000_000 + index,
+    video: { id: 'video-' + index, requestedBy: 'viewer' + index, platform: 'youtube' }
+  }));
+  const stats = buildActivityStatistics(events);
+  assert.equal(stats.requesters.length, 10);
+  assert.equal(stats.requesters[0].label, 'viewer0');
+  assert.equal(stats.requesters[9].label, 'viewer9');
+});

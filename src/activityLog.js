@@ -67,7 +67,7 @@ export function buildActivityStatistics(events = []) {
     removed: items.filter((event) => event.type === 'request_removed').length,
     platforms: countsFor(requests, (event) => event.platform || 'external').slice(0, 4),
     genres: countsFor(requests, (event) => event.category || 'General').slice(0, 4),
-    requesters: requesters.slice(0, 4)
+    requesters: requesters.slice(0, 10)
   };
 }
 

@@ -220,6 +220,7 @@ function normalizeLegacyVideoVotes(video) {
     addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
     watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
     note: typeof raw.note === 'string' ? raw.note : '',
+    metadataUrl: typeof raw.metadataUrl === 'string' ? raw.metadataUrl : '',
     thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : '',
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
     queueOrder: raw.queueOrder === undefined || raw.queueOrder === null || !Number.isFinite(Number(raw.queueOrder)) ? undefined : Number(raw.queueOrder),
@@ -376,6 +377,7 @@ function YediHubAppContent() {
   videosRef.current = videos;
   const pendingMediaRequestKeysRef = useRef(new Set());
   const durationEnrichmentInFlightRef = useRef(new Set());
+  const tiktokMetadataBackfillRef = useRef({ room: '', attempted: new Set() });
   const [durationRefreshCount, setDurationRefreshCount] = useState(0);
   const durationRefreshProcessedRef = useRef(0);
   const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
@@ -1034,6 +1036,48 @@ function YediHubAppContent() {
     }
   };
 
+  useEffect(() => {
+    const room = normalizeRoomName(channelRoom);
+    if (tiktokMetadataBackfillRef.current.room !== room) {
+      tiktokMetadataBackfillRef.current = { room, attempted: new Set() };
+    }
+    const attempted = tiktokMetadataBackfillRef.current.attempted;
+    const genericTitle = (value) => !String(value || '').trim() ||
+      /^TikTok (?:Short Clip|Video)(?:\s*\(|$)/i.test(String(value || '').trim());
+    const placeholderThumbnail = (value) => !value || /placehold\.co|TikTok\+Video/i.test(String(value));
+    const candidates = videos.filter((video) =>
+      video.platform === 'tiktok' &&
+      /^\d{10,25}$/.test(String(video.videoId || '')) &&
+      (genericTitle(video.title) || placeholderThumbnail(video.thumbnail)) &&
+      !attempted.has(String(video.id)
+    ).slice(0, 3);
+    for (const video of candidates) {
+      const id = String(video.id);
+      attempted.add(id);
+      const lookupUrl = video.metadataUrl ||
+        (/\/player\/v1\//i.test(String(video.url || ''))
+          ? 'https://www.tiktok.com/video/' + encodeURIComponent(video.videoId)
+          : String(video.url || ''));
+      if (!lookupUrl) continue;
+      void fetch('/api/media-metadata?url=' + encodeURIComponent(lookupUrl), { credentials: 'same-origin', cache: 'no-store' })
+        .then(async (response) => response.ok ? response.json().catch(() => null) : null)
+        .then((metadata) => {
+          if (!metadata) return;
+          const liveVideo = videosRef.current.find((item) => String(item.id) === id) || video;
+          const updates = {};
+          if (metadata.title && genericTitle(liveVideo.title)) {
+            updates.title = String(metadata.title).trim().slice(0, 400);
+          }
+          if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://') &&
+              placeholderThumbnail(liveVideo.thumbnail)) {
+            updates.thumbnail = metadata.thumbnailUrl;
+          }
+          if (Object.keys(updates).length) void syncUpdateVideo(id, updates);
+        })
+        .catch((error) => console.debug('TikTok metadata backfill was unavailable.', error));
+    }
+  }, [videos, channelRoom, syncUpdateVideo]);
+
   const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
     const seconds = Math.round(Number(rawDurationSeconds));
     const key = getDurationCacheKey(video);
@@ -1339,31 +1383,6 @@ function YediHubAppContent() {
         await Promise.all(candidates.slice(offset, offset + 3).map((event) => syncActivityEventToCloud(event)));
       }
     })();
-  };
-
-  const handleRetryActivitySync = () => {
-    if (!networkOnline || activitySyncLoading) return;
-    setActivitySyncLoading(true);
-    setActivityReconnectTick((tick) => tick + 1);
-    setCloudReconnectTick((tick) => tick + 1);
-    flushPendingActivityEvents();
-  };
-
-  const handleRefreshStats = () => {
-    const storedEvents = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
-    const merged = mergeActivityEvents(
-      activityEventsRef.current,
-      Array.isArray(storedEvents) ? storedEvents : []
-    );
-    activityEventsRef.current = merged;
-    setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-    setStatsNow(Date.now());
-
-    // Authenticated viewers can pull the latest lifetime activity from the server log too.
-    if (twitchAuth.authenticated && networkOnline) {
-      setActivityReconnectTick((tick) => tick + 1);
-    }
   };
 
   const syncAddVideo = async (videoObj) => {
@@ -1962,6 +1981,22 @@ function YediHubAppContent() {
     if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
   }, [videos]);
 
+  useEffect(() => {
+    const video = currentVideo;
+    if (!video || video.platform !== 'twitch' || !video.videoId || !streamSettings.autoPlayNext) return undefined;
+    const durationSeconds = Number(video.durationSec);
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return undefined;
+    const videoId = String(video.id);
+    // Twitch's clip iframe has no documented ended-event API. Use its reported duration
+    // plus a small load/rounding buffer as a best-effort auto-advance fallback.
+    const timer = window.setTimeout(() => {
+      if (String(currentVideoRef.current?.id || '') === videoId) {
+        handleMediaEndedRef.current?.(videoId);
+      }
+    }, (durationSeconds + 2.5) * 1000);
+    return () => window.clearTimeout(timer);
+  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.durationSec, streamSettings.autoPlayNext]);
+
   const counts = useMemo(() => ({
     ...getQueueMediaCounts(videos, getVideoMediaType),
     watch_later: videos.filter((video) => video.status === 'watch_later').length,
@@ -1972,20 +2007,6 @@ function YediHubAppContent() {
     () => buildQueueStatistics(videos, statsNow),
     [videos, statsNow]
   );
-  const activitySyncStatus = !networkOnline
-    ? 'Offline · local save'
-    : activitySyncLoading
-    ? 'Syncing activity'
-    : activitySyncError
-    ? 'Retry needed'
-    : twitchAuth.authenticated
-    ? activityCloudReady ? 'Cloud synced' : 'Connecting'
-    : 'Local-only';
-  const activitySyncTone = !networkOnline || activitySyncError
-    ? 'warning'
-    : twitchAuth.authenticated && activityCloudReady && !activitySyncLoading
-    ? 'success'
-    : 'neutral';
   const nextQueuedVideo = useMemo(
     () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
     [videos]
@@ -2115,8 +2136,9 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute.');
+          sendTwitchChatReply('Requests: !assr <YouTube title or supported URL> · direct URLs also work (YouTube, TikTok, Twitch Clips, Kick).');
+          sendTwitchChatReply('Your queue: !remove (latest waiting request) · !when (position/ETA) · !queue (queue status) · !bigcock [#] (upvote; not your own, one vote/video).');
+          sendTwitchChatReply('Mods: !skip · YouTube volume: !volume up/down/0-100, !mute, !unmute. For TikTok/Twitch Clips, use the player controls.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -2297,6 +2319,7 @@ function YediHubAppContent() {
     // All platforms and categories are accepted without filtering. Category detection is metadata only.
     let normalizedUrl = String(url || '').trim();
     let parsed = parseMediaUrl(normalizedUrl);
+    let metadataLookupUrl = normalizedUrl;
 
     // TikTok short share links (vm.tiktok.com / vt.tiktok.com / tiktok.com/t/...) do not
     // contain the numeric post ID needed by the embed. Resolve them through a small,
@@ -2309,6 +2332,9 @@ function YediHubAppContent() {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
           if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
           return false;
+        }
+        if (typeof result.metadataUrl === 'string' && result.metadataUrl.startsWith('https://')) {
+          metadataLookupUrl = result.metadataUrl;
         }
         normalizedUrl = result.url;
         parsed = parseMediaUrl(normalizedUrl);
@@ -2346,7 +2372,7 @@ function YediHubAppContent() {
     let resolvedThumbnail = parsed.thumbnail || '';
     let resolvedDurationSec = null;
     const needsBasicMetadata = !resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co');
-    const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`, {
+    const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(metadataLookupUrl || normalizedUrl)}`, {
       credentials: 'same-origin',
       cache: 'no-store'
     }).then(async (response) => {
@@ -2402,6 +2428,7 @@ function YediHubAppContent() {
       channelRoom,
       title: cleanTitle,
       url: normalizedUrl,
+      metadataUrl: metadataLookupUrl || normalizedUrl,
       platform: parsed.platform,
       videoId: parsed.videoId,
       category: finalCategory,
@@ -3649,16 +3676,6 @@ function YediHubAppContent() {
             statsNow={statsNow}
             statsExpanded={statsExpanded}
             onToggle={() => setStatsExpanded((expanded) => !expanded)}
-            onRefreshStats={handleRefreshStats}
-            isStaff={isStaff}
-            activitySyncStatus={activitySyncStatus}
-            activitySyncTone={activitySyncTone}
-            activitySyncError={activitySyncError}
-            activitySyncErrorMessage={activitySyncErrorMessage}
-            activitySyncLoading={activitySyncLoading}
-            canRetryActivitySync={Boolean(twitchAuth.authenticated && networkOnline)}
-            onRetryActivitySync={handleRetryActivitySync}
-            networkOnline={networkOnline}
           />
         </aside>
         <div className="gachi-player-column flex flex-col gap-4 min-w-0">
@@ -3805,7 +3822,7 @@ function YediHubAppContent() {
                     <iframe
                       key={`twitch-${currentVideo.videoId}`}
                       className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
-                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
+                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=true`}
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
                       allowFullScreen
