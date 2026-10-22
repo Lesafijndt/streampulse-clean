@@ -256,7 +256,7 @@ export default async function handler(req, res) {
       }
 
       // Fail setup loudly if the same Admin credentials used for queue writes cannot reach Firestore.
-      const db = getFirebaseAdminDb();
+      const db = await getFirebaseAdminDb();
       await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
 
       const callback = `${origin}/api/twitch/eventsub`;
@@ -314,7 +314,7 @@ export default async function handler(req, res) {
       });
     }
     try {
-      const db = getFirebaseAdminDb();
+      const db = await getFirebaseAdminDb();
       await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
     } catch (error) {
       console.error('Cloud chat listener Firestore health check failed:', String(error?.message || error).slice(0, 400));
