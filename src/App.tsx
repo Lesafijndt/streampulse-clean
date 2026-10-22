@@ -1276,7 +1276,7 @@ function YediHubAppContent() {
         body: JSON.stringify({ appId, event })
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || 'Activity event could not be saved'}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || 'Activity event could not be saved'}${result.diagnostic ? ' (' + result.diagnostic + ')' : ''}`);
       activityCloudIdsRef.current.add(eventId);
       setActivitySyncError(false);
       setActivitySyncErrorMessage('');
@@ -1413,7 +1413,7 @@ function YediHubAppContent() {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.events)) {
-          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}`);
+          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}${result.diagnostic ? ' (' + result.diagnostic + ')' : ''}`);
         }
         const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
         activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
