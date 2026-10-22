@@ -1,6 +1,6 @@
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 const BOT_LOGIN = 'gachibot69';
-const CHAT_WRITE_SCOPE = 'user:write:chat';
+const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
 // Persistent refresh cookies are renewed by the session endpoints on use (up to 400 days).
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 
@@ -99,7 +99,7 @@ export default async function handler(req, res) {
         return redirectWithError(res, 'bot', 'wrong_account');
       }
       const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
-      if (!scopes.includes(CHAT_WRITE_SCOPE)) {
+      if (!REQUIRED_BOT_SCOPES.every((scope) => scopes.includes(scope))) {
         clearBotCookies(res, req);
         return redirectWithError(res, 'bot', 'missing_scope');
       }
