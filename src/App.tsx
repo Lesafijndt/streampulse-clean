@@ -693,6 +693,7 @@ function YediHubAppContent() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
   const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
+  const networkOnlineRef = useRef(networkOnline);
   const [cloudReconnectTick, setCloudReconnectTick] = useState(0);
   const [activityReconnectTick, setActivityReconnectTick] = useState(0);
   const [syncStatusText, setSyncStatusText] = useState('Initializing cloud sync...');
@@ -2051,7 +2052,9 @@ function YediHubAppContent() {
   );
   const syncIndicatorLabel = cloudSynced
     ? 'Cloud synced'
-    : /failed|unavailable|offline|error/i.test(syncStatusText)
+    : !networkOnline
+    ? 'Local save'
+    : /failed|unavailable|error/i.test(syncStatusText)
     ? 'Cloud issue'
     : /not configured|saved in this browser|local save/i.test(syncStatusText)
     ? 'Local save'
@@ -2233,10 +2236,15 @@ function YediHubAppContent() {
   }, [twitchAuth.authenticated]);
 
   useEffect(() => {
-    const reconnectWhenAvailable = () => {
+    // Only rebuild Firestore/activity listeners when connectivity actually returns.
+    // Reconnecting on every tab focus causes a cache-only snapshot, a false "Cloud issue"
+    // flash, extra activity fetches, and needless work when switching back to the dashboard.
+    const reconnectWhenAvailable = (force = false) => {
       const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+      const wasOffline = !networkOnlineRef.current;
+      networkOnlineRef.current = online;
       setNetworkOnline(online);
-      if (!online) return;
+      if (!online || (!wasOffline && !force)) return;
       setCloudReconnectTick((tick) => tick + 1);
       setActivityReconnectTick((tick) => tick + 1);
       if (twitchAuth.authenticated && shouldReconnectIrcRef.current) {
@@ -2246,13 +2254,22 @@ function YediHubAppContent() {
         }
       }
     };
-    const onOffline = () => setNetworkOnline(false);
-    const onVisibility = () => { if (document.visibilityState === 'visible') reconnectWhenAvailable(); };
-    window.addEventListener('online', reconnectWhenAvailable);
+    const onOnline = () => reconnectWhenAvailable(true);
+    const onOffline = () => {
+      networkOnlineRef.current = false;
+      setNetworkOnline(false);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' &&
+          (!networkOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine))) {
+        reconnectWhenAvailable();
+      }
+    };
+    window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.removeEventListener('online', reconnectWhenAvailable);
+      window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
       document.removeEventListener('visibilitychange', onVisibility);
     };
