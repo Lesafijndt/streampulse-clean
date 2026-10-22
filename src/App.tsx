@@ -1629,6 +1629,17 @@ function YediHubAppContent() {
 
   const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
 
+  // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
+  // Its autoplay query is only an initial-load setting; deriving it on every render
+  // changes src when pause intent changes and makes React reload the embed mid-video.
+  const tiktokPlayerSrc = useMemo(() => (
+    currentVideo?.platform === 'tiktok'
+      ? buildTikTokPlayerUrl(currentVideo.videoId, {
+          paused: getPlaybackIntentForVideo(currentVideo.id).paused,
+        })
+      : ''
+  ), [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
+
   const recordPlaybackPosition = (videoId, seconds) => {
     const id = String(videoId || '');
     const value = Number(seconds);
@@ -3513,7 +3524,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={buildTikTokPlayerUrl(currentVideo.videoId, { paused: getPlaybackIntentForVideo(currentVideo.id).paused })}
+                        src={tiktokPlayerSrc}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
