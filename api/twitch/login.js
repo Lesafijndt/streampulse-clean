@@ -23,6 +23,6 @@ export default function handler(req, res) {
   const redirectUri = process.env.TWITCH_REDIRECT_URI || `${origin}/api/twitch/callback`;
   const state = randomBytes(32).toString('hex');
   setStateCookie(res, req, state, 600);
-  const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: 'user:read:email', state });
+  const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: 'user:read:email channel:bot', state });
   res.redirect(302, `https://id.twitch.tv/oauth2/authorize?${params.toString()}`);
 }
