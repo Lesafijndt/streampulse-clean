@@ -2,14 +2,14 @@ const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 const YOUTUBE_ORIGIN = 'https://www.youtube.com';
 const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo', 'setVolume']);
 
-/** Build a TikTok player URL that can start automatically without audio. */
+/** Build a TikTok player URL that autoplays without locking its volume controls. */
 export function buildTikTokPlayerUrl(videoId, { paused = false } = {}) {
   const id = String(videoId || '').trim();
   if (!id) return '';
-  // Muted autoplay is more reliable in browsers than relying only on a postMessage
-  // sent after onPlayerReady. The app unmutes after playback starts when appropriate.
+  // TikTok's muted=1 embed option prevents users from changing volume in the player.
+  // Keep muted=0 so its inline volume button and the host's mute/unmute commands work.
   const autoplay = paused ? 0 : 1;
-  return `https://www.tiktok.com/player/v1/${encodeURIComponent(id)}?autoplay=${autoplay}&muted=1&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`;
+  return `https://www.tiktok.com/player/v1/${encodeURIComponent(id)}?autoplay=${autoplay}&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`;
 }
 const YOUTUBE_COMMANDS = new Set(['addEventListener','playVideo','pauseVideo','mute','unMute','setVolume','seekTo','getCurrentTime','getDuration','getVolume','getPlayerState','isMuted']);
 
