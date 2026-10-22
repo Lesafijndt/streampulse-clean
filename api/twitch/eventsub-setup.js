@@ -184,8 +184,12 @@ function statusResult(subscription) {
   if (status === 'enabled') {
     return { active: true, status: 'active', message: 'Cloud chat listener is active. Requests are stored centrally even when the dashboard is closed.' };
   }
-  if (status) {
+  if (status === 'webhook_callback_verification_pending') {
     return { active: false, status: 'pending', code: 'subscription_pending', message: 'Twitch is verifying the cloud chat listener. This usually resolves shortly.' };
+  }
+  if (status) {
+    const code = 'subscription_' + status.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    return { active: false, status: 'error', code, message: `Twitch reports the cloud chat subscription is ${status}. Reload the streamer dashboard to retry setup after checking its authorizations.` };
   }
   return { active: false, status: 'inactive', code: 'not_configured', message: 'Cloud chat listener is not configured yet.' };
 }
@@ -237,10 +241,18 @@ export default async function handler(req, res) {
       const { broadcasterId, botId } = await resolveUserIds();
       const existing = await findSubscription(origin, broadcasterId, botId);
       if (String(existing?.status || '') === 'enabled') return res.status(200).json(statusResult(existing));
-      if (existing) return res.status(200).json(statusResult(existing));
+      if (String(existing?.status || '') === 'webhook_callback_verification_pending') {
+        return res.status(200).json(statusResult(existing));
+      }
 
       if (!bot.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
       const missingScope = getMissingScopeMessage(staff, bot);
+      if (missingScope) return res.status(403).json(missingScope);
+      if (existing?.id) {
+        // Remove stale failed/revoked subscriptions before retrying setup, to avoid a dead
+        // subscription permanently blocking a fresh verification attempt.
+        await twitchApi('eventsub/subscriptions?id=' + encodeURIComponent(String(existing.id)), { method: 'DELETE' });
+      }
       if (missingScope) return res.status(403).json(missingScope);
 
       // The dashboard must have its public Firebase configuration as well as Admin
