@@ -99,7 +99,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
+import { getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
 
 
 
@@ -1722,7 +1722,8 @@ function YediHubAppContent() {
       };
       if (currentTime > 0.5) {
         pendingPlaybackRestoreRef.current = { videoId, platform, currentTime, paused, muted, expiresAt };
-        recordPlaybackPosition(videoId, currentTime);
+        // Do not mark restoration complete before the player has actually sought there.
+        playbackPositionRef.current = { videoId, seconds: currentTime };
       }
       if (paused) updatePlaybackIntent(videoId, { paused: true });
       if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
@@ -2759,9 +2760,9 @@ function YediHubAppContent() {
       requestId: video.id,
       preference: initialIntent.muted === true ? 'muted' : initialIntent.muted === false ? 'unmuted' : 'auto',
     };
-    const sendCommand = (type, targetWindow = getWindow()) => {
+    const sendCommand = (type, targetWindow = getWindow(), value = null) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
-        targetWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+        targetWindow.postMessage({ type, value, 'x-tiktok-player': true }, 'https://www.tiktok.com');
       }
     };
     const handleTikTokMessage = (event) => {

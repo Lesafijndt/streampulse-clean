@@ -57,3 +57,13 @@ test('visibility restoration does not seek when no reliable playback position is
     { command: 'mute' },
   ]);
 });
+
+test('TikTok bridge forwards the target timestamp for seekTo', () => {
+  const messages = [];
+  const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
+  assert.equal(postTikTokPlayerCommand(target, 'seekTo', 42.5), true);
+  assert.deepEqual(messages[0], {
+    data: { type: 'seekTo', value: 42.5, 'x-tiktok-player': true },
+    origin: 'https://www.tiktok.com',
+  });
+});
