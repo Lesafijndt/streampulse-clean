@@ -99,7 +99,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
+import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
 
 
 
@@ -3513,7 +3513,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=0&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        src={buildTikTokPlayerUrl(currentVideo.videoId, { paused: getPlaybackIntentForVideo(currentVideo.id).paused })}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
