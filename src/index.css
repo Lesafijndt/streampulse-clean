@@ -2347,3 +2347,19 @@ body { background: #03070b; }
     justify-content: flex-start !important;
   }
 }
+
+
+/* Personal workspace builder: panel order and visibility are stored per browser. */
+.gachi-workspace {
+  grid-template-columns: var(--workspace-grid-columns, minmax(220px, 19vw) minmax(0, 1fr) minmax(330px, 28vw)) !important;
+  grid-template-areas: var(--workspace-grid-areas, "queue player stats") !important;
+}
+.gachi-workspace > .gachi-side-rail { grid-area: stats !important; min-width: 0; }
+.gachi-workspace > .gachi-player-column { grid-area: player !important; min-width: 0; }
+.gachi-workspace > .gachi-queue-column { grid-area: queue !important; min-width: 0; }
+@media (max-width: 1199px) {
+  .gachi-workspace {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas: var(--workspace-mobile-areas, "queue" "player" "stats") !important;
+  }
+}
