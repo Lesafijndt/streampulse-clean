@@ -323,6 +323,13 @@ function parseModVolumeCommand(rawText) {
   return { action: 'set', value: Math.max(0, Math.min(100, Number(value))) };
 }
 
+function formatTechnicalTimestamp(value) {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? new Date(timestamp).toLocaleString()
+    : 'Not recorded yet';
+}
+
 function isStaffRole(role) {
   return role === 'streamer' || role === 'moderator';
 }
@@ -339,7 +346,14 @@ function YediHubAppContent() {
   const [auth, setAuth] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
-  const [cloudChatListener, setCloudChatListener] = useState({ status: 'checking', active: false, code: '', message: 'Checking cloud chat listener…' });
+  const [cloudChatListener, setCloudChatListener] = useState({
+    status: 'checking', active: false, code: '', message: 'Checking cloud chat listener…',
+    subscriptionStatus: 'unknown', healthDiagnosticCode: '', healthDiagnosticMessage: '',
+    firebaseAdminConfigured: null, firebaseWebConfigConfigured: null,
+    lastWebhookAt: 0, lastWebhookStatus: 'unknown', lastWriteAt: 0, lastWriteStatus: 'unknown',
+    lastProcessingError: '', lastProcessingErrorAt: 0, lastProcessingStatus: 'unknown',
+    queueVersion: 0, queueUpdatedAt: 0,
+  });
   const cloudChatListenerReadyRef = useRef(false);
   const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const networkOnlineRef = useRef(networkOnline);
@@ -465,6 +479,13 @@ function YediHubAppContent() {
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
   );
   const [connectionDetailsExpanded, setConnectionDetailsExpanded] = useState(false);
+  // The moderator is the technical operator of this setup, so keep diagnostics visible
+  // for paim_beach_pete without adding noisy infrastructure controls to the streamer view.
+  useEffect(() => {
+    if (twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete') {
+      setConnectionDetailsExpanded(true);
+    }
+  }, [twitchAuth.authenticated, twitchAuth.username]);
   const [topMenuOpen, setTopMenuOpen] = useState(false);
   const topMenuRef = useRef(null);
   useEffect(() => {
@@ -815,6 +836,20 @@ function YediHubAppContent() {
           message: String(result.message || (active
             ? 'Cloud chat listener is active. Requests save even when the dashboard is closed.'
             : 'Cloud chat listener is not active yet.')),
+          subscriptionStatus: String(result.subscriptionStatus || (result.active === true ? 'enabled' : 'unknown')),
+          healthDiagnosticCode: String(result.healthDiagnosticCode || ''),
+          healthDiagnosticMessage: String(result.healthDiagnosticMessage || ''),
+          firebaseAdminConfigured: typeof result.firebaseAdminConfigured === 'boolean' ? result.firebaseAdminConfigured : null,
+          firebaseWebConfigConfigured: typeof result.firebaseWebConfigConfigured === 'boolean' ? result.firebaseWebConfigConfigured : null,
+          lastWebhookAt: Number(result.lastWebhookAt) || 0,
+          lastWebhookStatus: String(result.lastWebhookStatus || 'unknown'),
+          lastWriteAt: Number(result.lastWriteAt) || 0,
+          lastWriteStatus: String(result.lastWriteStatus || 'unknown'),
+          lastProcessingError: String(result.lastProcessingError || ''),
+          lastProcessingErrorAt: Number(result.lastProcessingErrorAt) || 0,
+          lastProcessingStatus: String(result.lastProcessingStatus || 'unknown'),
+          queueVersion: Number(result.queueVersion) || 0,
+          queueUpdatedAt: Number(result.queueUpdatedAt) || 0,
         });
       } catch (error) {
         if (cancelled) return;
@@ -4047,6 +4082,55 @@ function YediHubAppContent() {
               <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'}</div>
             </div>
           </div>
+        )}
+
+        {twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete' && (
+          <section className="mt-2 w-full rounded-xl border border-cyan-500/25 bg-[#070c14] p-3 sm:p-4" aria-label="Moderator technical diagnostics">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-cyan-300" />
+                <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">Technical diagnostics</h3>
+              </div>
+              <span className="rounded-md border border-cyan-500/20 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-200/80">Moderator view · read only · refreshes every 25s</span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="min-w-0">
+                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firebase auth / sync</div>
+                <div className={cloudSynced ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>{firebaseLoginToken ? (cloudSynced ? 'Custom token issued · Firestore connected' : syncStatusText) : syncStatusText}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Twitch EventSub subscription</div>
+                <div className={cloudChatListener.active ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>
+                  {cloudChatListener.subscriptionStatus || cloudChatListener.status || 'Checking'}{cloudChatListener.active ? ' · healthy' : ' · intake not verified'}
+                </div>
+                <div className="mt-1 break-words text-[10px] text-slate-500">Latest webhook: {formatTechnicalTimestamp(cloudChatListener.lastWebhookAt)}</div>
+                <div className="mt-1 break-words text-[10px] text-slate-500">Webhook persistence: {cloudChatListener.lastWebhookStatus || 'unknown'}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firestore writes</div>
+                <div className={cloudChatListener.lastWriteStatus === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : 'mt-1 text-[11px] font-bold text-amber-200'}>{cloudChatListener.lastWriteStatus || 'unknown'}</div>
+                <div className="mt-1 break-words text-[10px] text-slate-500">Last successful queue write: {formatTechnicalTimestamp(cloudChatListener.lastWriteAt)}</div>
+                <div className="mt-1 text-[10px] text-slate-500">Queue version: {cloudChatListener.queueVersion || 0}{cloudChatListener.queueUpdatedAt ? ' · updated ' + formatTechnicalTimestamp(cloudChatListener.queueUpdatedAt) : ''}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Backend configuration</div>
+                <div className="mt-1 break-words text-[10px] text-slate-200">Firebase Admin: {typeof cloudChatListener.firebaseAdminConfigured !== 'boolean' ? 'checking' : cloudChatListener.firebaseAdminConfigured ? 'configured' : 'missing'}</div>
+                <div className="mt-1 break-words text-[10px] text-slate-200">Firebase web config: {typeof cloudChatListener.firebaseWebConfigConfigured !== 'boolean' ? 'checking' : cloudChatListener.firebaseWebConfigConfigured ? 'configured' : 'missing'}</div>
+              </div>
+            </div>
+            {(cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError) && (
+              <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                <div className="text-[9px] font-black uppercase tracking-wider text-amber-200">Actionable diagnostic</div>
+                <div className="mt-1 break-words font-mono text-[10px] text-amber-100">Code: {cloudChatListener.healthDiagnosticCode || cloudChatListener.code || 'processing_error'}</div>
+                <div className="mt-1 break-words text-[11px] text-slate-200">{cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError || cloudChatListener.message}</div>
+                {cloudChatListener.lastProcessingError && cloudChatListener.healthDiagnosticMessage && (
+                  <div className="mt-1 break-words text-[10px] text-slate-400">Last processor error: {cloudChatListener.lastProcessingError}</div>
+                )}
+                {cloudChatListener.lastProcessingErrorAt > 0 && <div className="mt-1 text-[10px] text-slate-500">Last processor error at: {formatTechnicalTimestamp(cloudChatListener.lastProcessingErrorAt)}</div>}
+                {cloudChatListener.lastProcessingStatus !== 'unknown' && <div className="mt-1 text-[10px] text-slate-500">Processor status: {cloudChatListener.lastProcessingStatus}</div>}
+              </div>
+            )}
+          </section>
         )}
       </header>
 

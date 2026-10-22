@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { getFirebaseAdminDb, getFirebaseNamespace } from '../_lib/firebase-admin.js';
+import { classifyFirebaseHealthError } from '../_lib/firebase-health-diagnostic.js';
 import { waitUntil } from '@vercel/functions';
 import { processPendingEventSubChatMessages } from '../_lib/cloud-chat-requests.js';
 
@@ -314,13 +315,23 @@ export default async function handler(req, res) {
       const db = await getFirebaseAdminDb();
       roomSettingsSnapshot = await db.doc('artifacts/' + getFirebaseNamespace() + '/public/data/room_settings/' + STREAMER_LOGIN).get();
     } catch (error) {
-      console.error('Cloud chat listener Firestore health check failed:', String(error?.message || error).slice(0, 400));
+      const diagnostic = classifyFirebaseHealthError(error);
+      const firebaseAdminConfigured = Boolean(String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim());
+      const firebaseWebConfigConfigured = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID']
+        .every((key) => Boolean(String(process.env[key] || '').trim()));
+      console.error('Cloud chat listener Firestore health check failed:', { code: diagnostic.code, message: diagnostic.message });
       return res.status(200).json({
         ...currentStatus,
+        subscriptionStatus: String(currentStatus.status || 'unknown'),
         active: false,
         status: 'error',
         code: 'firebase_unavailable',
-        message: 'Twitch subscription status was found, but Firestore health could not be checked. Cloud queue writes may be unavailable.',
+        healthDiagnosticCode: diagnostic.code,
+        healthDiagnosticMessage: diagnostic.message,
+        firebaseAdminConfigured,
+        firebaseWebConfigConfigured,
+        lastWriteStatus: 'unknown',
+        message: 'Twitch subscription was found, but the Firestore health check failed. Shared queue requests may not save until this is fixed.',
       });
     }
     const roomSettings = roomSettingsSnapshot?.exists ? roomSettingsSnapshot.data() : {};
@@ -337,7 +348,18 @@ export default async function handler(req, res) {
       lastWriteAt: lastWriteAt || null,
       lastWebhookAt: lastWebhookAt || null,
       lastWriteStatus: String(health.lastWriteStatus || 'unknown'),
+      lastWebhookStatus: String(health.lastWebhookStatus || 'unknown'),
       lastProcessingError: String(health.lastProcessingError || '').slice(0, 180),
+      lastProcessingErrorAt: Number(health.lastProcessingErrorAt) || null,
+      lastProcessingStatus: String(health.lastProcessingStatus || 'unknown'),
+      queueVersion: Number(roomSettings.queueVersion) || 0,
+      queueUpdatedAt: Number(roomSettings.queueUpdatedAt) || null,
+      subscriptionStatus: String(currentStatus.status || 'unknown'),
+      healthDiagnosticCode: '',
+      healthDiagnosticMessage: '',
+      firebaseAdminConfigured: Boolean(String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim()),
+      firebaseWebConfigConfigured: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID']
+        .every((key) => Boolean(String(process.env[key] || '').trim())),
       message: currentStatus.message + healthMessage +
         (health.lastProcessingError ? ' Last processing error: ' + String(health.lastProcessingError).slice(0, 140) : ''),
     };

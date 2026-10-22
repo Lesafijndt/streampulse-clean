@@ -20,7 +20,7 @@ Only the Twitch accounts below are allowed to sign in to the dashboard:
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. Only `2o3a` runs the local IRC command bridge and owns automatic playback advance. Cloud chat request intake runs through Twitch EventSub after the one-time setup in the dashboard's **Cloud chat intake** connection status. Until that status says active, request capture can still depend on the streamer dashboard being open.
+The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. Only `2o3a` runs the local IRC command bridge and owns automatic playback advance. Cloud chat request intake runs through Twitch EventSub after the one-time setup in the dashboard's **Cloud chat intake** connection status. Until that status says active, request capture can still depend on the streamer dashboard being open. The moderator account `paim_beach_pete` also gets an expanded, read-only **Technical diagnostics** panel with safe Firebase/EventSub diagnostics, last webhook and successful queue-write times, queue version, and configuration-presence checks; secret values are never shown.
 
 ## Chat commands
 
