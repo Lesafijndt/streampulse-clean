@@ -1,6 +1,7 @@
 import { normalizeActivityEvent } from '../src/activityLog.js';
 
 const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
+const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const DEFAULT_APP_ID = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
 
 function parseCookies(header = '') {
@@ -38,8 +39,9 @@ async function validateStaff(req, res) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!clientId) return { error: 'Twitch authentication is not configured.', status: 503 };
   const cookies = parseCookies(req.headers.cookie);
-  let accessToken = cookies.yedi_twitch_access;
-  if (!accessToken) return { error: 'Sign in as an approved staff account first.', status: 401 };
+  let accessToken = cookies.yedi_twitch_access || '';
+  let refreshToken = cookies.yedi_twitch_refresh || '';
+  if (!accessToken && !refreshToken) return { error: 'Sign in as an approved staff account first.', status: 401 };
 
   const validate = async (token) => {
     const response = await fetch('https://id.twitch.tv/oauth2/validate', {
@@ -51,17 +53,22 @@ async function validateStaff(req, res) {
   };
 
   let identity = null;
-  try { identity = await validate(accessToken); }
-  catch { return { error: 'Twitch authentication could not be checked. Retry shortly.', status: 502 }; }
+  try {
+    if (accessToken) identity = await validate(accessToken);
+  } catch {
+    return { error: 'Twitch authentication could not be checked. Retry shortly.', status: 502 };
+  }
 
-  if (!identity && cookies.yedi_twitch_refresh && process.env.TWITCH_CLIENT_SECRET) {
+  // Access cookies expire with the short-lived token. A surviving remember-me
+  // cookie must still be able to restore the session for activity reads and writes.
+  if (!identity && refreshToken && process.env.TWITCH_CLIENT_SECRET) {
     try {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           grant_type: 'refresh_token',
-          refresh_token: cookies.yedi_twitch_refresh,
+          refresh_token: refreshToken,
           client_id: clientId,
           client_secret: process.env.TWITCH_CLIENT_SECRET
         }),
@@ -70,8 +77,7 @@ async function validateStaff(req, res) {
       const refreshed = await refreshResponse.json().catch(() => ({}));
       if (refreshResponse.ok && refreshed.access_token) {
         accessToken = refreshed.access_token;
-        setAuthCookie(res, 'yedi_twitch_access', refreshed.access_token, Math.min(Number(refreshed.expires_in) || 14400, 14400));
-        if (refreshed.refresh_token) setAuthCookie(res, 'yedi_twitch_refresh', refreshed.refresh_token, 60 * 60 * 24 * 30);
+        if (refreshed.refresh_token) refreshToken = refreshed.refresh_token;
         identity = await validate(accessToken);
       } else {
         clearAuthCookies(res);
@@ -83,9 +89,14 @@ async function validateStaff(req, res) {
 
   const login = String(identity?.login || '').toLowerCase();
   if (!identity || identity.client_id !== clientId || !ALLOWED_STAFF.has(login)) {
-    if (!identity) clearAuthCookies(res);
+    clearAuthCookies(res);
     return { error: 'An approved Twitch staff session is required.', status: 401 };
   }
+
+  // Keep the short-lived access cookie and extend the persistent refresh cookie
+  // consistently with /api/twitch/session.
+  setAuthCookie(res, 'yedi_twitch_access', accessToken, Math.max(1, Math.min(Number(identity.expires_in) || 14400, 14400)));
+  if (refreshToken) setAuthCookie(res, 'yedi_twitch_refresh', refreshToken, REMEMBERED_SESSION_MAX_AGE);
   return { login };
 }
 
