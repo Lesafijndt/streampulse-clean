@@ -133,6 +133,35 @@ async function getAdminFirestore() {
   return getFirestore(app);
 }
 
+
+export function classifyActivityStorageError(error) {
+  const message = String(error?.message || '');
+  const code = String(error?.code ?? '').toLowerCase();
+
+  if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured/i.test(message)) return 'missing_service_account';
+  if (/not valid JSON or base64 JSON|must be a JSON object|missing the '(?:project_id|client_email|private_key)' field/i.test(message)) {
+    return 'invalid_service_account_config';
+  }
+  if (/private.?key|PEM|invalid_grant|invalid jwt|credential|signBlob/i.test(message)) {
+    return 'invalid_service_account_credentials';
+  }
+  if (/permission-denied|permission denied|missing or insufficient permissions/i.test(message) ||
+      ['7', 'permission-denied'].includes(code)) return 'firestore_permission_denied';
+  if (/API has not been used|serviceusage.*disabled|firestore.*disabled/i.test(message)) {
+    return 'firestore_api_disabled';
+  }
+  if (/ERR_REQUIRE_ESM|Cannot find package|Cannot find module|ERR_MODULE_NOT_FOUND/i.test(message)) {
+    return 'firebase_admin_import_failed';
+  }
+  if (/UNAVAILABLE|DEADLINE_EXCEEDED|ETIMEDOUT|ECONNRESET|ENOTFOUND|network/i.test(message) ||
+      ['14', 'unavailable', 'deadline-exceeded'].includes(code)) return 'firestore_temporarily_unavailable';
+  if (/NOT_FOUND|not found|does not exist/i.test(message) ||
+      ['5', 'not-found'].includes(code)) return 'firestore_project_or_resource_not_found';
+
+  const safeCode = code.replace(/[^a-z0-9/_-]/g, '').slice(0, 48);
+  return safeCode ? `firebase_error_${safeCode}` : 'unknown_storage_error';
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Vary', 'Cookie');
@@ -187,7 +216,11 @@ export default async function handler(req, res) {
     });
     return res.status(200).json({ ok: true, duplicate: result.duplicate });
   } catch (error) {
-    console.error('Activity log API failed:', error?.message || error);
-    return res.status(503).json({ error: 'Activity log storage is temporarily unavailable.' });
+    const diagnostic = classifyActivityStorageError(error);
+    console.error('Activity log API failed:', diagnostic, error?.message || error);
+    return res.status(503).json({
+      error: 'Activity log storage is temporarily unavailable.',
+      diagnostic,
+    });
   }
 }
