@@ -1601,7 +1601,7 @@ function YediHubAppContent() {
 
   const getPlaybackIntentForVideo = (videoId) => {
     const id = String(videoId || '');
-    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-' + id);
+    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v2-' + id);
     const current = playbackIntentRef.current;
     if (current.videoId === id && current.storageKey === storageKey) return current;
     let saved = null;
@@ -1666,18 +1666,15 @@ function YediHubAppContent() {
     keyboardPausedRef.current = { videoId, paused: intent.paused };
   }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
 
-  // A hidden tab may suspend/recreate provider iframes. Remember the state before it
-  // happens and restore pause/audio only; never issue play when the tab becomes visible.
+  // A hidden tab may suspend/recreate provider iframes. Preserve deliberate pauses,
+  // but resume media that was playing before the tab was hidden.
   useEffect(() => {
     if (!currentVideo) return undefined;
     const videoId = String(currentVideo.id);
     const platform = currentVideo.platform;
     const restoreOnReturn = () => {
       if (document.visibilityState === 'hidden') {
-        let intent = getPlaybackIntentForVideo(videoId);
-        if (platform === 'youtube' && youtubePlaybackInfoRef.current.playerState === 2) {
-          intent = updatePlaybackIntent(videoId, { paused: true });
-        }
+        const intent = getPlaybackIntentForVideo(videoId);
         const tiktokPreference = tiktokMutePreferenceRef.current.requestId === videoId
           ? tiktokMutePreferenceRef.current.preference
           : 'auto';
@@ -1699,7 +1696,6 @@ function YediHubAppContent() {
           : knownPosition;
         recordPlaybackPosition(videoId, currentTime);
         const paused = intent.paused ||
-          (platform === 'youtube' && youtubePlaybackInfoRef.current.playerState === 2) ||
           (platform === 'tiktok' && keyboardPausedRef.current.videoId === videoId && keyboardPausedRef.current.paused);
         playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted, currentTime };
         if (paused) updatePlaybackIntent(videoId, { paused: true });
@@ -2669,7 +2665,7 @@ function YediHubAppContent() {
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
-      postCommand(intent.paused ? 'pauseVideo' : 'playVideo');
+      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
       if (intent.muted === true) postCommand('mute');
       else if (intent.muted === false) postCommand('unMute');
     };
@@ -2713,8 +2709,12 @@ function YediHubAppContent() {
         const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
           restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
         if (stateFromEvent === 2) {
-          updatePlaybackIntent(videoId, { paused: true });
-          keyboardPausedRef.current = { videoId, paused: true };
+          // Providers can report a synthetic pause when the browser backgrounds an iframe.
+          // Do not persist that as the viewer's deliberate pause preference.
+          if (document.visibilityState !== 'hidden') {
+            updatePlaybackIntent(videoId, { paused: true });
+            keyboardPausedRef.current = { videoId, paused: true };
+          }
         } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
           // Consume this one transient resume event only. Do not keep rejecting
           // explicit Play clicks for the remainder of a long visibility guard.
@@ -2783,9 +2783,10 @@ function YediHubAppContent() {
         const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
           ? pending.currentTime
           : known;
-        if (intent.paused) sendCommand('pause');
+        const deferPlaybackUntilVisible = document.visibilityState === 'hidden';
+        if (intent.paused || deferPlaybackUntilVisible) sendCommand('pause');
         if (restoreSeconds > 0.5) sendCommand('seekTo', tiktokIframeRef.current?.contentWindow, restoreSeconds);
-        if (!intent.paused) sendCommand('play');
+        if (!intent.paused && !deferPlaybackUntilVisible) sendCommand('play');
         if (intent.muted === true) sendCommand('mute');
         else if (intent.muted === false) sendCommand('unMute');
       } else if (data.type === 'onMute' && typeof data.value === 'boolean') {
@@ -2813,8 +2814,11 @@ function YediHubAppContent() {
         const suppressUnexpectedResume = state === 1 && intent.paused &&
           restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
         if (state === 2) {
-          updatePlaybackIntent(videoId, { paused: true });
-          keyboardPausedRef.current = { videoId, paused: true };
+          // Ignore a pause caused by the embed being suspended with the hidden tab.
+          if (document.visibilityState !== 'hidden') {
+            updatePlaybackIntent(videoId, { paused: true });
+            keyboardPausedRef.current = { videoId, paused: true };
+          }
         } else if (state === 1 && suppressUnexpectedResume) {
           // Consume this one transient resume event only; native player clicks
           // after tab return must work immediately.
@@ -3496,7 +3500,7 @@ function YediHubAppContent() {
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
-                        send(intent.paused ? 'pauseVideo' : 'playVideo');
+                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
                         if (intent.muted === true) send('mute');
                         else if (intent.muted === false) send('unMute');
                       }}

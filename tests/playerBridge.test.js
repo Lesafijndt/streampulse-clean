@@ -25,9 +25,9 @@ test('visibility restoration keeps a paused YouTube video paused and restores it
   assert.deepEqual(getVisibilityRestoreCommands('youtube', { paused: true, muted: true }), ['pauseVideo', 'mute']);
 });
 
-test('visibility restoration does not send play when returning to a tab', () => {
-  assert.deepEqual(getVisibilityRestoreCommands('youtube', { paused: false, muted: false }), ['unMute']);
-  assert.deepEqual(getVisibilityRestoreCommands('tiktok', { paused: false, muted: false }), ['unMute']);
+test('visibility restoration resumes playback only when the viewer had not paused it', () => {
+  assert.deepEqual(getVisibilityRestoreCommands('youtube', { paused: false, muted: false }), ['playVideo', 'unMute']);
+  assert.deepEqual(getVisibilityRestoreCommands('tiktok', { paused: false, muted: false }), ['play', 'unMute']);
 });
 
 test('TikTok visibility restoration honors explicit mute and pause preferences', () => {
@@ -43,10 +43,26 @@ test('visibility restoration seeks YouTube to the previous timestamp before re-p
   ]);
 });
 
-test('visibility restoration uses TikTok seekTo seconds and keeps it paused and muted', () => {
+test('visibility restoration uses TikTok seekTo seconds and keeps a paused video paused and muted', () => {
   assert.deepEqual(getVisibilityRestoreActions('tiktok', { paused: true, muted: true, currentTime: 21 }), [
     { command: 'pause' },
     { command: 'seekTo', value: 21 },
+    { command: 'mute' },
+  ]);
+});
+
+test('visibility restoration seeks and resumes an actively playing YouTube video', () => {
+  assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: false, muted: false, currentTime: 83.25 }), [
+    { command: 'seekTo', args: [83.25, true] },
+    { command: 'playVideo' },
+    { command: 'unMute' },
+  ]);
+});
+
+test('visibility restoration seeks and resumes an actively playing TikTok video', () => {
+  assert.deepEqual(getVisibilityRestoreActions('tiktok', { paused: false, muted: true, currentTime: 21 }), [
+    { command: 'seekTo', value: 21 },
+    { command: 'play' },
     { command: 'mute' },
   ]);
 });

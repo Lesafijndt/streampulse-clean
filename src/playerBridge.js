@@ -17,15 +17,17 @@ export function postYouTubePlayerCommand(target, command, args = []) {
 
 
 /**
- * Restore only the state the viewer had before the tab was hidden.
- * Intentionally never returns a play command: returning to a tab must not
- * restart media that the viewer paused.
+ * Restore the viewer's previous play/pause and audio state after a tab switch.
+ * A video that was playing should resume; a deliberate pause stays paused.
  */
 export function getVisibilityRestoreCommands(platform, { paused = false, muted = null } = {}) {
   const commands = [];
   if (paused) {
     if (platform === 'youtube') commands.push('pauseVideo');
     else if (platform === 'tiktok') commands.push('pause');
+  } else {
+    if (platform === 'youtube') commands.push('playVideo');
+    else if (platform === 'tiktok') commands.push('play');
   }
   if (muted === true) commands.push('mute');
   else if (muted === false) commands.push(platform === 'youtube' ? 'unMute' : platform === 'tiktok' ? 'unMute' : '');
@@ -46,6 +48,11 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
   if (Number.isFinite(seconds) && seconds > 0.5) {
     if (platform === 'youtube') actions.push({ command: 'seekTo', args: [seconds, true] });
     else if (platform === 'tiktok') actions.push({ command: 'seekTo', value: seconds });
+  }
+  // Seek first, then resume videos that were active before the tab switch.
+  if (!paused) {
+    if (platform === 'youtube') actions.push({ command: 'playVideo' });
+    else if (platform === 'tiktok') actions.push({ command: 'play' });
   }
   if (muted === true) actions.push({ command: 'mute' });
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
