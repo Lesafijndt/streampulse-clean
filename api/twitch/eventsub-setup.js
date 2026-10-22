@@ -214,12 +214,6 @@ export default async function handler(req, res) {
   const staff = await loadUserSession(req, res, 'staff');
   if (!staff.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: staff.code, message: 'Sign in as an approved staff account to check cloud chat setup.' });
   const bot = await loadUserSession(req, res, 'bot');
-  if (!bot.ok) {
-    // A working subscription is still useful to report even if the bot's local browser cookie expired.
-    if (req.method === 'POST') {
-      return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
-    }
-  }
 
   if (req.method === 'POST') {
     let origin;
@@ -245,6 +239,7 @@ export default async function handler(req, res) {
       if (String(existing?.status || '') === 'enabled') return res.status(200).json(statusResult(existing));
       if (existing) return res.status(200).json(statusResult(existing));
 
+      if (!bot.ok) return res.status(401).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 to configure cloud chat capture.' });
       const missingScope = getMissingScopeMessage(staff, bot);
       if (missingScope) return res.status(403).json(missingScope);
 
@@ -295,6 +290,19 @@ export default async function handler(req, res) {
       if (missingScope) return res.status(200).json(missingScope);
     } else {
       return res.status(200).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 and grant the new chat-reading permissions to enable cloud requests.' });
+    }
+    // Distinguish an incomplete EventSub setup from missing server-side Firebase access.
+    try {
+      const db = getFirebaseAdminDb();
+      await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
+    } catch (error) {
+      console.error('Cloud chat listener Firestore health check failed:', String(error?.message || error).slice(0, 400));
+      return res.status(200).json({
+        active: false,
+        status: 'error',
+        code: 'firebase_unavailable',
+        message: 'Cloud chat capture cannot start because Firestore is unavailable. Check Firebase service-account configuration, access, and quota.',
+      });
     }
     return res.status(200).json(currentStatus);
   } catch (error) {
