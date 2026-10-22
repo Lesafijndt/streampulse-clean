@@ -37,13 +37,15 @@ export function getVisibilityRestoreCommands(platform, { paused = false, muted =
 export function getVisibilityRestoreActions(platform, { paused = false, muted = null, currentTime = 0 } = {}) {
   const actions = [];
   const seconds = Number(currentTime);
-  if (Number.isFinite(seconds) && seconds > 0.5) {
-    if (platform === 'youtube') actions.push({ command: 'seekTo', args: [seconds, true] });
-    else if (platform === 'tiktok') actions.push({ command: 'seekTo', value: seconds });
-  }
+  // Pause first so seeking after an iframe resumes from an unstarted state does not
+  // briefly start playback when the viewer explicitly left it paused.
   if (paused) {
     if (platform === 'youtube') actions.push({ command: 'pauseVideo' });
     else if (platform === 'tiktok') actions.push({ command: 'pause' });
+  }
+  if (Number.isFinite(seconds) && seconds > 0.5) {
+    if (platform === 'youtube') actions.push({ command: 'seekTo', args: [seconds, true] });
+    else if (platform === 'tiktok') actions.push({ command: 'seekTo', value: seconds });
   }
   if (muted === true) actions.push({ command: 'mute' });
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });

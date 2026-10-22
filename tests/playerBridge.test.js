@@ -37,16 +37,16 @@ test('TikTok visibility restoration honors explicit mute and pause preferences',
 
 test('visibility restoration seeks YouTube to the previous timestamp before re-pausing', () => {
   assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: true, muted: false, currentTime: 83.25 }), [
-    { command: 'seekTo', args: [83.25, true] },
     { command: 'pauseVideo' },
+    { command: 'seekTo', args: [83.25, true] },
     { command: 'unMute' },
   ]);
 });
 
 test('visibility restoration uses TikTok seekTo seconds and keeps it paused and muted', () => {
   assert.deepEqual(getVisibilityRestoreActions('tiktok', { paused: true, muted: true, currentTime: 21 }), [
-    { command: 'seekTo', value: 21 },
     { command: 'pause' },
+    { command: 'seekTo', value: 21 },
     { command: 'mute' },
   ]);
 });

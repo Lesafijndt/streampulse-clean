@@ -2664,6 +2664,7 @@ function YediHubAppContent() {
       const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
         ? pending.currentTime
         : known;
+      if (intent.paused) postCommand('pauseVideo');
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
@@ -2778,8 +2779,9 @@ function YediHubAppContent() {
         const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
           ? pending.currentTime
           : known;
+        if (intent.paused) sendCommand('pause');
         if (restoreSeconds > 0.5) sendCommand('seekTo', tiktokIframeRef.current?.contentWindow, restoreSeconds);
-        sendCommand(intent.paused ? 'pause' : 'play');
+        if (!intent.paused) sendCommand('play');
         if (intent.muted === true) sendCommand('mute');
         else if (intent.muted === false) sendCommand('unMute');
       } else if (data.type === 'onMute' && typeof data.value === 'boolean') {
@@ -3482,10 +3484,11 @@ function YediHubAppContent() {
                         const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
                           ? pending.currentTime
                           : known;
+                        const intent = getPlaybackIntentForVideo(currentVideo.id);
+                        if (intent.paused) send('pauseVideo');
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
-                        const intent = getPlaybackIntentForVideo(currentVideo.id);
                         send(intent.paused ? 'pauseVideo' : 'playVideo');
                         if (intent.muted === true) send('mute');
                         else if (intent.muted === false) send('unMute');
