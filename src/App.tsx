@@ -1160,7 +1160,7 @@ function YediHubAppContent() {
           const cloudConfirmed = !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites;
           setCloudSynced(cloudConfirmed);
           setSyncStatusText(snapshot.metadata.fromCache
-            ? 'Offline cache — changes may not be synced'
+            ? (networkOnlineRef.current ? 'Checking cloud connection…' : 'Offline cache — local save active')
             : snapshot.metadata.hasPendingWrites
             ? 'Syncing queue changes…'
             : 'Cloud Synced');
@@ -4269,7 +4269,7 @@ function YediHubAppContent() {
 
               {[
                 { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow direct video links, !assr Twitch requests, and web submissions' },
-                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
+                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next video when playback ends where supported' }
               ].map((item) => (
                 <label
                   key={item.key}
