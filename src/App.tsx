@@ -102,6 +102,7 @@ import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
+import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
 
 
 
@@ -304,11 +305,9 @@ const KNOWN_CHAT_BOTS = new Set([
   'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
-// Treat a message consisting of a supported video URL as a request even without !assr.
+// Accept direct media links even when chat includes surrounding text or punctuation.
 function isSupportedMediaUrlMessage(rawText = '') {
-  const candidate = String(rawText || '').trim();
-  if (!candidate || /\s/.test(candidate)) return false;
-  return /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|m\.youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\/\S+$/i.test(candidate);
+  return Boolean(extractSupportedMediaUrl(rawText));
 }
 
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
@@ -2127,62 +2126,61 @@ function YediHubAppContent() {
 
       ws.onmessage = (event) => {
         if (ircSocketRef.current !== ws) return;
-        const raw = String(event.data || '');
-        if (raw.startsWith('PING')) {
-          ws.send('PONG :tmi.twitch.tv');
-          return;
-        }
 
-        if (!raw.includes('PRIVMSG')) return;
-        const msgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
-        const badgesMatch = raw.match(/badges=([^;]*)/);
-        const moderatorMatch = raw.match(/(?:^|;)mod=([01])/);
-        const tagsMatch = raw.match(/^@([^ ]+) /);
-        const tagMap = Object.fromEntries((tagsMatch?.[1] || '').split(';').filter(Boolean).map((tag) => {
-          const separator = tag.indexOf('=');
-          return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
-        }));
-        const prefixLogin = raw.match(/^@[^ ]+ :([^!]+)/)?.[1] || raw.match(/^:([^!]+)/)?.[1] || '';
-        const username = String(tagMap['display-name'] || prefixLogin || 'Viewer');
-        const voterLogin = normalizeTwitchLogin(prefixLogin || username);
-        const text = msgMatch ? msgMatch[1].trim() : '';
-        const usernameKey = voterLogin || normalizeTwitchLogin(username);
-        const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
-        if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
+        // A single WebSocket frame can contain multiple IRC lines. Handling the
+        // frame as one string dropped all but its first PRIVMSG (and could drop
+        // messages after a PING), which made requests appear intermittently flaky.
+        for (const raw of splitTwitchIrcFrame(event.data)) {
+          if (/^PING(?:\s|$)/.test(raw)) {
+            ws.send('PONG :tmi.twitch.tv');
+            continue;
+          }
 
-        const badges = (badgesMatch?.[1] || '').split(',').map((badge) => badge.split('/')[0]);
-        const role = badges.includes('broadcaster')
-          ? 'streamer'
-          : (moderatorMatch?.[1] === '1' || badges.includes('moderator'))
-          ? 'moderator'
-          : badges.includes('vip')
-          ? 'vip'
-          : badges.includes('subscriber')
-          ? 'subscriber'
-          : 'viewer';
-        const lowerText = text.toLowerCase();
-        const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
-        const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
-        const volumeCommand = parseModVolumeCommand(lowerText);
-        if (isRequestCommand || isDirectVideoUrl) {
-          handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
-        } else if (lowerText === '!remove' || lowerText === '!unrequest') {
-          handleRemoveOwnRequestRef.current?.(voterLogin || username);
-        } else if (lowerText === '!queue') {
-          handleQueueSummaryRef.current?.(voterLogin || username);
-        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
-          handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
-        } else if (lowerText === '!help') {
-          sendTwitchChatReply('Request: !assr <YouTube title or URL> · direct URLs: YouTube, TikTok, Twitch Clips, Kick. Queue must be open.');
-          sendTwitchChatReply('Your requests: !remove / !unrequest (remove your latest waiting request) · !when / !position (spot and ETA) · !queue (queue status).');
-          sendTwitchChatReply('Vote: !bigcock [#] (upvote a waiting request; not your own, one vote per video). Players auto-advance at the end when supported.');
-          sendTwitchChatReply('Mods: !skip · YouTube volume: !volume up/down/0-100, !volup, !voldown, !mute, !unmute. TikTok/Twitch Clip volume uses player controls.');
-        } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
-          handleQueuePositionRef.current?.(voterLogin || usernameKey);
-        } else if (lowerText === '!skip' && isStaffRole(role)) {
-          handleSkipNextRef.current?.();
-        } else if (volumeCommand && isStaffRole(role)) {
-          handleVolumeCommandRef.current?.(volumeCommand, role);
+          const message = parseTwitchPrivmsgLine(raw);
+          if (!message) continue;
+          const { tags: tagMap, login, text: rawText } = message;
+          const username = String(tagMap['display-name'] || login || 'Viewer');
+          const voterLogin = normalizeTwitchLogin(login || username);
+          const text = String(rawText || '').trim();
+          const usernameKey = voterLogin || normalizeTwitchLogin(username);
+          const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
+          if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) continue;
+
+          const badges = String(tagMap.badges || '').split(',').filter(Boolean).map((badge) => badge.split('/')[0]);
+          const role = badges.includes('broadcaster')
+            ? 'streamer'
+            : (tagMap.mod === '1' || badges.includes('moderator'))
+            ? 'moderator'
+            : badges.includes('vip')
+            ? 'vip'
+            : badges.includes('subscriber')
+            ? 'subscriber'
+            : 'viewer';
+          const lowerText = text.toLowerCase();
+          const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
+          const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
+          const volumeCommand = parseModVolumeCommand(lowerText);
+          if (isRequestCommand || isDirectVideoUrl) {
+            handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
+          } else if (lowerText === '!remove' || lowerText === '!unrequest') {
+            handleRemoveOwnRequestRef.current?.(voterLogin || username);
+          } else if (lowerText === '!queue') {
+            handleQueueSummaryRef.current?.(voterLogin || username);
+          } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
+            handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
+          } else if (lowerText === '!help') {
+            sendTwitchChatReply('Request: post a YouTube, TikTok, Twitch Clip or Kick link anywhere in chat, or use !assr <URL or YouTube title>. Queue must be open.');
+            sendTwitchChatReply('Your requests: !remove / !unrequest removes your latest waiting request. !when / !position / !myqueue / !queueposition shows your spot and ETA.');
+            sendTwitchChatReply('Queue & votes: !queue shows what is playing and what is next. !bigcock [#] upvotes a waiting item by position (not your own; one vote per item).');
+            sendTwitchChatReply('Mods: !skip. YouTube volume: !volume up/down/0-100, !volup, !voldown, !mute, !unmute.');
+            sendTwitchChatReply('TikTok supports !mute, !unmute, !volume 0 and !volume 100; use its in-player slider for other levels. Twitch Clip volume uses its player controls. Auto-next works when supported.');
+          } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
+            handleQueuePositionRef.current?.(voterLogin || usernameKey);
+          } else if (lowerText === '!skip' && isStaffRole(role)) {
+            handleSkipNextRef.current?.();
+          } else if (volumeCommand && isStaffRole(role)) {
+            handleVolumeCommandRef.current?.(volumeCommand, role);
+          }
         }
       };
 
@@ -2295,8 +2293,12 @@ function YediHubAppContent() {
       return;
     }
 
-    const looksLikeUrl = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\//i.test(requestText);
-    let url = requestText;
+    // Prefer any supported URL found in the command/message, even when the viewer
+    // wraps it in text like "this one: https://youtu.be/...". Bare host/path links
+    // are normalized to https by the shared extractor.
+    const extractedUrl = extractSupportedMediaUrl(requestText);
+    const looksLikeUrl = Boolean(extractedUrl);
+    let url = extractedUrl || requestText;
     let title = '';
     if (!looksLikeUrl) {
       try {
