@@ -7,7 +7,7 @@ WHALE CUM is a private Vite + React dashboard for running a community media queu
 - **Shared queue:** Accepts supported YouTube videos and Shorts, TikTok videos, Twitch Clips, and Kick Clips. The dashboard can also add media directly; title-based chat requests search YouTube and use the best match returned by the search route.
 - **Queue management:** Active Queue, Watch Later, and History views; search; category and media-type filters; sorting for non-active lists; upvotes; pinned priority; drag-and-drop ordering and move controls; Play Now; Previous Video and Next Video; and automatic advance when the player reports that media ended.
 - **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
-- **Twitch chat requests:** Twitch EventSub sends chat requests to a server-side webhook and saves them directly to the shared Firestore queue. Once enabled, requests keep working with every dashboard/browser closed; the local IRC bridge is a temporary fallback during setup and is reserved for the `2o3a` player browser.
+- **Twitch chat requests:** Twitch EventSub stores eligible request/queue-command events in a durable Firestore inbox and acknowledges Twitch immediately. A Vercel background task handles title search, media metadata, chat replies, and queue writes afterward. Queue actions use Firestore transactions and a shared queue version; failed inbox messages remain pending for retry. Once enabled, requests and queue commands keep working with every dashboard/browser closed; volume controls still require the player browser.
 - **Stats & analytics:** Request totals, completions, skips, votes, estimated queue runway, and a Top 10 Requesters list. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
 - **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
 
@@ -26,7 +26,7 @@ The allowlist is enforced by the Vercel OAuth/session API, not a client-side rol
 
 | Command | Behavior |
 |---|---|
-| `!assr <URL or title>` | Request supported media by URL or search YouTube by title. |
+| `!assr <URL or title>` | Request supported media by URL or search YouTube by title. YouTube links may include `?t=83`, `?start=83`, `#t=1m23s`, or a timestamp after the link such as `1:23`. |
 | A supported media URL anywhere in a message | Direct YouTube, TikTok, Twitch Clip, or Kick Clip links are treated as requests even with surrounding text or trailing punctuation. |
 | `!remove` / `!unrequest` | Remove your latest eligible waiting request. |
 | `!when`, `!position`, `!myqueue`, `!queueposition` | Show your queue position/ETA where available. |
@@ -36,7 +36,7 @@ The allowlist is enforced by the Vercel OAuth/session API, not a client-side rol
 | Moderator/broadcaster: `!skip` | Advance to the next video. |
 | Moderator/broadcaster: `!volume up/down`, `!volume 0-100`, `!volup`, `!voldown`, `!mute`, `!unmute` | Control supported player audio. TikTok remote commands support mute/unmute and volume 0/100; use the in-player slider for intermediate volume. Twitch Clips use their own controls. |
 
-Requests are blocked while the streamer has closed the queue. The app keeps duplicate media identities out of the queue/history so the same video is not repeatedly requested by changing URL format or adding common tracking parameters.
+Requests are blocked while the streamer has closed the queue. Queue/playing items cannot be requested twice, and videos in History become requestable again 16 hours after their last `watchedAt` time. Media identity stays consistent across URL formats and tracking parameters. YouTube start timestamps are stored with queue items and applied when their embeds load.
 
 ## Twitch OAuth setup
 
@@ -64,7 +64,7 @@ Cloud sync is optional. Without a valid Firebase web configuration and server se
 1. Open the production WHALE CUM dashboard and sign in as `2o3a`. In **Connection details → Cloud chat intake**, use **Authorize 2o3a for cloud chat** if prompted. Twitch must grant `channel:bot` to this app.
 2. Use **Reconnect @gachibot69** if the dashboard prompts for it. That account must grant `user:read:chat`, `user:write:chat`, and `user:bot` to the same Twitch developer application.
 3. Keep the dashboard open until **Cloud chat intake** reports **active**. Vercel creates a webhook subscription for `channel.chat.message`; Twitch verifies the callback and the app reports whether the subscription is active.
-4. Once active, EventSub processes supported media links and `!assr <URL or YouTube title>` on the server, writes the queue item and request-stat event into Firestore, and deduplicates repeated deliveries. The streamer's browser does not need to be open to capture requests; the shared queue appears when `2o3a` next opens the dashboard.
+4. Once active, EventSub first persists supported media requests and queue commands in a durable inbox and acknowledges the webhook quickly. A Vercel `waitUntil` task processes the inbox, writes queue/stat updates transactionally, and leaves failures pending for a later retry. Server-side commands include `!queue`, `!when`, `!remove`, `!bigcock`, `!help`, and moderator/broadcaster `!skip`. Queue status shows the last successful Firestore queue write. The streamer's browser does not need to be open to queue requests; volume changes still require the player browser.
 5. If the status mentions Firestore unavailable, check service-account project/permissions and the Firebase usage/quota dashboard. Server-side writes still depend on the Firebase project being available and within quota; a webhook cannot save to the cloud when Firestore rejects the write.
 
 The server issues a Firebase custom token only after validating an approved Twitch session. The token carries `yediAuthorized`, `twitchLogin`, and `role` claims. Firebase writes require these server-issued claims.

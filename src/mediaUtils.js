@@ -384,3 +384,103 @@ export function parseMediaUrl(rawUrl = '') {
     thumbnail: 'https://placehold.co/640x360/18181b/a1a1aa?text=Web+Media+Link'
   };
 }
+
+
+// A completed/played item can be requested again after this cooldown.
+export const MEDIA_HISTORY_COOLDOWN_MS = 16 * 60 * 60 * 1000;
+
+function historyTimestamp(video = {}) {
+  const watchedAt = Date.parse(String(video.watchedAt || ""));
+  if (Number.isFinite(watchedAt) && watchedAt > 0) return watchedAt;
+  const playedAt = Number(video.playedAt);
+  return Number.isFinite(playedAt) && playedAt > 0 ? playedAt : null;
+}
+
+export function getMediaHistoryCooldownRemainingMs(video = {}, now = Date.now(), cooldownMs = MEDIA_HISTORY_COOLDOWN_MS) {
+  if (String(video.status || "").toLowerCase() !== "watched") return 0;
+  const timestamp = historyTimestamp(video);
+  if (!timestamp) return Math.max(0, Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS);
+  return Math.max(0, (Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS) - (Number(now) - timestamp));
+}
+
+export function isMediaHistoryCooldownExpired(video = {}, now = Date.now(), cooldownMs = MEDIA_HISTORY_COOLDOWN_MS) {
+  if (String(video.status || "").toLowerCase() !== "watched") return false;
+  const timestamp = historyTimestamp(video);
+  return Boolean(timestamp && Number(now) - timestamp >= (Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS));
+}
+
+function parseMediaTimeValue(value) {
+  const raw = String(value || "").trim().replace(/^t=/i, "");
+  if (!raw) return null;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const seconds = Math.floor(Number(raw));
+    return Number.isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? seconds : null;
+  }
+  const colon = raw.match(/^(\d{1,3}):([0-5]?\d)(?::([0-5]?\d))?$/);
+  if (colon) {
+    const seconds = colon[3] === undefined
+      ? Number(colon[1]) * 60 + Number(colon[2])
+      : Number(colon[1]) * 3600 + Number(colon[2]) * 60 + Number(colon[3]);
+    return Number.isFinite(seconds) && seconds <= 86400 ? seconds : null;
+  }
+  const units = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/i);
+  if (units && (units[1] !== undefined || units[2] !== undefined || units[3] !== undefined)) {
+    const seconds = Number(units[1] || 0) * 3600 + Number(units[2] || 0) * 60 + Number(units[3] || 0);
+    return Number.isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? Math.floor(seconds) : null;
+  }
+  return null;
+}
+
+/**
+ * Read a playback offset from standard YouTube parameters (t/start/time_continue),
+ * URL fragments (#t=...), or a timestamp written after a chat URL (e.g. 1:23 / 90s).
+ */
+export function parseMediaStartSeconds(rawInput = "") {
+  const input = String(rawInput || "").trim();
+  if (!input) return 0;
+  const urlMatch = input.match(/(?:https?:\/\/)?(?:(?:www|m)\.)?(?:music\.youtube\.com|youtube\.com|youtu\.be|vm\.tiktok\.com|vt\.tiktok\.com|tiktok\.com|clips\.twitch\.tv|twitch\.tv|clip\.kick\.com|kick\.com)\/[^\s<>]+/i);
+  if (urlMatch) {
+    const candidate = urlMatch[0].replace(/[.,!?;)\]]+$/g, "");
+    try {
+      const parsed = new URL(/^https?:\/\//i.test(candidate) ? candidate : "https://" + candidate);
+      const value = parsed.searchParams.get("t") ||
+        parsed.searchParams.get("start") ||
+        parsed.searchParams.get("time_continue") ||
+        parsed.hash.match(/(?:^#|[&#])t=([^&]+)/i)?.[1];
+      if (value !== null && value !== undefined) {
+        const seconds = parseMediaTimeValue(decodeURIComponent(String(value).replace(/\+/g, " ")));
+        if (seconds !== null) return seconds;
+      }
+    } catch {
+      // Fall through to a plain timestamp suffix if the pasted URL is malformed.
+    }
+    const afterUrl = input.slice((urlMatch.index || 0) + urlMatch[0].length)
+      .trim()
+      .replace(/^[,;|–—-]+\s*/, "")
+      .replace(/^(?:at|start(?:ing)?\s+at|timestamp)\s*/i, "")
+      .replace(/[.,!?;)\]]+$/g, "");
+    return parseMediaTimeValue(afterUrl) ?? 0;
+  }
+  const plain = input.replace(/^!assr\s*/i, "").trim()
+    .replace(/^(?:at|start(?:ing)?\s+at|timestamp)\s*/i, "");
+  const exact = parseMediaTimeValue(plain);
+  if (exact !== null) return exact;
+  // For title-based requests, only treat an explicit clock or h/m/s token at the
+  // end as a timestamp; ordinary trailing numbers in titles are left untouched.
+  const suffix = plain.match(/\s+(?:(?:at|start(?:ing)?\s+at|timestamp)\s+)?((?:\d{1,3}:[0-5]?\d(?::[0-5]?\d)?)|(?:\d+(?:\.\d+)?(?:s|m|h))|(?:\d+h\d+m(?:\d+(?:\.\d+)?s?)?))\s*$/i);
+  return suffix ? (parseMediaTimeValue(suffix[1]) ?? 0) : 0;
+}
+
+/** Remove an explicit end-of-request timestamp before searching the title on YouTube. */
+export function stripMediaTimestampSuffix(rawInput = "") {
+  const input = String(rawInput || "").trim();
+  const urlMatch = input.match(/(?:https?:\/\/)?(?:(?:www|m)\.)?(?:music\.youtube\.com|youtube\.com|youtu\.be|vm\.tiktok\.com|vt\.tiktok\.com|tiktok\.com|clips\.twitch\.tv|twitch\.tv|clip\.kick\.com|kick\.com)\/[^\s<>]+/i);
+  if (urlMatch) return { text: input, startSeconds: parseMediaStartSeconds(input) };
+  const plain = input.replace(/^!assr\s*/i, "").trim();
+  const suffix = plain.match(/\s+(?:(?:at|start(?:ing)?\s+at|timestamp)\s+)?((?:\d{1,3}:[0-5]?\d(?::[0-5]?\d)?)|(?:\d+(?:\.\d+)?(?:s|m|h))|(?:\d+h\d+m(?:\d+(?:\.\d+)?s?)?))\s*$/i);
+  if (!suffix) return { text: plain, startSeconds: parseMediaStartSeconds(input) };
+  const startSeconds = parseMediaTimeValue(suffix[1]);
+  return startSeconds === null
+    ? { text: plain, startSeconds: 0 }
+    : { text: plain.slice(0, suffix.index).trim(), startSeconds };
+}

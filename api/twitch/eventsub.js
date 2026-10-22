@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { processEventSubChatMessage } from '../_lib/cloud-chat-requests.js';
+import { waitUntil } from '@vercel/functions';
+import { isEventSubChatCandidate, persistEventSubInbox, processPendingEventSubChatMessages } from '../_lib/cloud-chat-requests.js';
 
 export const config = {
   api: { bodyParser: false },
@@ -26,7 +27,7 @@ async function readRawBody(req) {
   return Buffer.concat(chunks);
 }
 
-function isValidSignature(secret, messageId, timestamp, rawBody, headerSignature) {
+export function isValidEventSubSignature(secret, messageId, timestamp, rawBody, headerSignature) {
   if (!messageId || !timestamp || !headerSignature) return false;
   const parsedTimestamp = Date.parse(timestamp);
   if (!Number.isFinite(parsedTimestamp) || Math.abs(Date.now() - parsedTimestamp) > MAX_MESSAGE_AGE_MS) {
@@ -69,7 +70,7 @@ export default async function handler(req, res) {
     return res.status(503).send('EventSub is not configured');
   }
 
-  if (!isValidSignature(secret, messageId, timestamp, rawBody, signature)) {
+  if (!isValidEventSubSignature(secret, messageId, timestamp, rawBody, signature)) {
     return res.status(403).send('Invalid EventSub signature');
   }
 
@@ -94,16 +95,25 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
+  if (!isEventSubChatCandidate(payload.event)) return res.status(204).end();
   try {
-    await processEventSubChatMessage({ event: payload.event, messageId });
-    return res.status(204).end();
+    // Persist first; title search, TikTok resolution, metadata and replies run after
+    // Twitch receives the webhook acknowledgement.
+    await persistEventSubInbox({ event: payload.event, messageId });
   } catch (error) {
-    // A non-2xx response asks Twitch to retry the delivery. Never acknowledge a
-    // request as stored when the cloud write failed.
-    console.error('Twitch EventSub notification could not be stored:', {
+    console.error('Twitch EventSub notification could not be persisted:', {
       code: String(error?.code || 'unknown'),
       message: String(error?.message || error).slice(0, 500),
     });
     return res.status(503).send('Could not persist chat request');
   }
+  try {
+    waitUntil(processPendingEventSubChatMessages(1).catch((error) => {
+      console.error('EventSub inbox worker failed; messages remain pending:', String(error?.message || error).slice(0, 400));
+    }));
+  } catch (error) {
+    // The durable inbox remains available if background scheduling is unavailable locally.
+    console.warn('Could not start EventSub background worker:', String(error?.message || error).slice(0, 300));
+  }
+  return res.status(204).end();
 }

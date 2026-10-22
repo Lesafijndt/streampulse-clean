@@ -1,5 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { getFirebaseAdminDb, getFirebaseNamespace } from '../_lib/firebase-admin.js';
+import { waitUntil } from '@vercel/functions';
+import { processPendingEventSubChatMessages } from '../_lib/cloud-chat-requests.js';
 
 const STREAMER_LOGIN = '2o3a';
 const BOT_LOGIN = 'gachibot69';
@@ -301,42 +303,62 @@ export default async function handler(req, res) {
     }
   }
 
-  // GET only checks the listener state; it never creates subscriptions or writes queue data.
+  // GET checks listener state and schedules one pending inbox retry; it never creates subscriptions.
   try {
     const origin = getOrigin(req);
     const { broadcasterId, botId } = await resolveUserIds();
     const subscription = await findSubscription(origin, broadcasterId, botId);
     const currentStatus = statusResult(subscription);
-    if (currentStatus.active || currentStatus.status === 'pending') return res.status(200).json(currentStatus);
+    let roomSettingsSnapshot;
+    try {
+      const db = await getFirebaseAdminDb();
+      roomSettingsSnapshot = await db.doc('artifacts/' + getFirebaseNamespace() + '/public/data/room_settings/' + STREAMER_LOGIN).get();
+    } catch (error) {
+      console.error('Cloud chat listener Firestore health check failed:', String(error?.message || error).slice(0, 400));
+      return res.status(200).json({
+        ...currentStatus,
+        active: false,
+        status: 'error',
+        code: 'firebase_unavailable',
+        message: 'Twitch subscription status was found, but Firestore health could not be checked. Cloud queue writes may be unavailable.',
+      });
+    }
+    const roomSettings = roomSettingsSnapshot?.exists ? roomSettingsSnapshot.data() : {};
+    const health = roomSettings?.chatIntakeHealth && typeof roomSettings.chatIntakeHealth === 'object'
+      ? roomSettings.chatIntakeHealth : {};
+    const lastWriteAt = Number(health.lastWriteAt) || 0;
+    const lastWebhookAt = Number(health.lastWebhookAt) || 0;
+    const writeAge = lastWriteAt > 0 ? Math.max(0, Math.floor((Date.now() - lastWriteAt) / 60000)) : null;
+    const healthMessage = lastWriteAt > 0
+      ? ' Last successful queue write: ' + (writeAge < 1 ? 'under 1 minute ago.' : writeAge + ' minute(s) ago.')
+      : ' Waiting for the first successful queue write.';
+    const withHealth = {
+      ...currentStatus,
+      lastWriteAt: lastWriteAt || null,
+      lastWebhookAt: lastWebhookAt || null,
+      lastWriteStatus: String(health.lastWriteStatus || 'unknown'),
+      lastProcessingError: String(health.lastProcessingError || '').slice(0, 180),
+      message: currentStatus.message + healthMessage +
+        (health.lastProcessingError ? ' Last processing error: ' + String(health.lastProcessingError).slice(0, 140) : ''),
+    };
+    if (currentStatus.active || currentStatus.status === 'pending') {
+      try {
+        waitUntil(processPendingEventSubChatMessages(1).catch((error) => {
+          console.error('EventSub status-triggered inbox drain failed:', String(error?.message || error).slice(0, 300));
+        }));
+      } catch (error) {
+        console.warn('Could not schedule EventSub inbox drain from status check:', String(error?.message || error).slice(0, 240));
+      }
+      return res.status(200).json(withHealth);
+    }
     if (bot.ok) {
       const missingScope = getMissingScopeMessage(staff, bot);
       if (missingScope) return res.status(200).json(missingScope);
     } else {
       return res.status(200).json({ active: false, status: 'needs_authorization', code: bot.code, message: 'Reconnect @gachibot69 and grant the new chat-reading permissions to enable cloud requests.' });
     }
-    // Distinguish an incomplete EventSub setup from missing client/server Firebase access.
-    const requiredWebConfig = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
-    if (requiredWebConfig.some((key) => !String(process.env[key] || '').trim())) {
-      return res.status(200).json({
-        active: false,
-        status: 'error',
-        code: 'firebase_config_missing',
-        message: 'Cloud chat capture needs the Firebase web config (VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_APP_ID) in Vercel.',
-      });
-    }
-    try {
-      const db = await getFirebaseAdminDb();
-      await db.doc(`artifacts/${getFirebaseNamespace()}/public/data/room_settings/${STREAMER_LOGIN}`).get();
-    } catch (error) {
-      console.error('Cloud chat listener Firestore health check failed:', String(error?.message || error).slice(0, 400));
-      return res.status(200).json({
-        active: false,
-        status: 'error',
-        code: 'firebase_unavailable',
-        message: 'Cloud chat capture cannot start because Firestore is unavailable. Check Firebase service-account configuration, access, and quota.',
-      });
-    }
-    return res.status(200).json(currentStatus);
+    return res.status(200).json(withHealth);
+
   } catch (error) {
     console.error('Twitch EventSub status failed:', String(error?.message || error).slice(0, 500));
     return res.status(200).json({

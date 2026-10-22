@@ -67,8 +67,7 @@ import {
   doc,
   setDoc,
   updateDoc,
-  increment,
-  arrayUnion,
+  runTransaction,
   writeBatch,
   deleteDoc,
   getDocs,
@@ -78,7 +77,6 @@ import {
   buildCategoryCounts,
   buildNextTrackTransition,
   buildPreviousTrackTransition,
-  buildQueueSyncWrites,
   filterVideosForView,
   formatMediaDuration,
   getQueueMediaCounts,
@@ -92,7 +90,7 @@ import {
   createQueueBackup,
   validateQueueBackup
 } from './queueLogic.js';
-import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
+import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl, parseMediaStartSeconds, stripMediaTimestampSuffix, isMediaHistoryCooldownExpired, getMediaHistoryCooldownRemainingMs } from './mediaUtils.js';
 import StatsBoard from './components/StatsBoard';
 import TransportNavigation from './components/TransportNavigation';
 import KeyboardShortcutHint from './components/KeyboardShortcutHint';
@@ -392,6 +390,7 @@ function YediHubAppContent() {
   // Keep queue closure synchronous so incoming Twitch messages cannot read a stale render state.
   const queueOpenRef = useRef(Boolean(streamSettings.queueOpen));
   const queueOpenCloudOverrideRef = useRef(null);
+  const queueVersionRef = useRef(0);
   useEffect(() => {
     queueOpenRef.current = Boolean(streamSettings.queueOpen);
   }, [streamSettings.queueOpen]);
@@ -1090,7 +1089,6 @@ function YediHubAppContent() {
           if (active) {
             setCloudSynced(false);
             setSyncStatusText('Cloud sync failed — local save is active');
-            addToast('Cloud sync failed. Your browser-local queue is still available.', 'warning');
           }
         }
       );
@@ -1123,6 +1121,7 @@ function YediHubAppContent() {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
+        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(cloudConfig.queueVersion) || 0);
         if (cloudConfig.streamSettings && typeof cloudConfig.streamSettings === 'object') {
           const merged = { ...DEFAULT_STREAM_SETTINGS, ...cloudConfig.streamSettings };
           // If the user just changed queueOpen locally, don't let a stale cloud snapshot reopen it.
@@ -1174,30 +1173,86 @@ function YediHubAppContent() {
       });
   }, [db, firebaseUser, appId, channelRoom, streamSettings, roomConfigLoadedFor]);
 
-  // Sync Video Changes Helper (updates Firestore if online, updates state locally)
+  const persistQueuePatches = async (patches, referenceItems = [], requireCurrentVersion = true) => {
+    if (!db || !firebaseUser) return false;
+    const entries = patches instanceof Map
+      ? Array.from(patches.entries()).map(([id, value]) => [String(id), value || {}])
+      : (Array.isArray(patches) ? patches.map((value) => [String(value.id), { queueOrder: value.queueOrder }]) : []);
+    if (!entries.length) return true;
+    const room = normalizeRoomName(channelRoom);
+    const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', room);
+    const baseById = new Map((referenceItems || []).map((item) => [String(item.id), item]));
+    const expectedVersion = Number(queueVersionRef.current) || 0;
+    let newVersion = expectedVersion + 1;
+
+    try {
+      newVersion = await runTransaction(db, async (transaction) => {
+        const settingsSnapshot = await transaction.get(settingsRef);
+        const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
+        const currentVersion = Number(settings.queueVersion) || 0;
+        if (requireCurrentVersion && currentVersion !== expectedVersion) {
+          const conflict = new Error('QUEUE_VERSION_CONFLICT');
+          conflict.currentVersion = currentVersion;
+          throw conflict;
+        }
+
+        const refs = entries.map(([id]) => doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id));
+        const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
+        const writes = entries.map(([id, patch], index) => {
+          const snapshot = snapshots[index];
+          const base = baseById.get(id) || { id, channelRoom: room };
+          if (snapshot.exists()) {
+            const current = snapshot.data() || {};
+            if (Object.prototype.hasOwnProperty.call(patch, 'queueOrder') && current.status !== 'queue') {
+              const conflict = new Error('QUEUE_VERSION_CONFLICT');
+              conflict.currentVersion = currentVersion;
+              throw conflict;
+            }
+            if (Object.prototype.hasOwnProperty.call(patch, 'status') &&
+                String(current.status || 'queue') !== String(base.status || 'queue')) {
+              const conflict = new Error('QUEUE_VERSION_CONFLICT');
+              conflict.currentVersion = currentVersion;
+              throw conflict;
+            }
+          } else if (!base || !base.id) {
+            throw new Error('Queue item disappeared before its update could be saved.');
+          }
+          return {
+            ref: refs[index],
+            payload: { ...(snapshot.exists() ? {} : base), ...patch, id, channelRoom: room },
+          };
+        });
+
+        writes.forEach(({ ref, payload }) => transaction.set(ref, payload, { merge: true }));
+        transaction.set(settingsRef, {
+          queueVersion: currentVersion + 1,
+          queueUpdatedAt: Date.now(),
+        }, { merge: true });
+        return currentVersion + 1;
+      });
+      queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(newVersion) || 0);
+      return true;
+    } catch (error) {
+      if (Number.isFinite(Number(error?.currentVersion))) {
+        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(error.currentVersion));
+      }
+      throw error;
+    }
+  };
+
+  // Shared transaction helper. Partial metadata/status changes are merged into the latest cloud row.
   const syncUpdateVideo = async (videoId, updates) => {
-    videosRef.current = videosRef.current.map((v) => (v.id === videoId ? { ...v, ...updates } : v));
-    setVideos((prev) =>
-      prev.map((v) => (v.id === videoId ? { ...v, ...updates } : v))
-    );
+    const baseItems = [...(videosRef.current || videos)];
+    videosRef.current = videosRef.current.map((v) => (String(v.id) === String(videoId) ? { ...v, ...updates } : v));
+    setVideos((prev) => prev.map((v) => (String(v.id) === String(videoId) ? { ...v, ...updates } : v)));
 
     if (db && firebaseUser) {
       try {
-        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-        await updateDoc(docRef, updates);
-      } catch (e) {
-        // Doc might not exist yet if demo item
-        try {
-          const fullItem = videos.find((v) => v.id === videoId);
-          if (fullItem) {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-            await setDoc(docRef, { ...fullItem, ...updates, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
-          }
-        } catch (innerErr) {
-          console.warn('Firestore update failed; the change remains in local storage.', innerErr);
-          setCloudSynced(false);
-          setSyncStatusText('Cloud update failed — local save is active');
-        }
+        await persistQueuePatches(new Map([[String(videoId), updates]]), baseItems, false);
+      } catch (error) {
+        console.warn('Firestore update failed; the change remains in local storage.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Cloud update failed — local save is active');
       }
     }
   };
@@ -1437,38 +1492,77 @@ function YediHubAppContent() {
   }, []);
 
   const syncIncrementUpvote = async (videoId, voterLogin) => {
-    setVideos((prev) => prev.map((video) => {
-      if (video.id !== videoId) return video;
-      const voters = Array.isArray(video.voters) ? video.voters : [];
-      if (voters.some((item) => normalizeTwitchLogin(item) === voterLogin)) return video;
-      return { ...video, upvotes: (Number(video.upvotes) || 0) + 1, voters: [...voters, voterLogin] };
-    }));
+    const room = normalizeRoomName(channelRoom);
+    const itemId = String(videoId);
+    const localItem = (videosRef.current || videos).find((video) => String(video.id) === itemId);
+    if (!localItem) return { ok: false, reason: 'missing' };
+
+    const applyLocalVote = (item) => {
+      let nextResult = null;
+      const nextVideos = (videosRef.current || videos).map((video) => {
+        if (String(video.id) !== itemId) return video;
+        nextResult = { ...video, upvotes: Number(item.upvotes) || 0, voters: Array.isArray(item.voters) ? item.voters : [] };
+        return nextResult;
+      });
+      if (!nextResult) return false;
+      videosRef.current = nextVideos;
+      setVideos(nextVideos);
+      return true;
+    };
 
     if (db && firebaseUser) {
       try {
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-        await updateDoc(itemRef, { upvotes: increment(1), voters: arrayUnion(voterLogin) });
-      } catch (error) {
-        // A legacy/local-only item may not exist in Firestore yet; preserve the vote and voter list.
-        try {
-          const fullItem = videos.find((video) => video.id === videoId);
-          if (fullItem) {
-            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-            const voters = Array.isArray(fullItem.voters) ? fullItem.voters : [];
-            await setDoc(itemRef, {
-              ...fullItem,
-              upvotes: (Number(fullItem.upvotes) || 0) + 1,
-              voters: [...voters.filter((item) => normalizeTwitchLogin(item) !== voterLogin), voterLogin],
-              channelRoom: normalizeRoomName(channelRoom),
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
+        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', room);
+        const result = await runTransaction(db, async (transaction) => {
+          const [settingsSnapshot, itemSnapshot] = await Promise.all([
+            transaction.get(settingsRef),
+            transaction.get(itemRef),
+          ]);
+          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
+          const current = itemSnapshot.exists() ? itemSnapshot.data() || {} : localItem;
+          if (current.status !== 'queue') return { ok: false, reason: 'not-queued' };
+          if (normalizeTwitchLogin(current.requestedBy) === voterLogin) return { ok: false, reason: 'own-request' };
+          const voters = Array.isArray(current.voters)
+            ? current.voters.map(normalizeTwitchLogin).filter(Boolean)
+            : [];
+          if (voters.includes(voterLogin)) return { ok: false, reason: 'already-voted' };
+          const nextVoters = [...voters, voterLogin];
+          const upvotes = Math.max(0, Number(current.upvotes) || 0) + 1;
+          if (itemSnapshot.exists()) {
+            transaction.update(itemRef, { upvotes, voters: nextVoters });
+          } else {
+            transaction.set(itemRef, {
+              ...current, id: itemId, channelRoom: room, upvotes, voters: nextVoters,
             }, { merge: true });
           }
-        } catch (fallbackError) {
-          console.warn('Could not sync vote; the local vote is saved.', fallbackError);
-          setCloudSynced(false);
-          setSyncStatusText('Vote saved locally — cloud update failed');
-        }
+          const version = Number(settings.queueVersion) || 0;
+          transaction.set(settingsRef, {
+            queueVersion: version + 1, queueUpdatedAt: Date.now(),
+          }, { merge: true });
+          return { ok: true, upvotes, voters: nextVoters, version: version + 1 };
+        });
+        if (!result.ok) return result;
+        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(result.version) || 0);
+        applyLocalVote({ upvotes: result.upvotes, voters: result.voters });
+        return { ok: true };
+      } catch (error) {
+        console.warn('Transactional vote could not reach Firestore; retaining the vote locally.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Vote saved locally — cloud update failed');
       }
     }
+
+    const current = (videosRef.current || videos).find((video) => String(video.id) === itemId);
+    if (!current || current.status !== 'queue') return { ok: false, reason: 'not-queued' };
+    const currentVoters = Array.isArray(current.voters) ? current.voters.map(normalizeTwitchLogin) : [];
+    if (currentVoters.includes(voterLogin)) return { ok: false, reason: 'already-voted' };
+    if (normalizeTwitchLogin(current.requestedBy) === voterLogin) return { ok: false, reason: 'own-request' };
+    applyLocalVote({
+      upvotes: (Number(current.upvotes) || 0) + 1,
+      voters: [...currentVoters, voterLogin],
+    });
+    return { ok: true, localOnly: true };
   };
 
   const syncActivityEventToCloud = async (event) => {
@@ -1559,17 +1653,48 @@ function YediHubAppContent() {
     persistPendingQueueAdds();
 
     // Update the ref synchronously so back-to-back chat messages see the new item immediately.
-    videosRef.current = [localItem, ...videosRef.current];
-    setVideos((prev) => [localItem, ...prev]);
+    videosRef.current = [localItem, ...videosRef.current.filter((video) => String(video.id) !== String(localItem.id))];
+    setVideos((prev) => [localItem, ...prev.filter((video) => String(video.id) !== String(localItem.id))]);
     recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
 
     if (db && firebaseUser) {
+      const itemId = String(localItem.id);
+      pendingQueueAddAttemptAtRef.current.set(itemId, Date.now());
+      const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
+      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
       try {
-        const itemId = String(localItem.id);
-        pendingQueueAddAttemptAtRef.current.set(itemId, Date.now());
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
-        await setDoc(itemRef, { ...localItem, createdAt: Date.now() }, { merge: true });
+        const committedVersion = await runTransaction(db, async (transaction) => {
+          const [settingsSnapshot, itemSnapshot] = await Promise.all([
+            transaction.get(settingsRef),
+            transaction.get(itemRef),
+          ]);
+          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
+          const version = Number(settings.queueVersion) || 0;
+          if (itemSnapshot.exists()) {
+            const existing = itemSnapshot.data() || {};
+            if (!(existing.status === 'watched' && isMediaHistoryCooldownExpired(existing, Date.now()))) {
+              const duplicate = new Error('DUPLICATE_QUEUE_ITEM');
+              duplicate.code = 'duplicate_queue_item';
+              throw duplicate;
+            }
+          }
+          transaction.set(itemRef, { ...localItem, createdAt: Date.now() });
+          transaction.set(settingsRef, { queueVersion: version + 1, queueUpdatedAt: Date.now() }, { merge: true });
+          return version + 1;
+        });
+        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
+        pendingQueueAddsRef.current.delete(itemId);
+        pendingQueueAddAttemptAtRef.current.delete(itemId);
+        persistPendingQueueAdds();
       } catch (error) {
+        if (error?.code === 'duplicate_queue_item') {
+          pendingQueueAddsRef.current.delete(itemId);
+          pendingQueueAddAttemptAtRef.current.delete(itemId);
+          persistPendingQueueAdds();
+          videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
+          setVideos((prev) => prev.filter((video) => String(video.id) !== itemId));
+          return;
+        }
         console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
         setCloudSynced(false);
         setSyncStatusText('Cloud write failed — request saved in this browser');
@@ -1597,7 +1722,18 @@ function YediHubAppContent() {
     if (db && firebaseUser) {
       try {
         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-        await deleteDoc(docRef);
+        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
+        const committedVersion = await runTransaction(db, async (transaction) => {
+          const [settingsSnapshot, itemSnapshot] = await Promise.all([
+            transaction.get(settingsRef), transaction.get(docRef),
+          ]);
+          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
+          const version = Number(settings.queueVersion) || 0;
+          if (itemSnapshot.exists()) transaction.delete(docRef);
+          transaction.set(settingsRef, { queueVersion: version + 1, queueUpdatedAt: Date.now() }, { merge: true });
+          return version + 1;
+        });
+        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
       } catch (error) {
         console.warn('Firestore delete failed; the item was removed locally.', error);
         setCloudSynced(false);
@@ -2320,22 +2456,23 @@ function YediHubAppContent() {
             if (!cloudChatListenerReadyRef.current) {
               handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
             }
-          } else if (lowerText === '!remove' || lowerText === '!unrequest') {
-            handleRemoveOwnRequestRef.current?.(voterLogin || username);
-          } else if (lowerText === '!queue') {
-            handleQueueSummaryRef.current?.(voterLogin || username);
+          } else if (['!remove', '!unrequest', '!queue'].includes(lowerText)) {
+            if (!cloudChatListenerReadyRef.current) {
+              if (lowerText === '!queue') handleQueueSummaryRef.current?.(voterLogin || username);
+              else handleRemoveOwnRequestRef.current?.(voterLogin || username);
+            }
           } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
-            handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
+            if (!cloudChatListenerReadyRef.current) handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
           } else if (lowerText === '!help') {
-            sendTwitchChatReply('Request: post a YouTube, TikTok, Twitch Clip or Kick link anywhere in chat, or use !assr <URL or YouTube title>. Queue must be open.');
-            sendTwitchChatReply('Your requests: !remove / !unrequest removes your latest waiting request. !when / !position / !myqueue / !queueposition shows your spot and ETA.');
-            sendTwitchChatReply('Queue & votes: !queue shows what is playing and what is next. !bigcock [#] upvotes a waiting item by position (not your own; one vote per item).');
-            sendTwitchChatReply('Mods: !skip. YouTube volume: !volume up/down/0-100, !volup, !voldown, !mute, !unmute.');
-            sendTwitchChatReply('TikTok supports !mute, !unmute, !volume 0 and !volume 100; use its in-player slider for other levels. Twitch Clip volume uses its player controls. Auto-next works when supported.');
+            if (!cloudChatListenerReadyRef.current) {
+              sendTwitchChatReply('Request: post a YouTube, TikTok, Twitch Clip or Kick link anywhere in chat, or use !assr <URL or title> with an optional YouTube timestamp.');
+              sendTwitchChatReply('Your requests: !remove / !unrequest. !when / !position / !myqueue shows your queue spot and ETA. History videos can be requested again 16 hours after their last play.');
+              sendTwitchChatReply('Queue: !queue summarizes playback. !bigcock [#] upvotes a waiting item. Mods: !skip; volume commands need the player dashboard open.');
+            }
           } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
-            handleQueuePositionRef.current?.(voterLogin || usernameKey);
+            if (!cloudChatListenerReadyRef.current) handleQueuePositionRef.current?.(voterLogin || usernameKey);
           } else if (lowerText === '!skip' && isStaffRole(role)) {
-            handleSkipNextRef.current?.();
+            if (!cloudChatListenerReadyRef.current) handleSkipNextRef.current?.();
           } else if (volumeCommand && isStaffRole(role)) {
             handleVolumeCommandRef.current?.(volumeCommand, role);
           }
@@ -2444,6 +2581,8 @@ function YediHubAppContent() {
   const handleIncomingChatCommand = async (username, role, rawText) => {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
+    const requestTextWithoutTimestamp = stripMediaTimestampSuffix(requestText).text;
+    const startSeconds = parseMediaStartSeconds(rawText);
     if (!requestText) {
       sendTwitchChatReply(`@${requester} Use !assr <URL or title>.`);
       return;
@@ -2462,7 +2601,8 @@ function YediHubAppContent() {
     let title = '';
     if (!looksLikeUrl) {
       try {
-        const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
+        const searchTitle = requestTextWithoutTimestamp || requestText;
+        const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(searchTitle.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
           sendTwitchChatReply(`@${requester} No YouTube match. Try a shorter title or URL.`);
@@ -2480,10 +2620,11 @@ function YediHubAppContent() {
       sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
-    // Keep successful requests quiet in Twitch chat. Failure responses (closed queue,
-    // invalid TikTok links, failed title search, duplicates) are still sent by the request flow.
+    // Timestamp may be in the YouTube URL (t= / start= / #t=) or written after it (1:23).
+    const resolvedStartSeconds = startSeconds || parseMediaStartSeconds(url);
+    // Keep successful requests quiet in Twitch chat. Failure responses are sent by the request flow.
     await processAndQueueRequest({
-      url, title, requestedBy: username, userRole: role,
+      url, title, requestedBy: username, userRole: role, startSeconds: resolvedStartSeconds,
       note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
     });
   };
@@ -2500,7 +2641,8 @@ function YediHubAppContent() {
     requestedBy,
     userRole = 'viewer',
     manualCategory = null,
-    fromChat = false
+    fromChat = false,
+    startSeconds = null
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
@@ -2547,23 +2689,33 @@ function YediHubAppContent() {
       }
     }
 
-    // Only allow each media identity once in the room's queue/history, so it can't be
-    // re-requested after playing either. Remove the old entry if it should become requestable again.
+    // A video can be requested again once it has been in History for 16 hours.
+    // Active queue/playing/watch-later entries are still protected from duplicates.
     const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
-    const alreadyExists = videosRef.current.some((video) =>
+    const matchingItems = videosRef.current.filter((video) =>
       getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
     );
+    const existingItem = matchingItems.find((video) =>
+      ['queue', 'playing', 'watch_later'].includes(String(video?.status || '').toLowerCase())
+    ) || matchingItems.sort((a, b) => (Number(b.playedAt) || Date.parse(b.watchedAt || '') || 0) -
+      (Number(a.playedAt) || Date.parse(a.watchedAt || '') || 0))[0] || null;
+    const historyCanBeRequestedAgain = existingItem?.status === 'watched' &&
+      isMediaHistoryCooldownExpired(existingItem, Date.now());
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
-    if (alreadyExists || requestAlreadyPending) {
-      addToast('That video already has an entry in the queue or history. Duplicate request ignored.', 'warning');
-      if (fromChat) {
-        const requester = normalizeTwitchLogin(requestedBy);
-        sendTwitchChatReply(`@${requester || 'viewer'} Already requested (queue/history).`);
-      }
+    if ((existingItem && !historyCanBeRequestedAgain) || requestAlreadyPending) {
+      const requester = normalizeTwitchLogin(requestedBy);
+      const remainingMs = existingItem?.status === 'watched'
+        ? getMediaHistoryCooldownRemainingMs(existingItem, Date.now())
+        : 0;
+      const remainingHours = Math.max(1, Math.ceil(remainingMs / (60 * 60 * 1000)));
+      const message = remainingMs > 0
+        ? 'That video is in History; it can be requested again ' + remainingHours + 'h after its last play.'
+        : 'That video is already queued or playing. Duplicate request ignored.';
+      addToast(message, 'warning');
+      if (fromChat) sendTwitchChatReply('@' + (requester || 'viewer') + ' ' + message);
       return false;
     }
-    // The lock closes the race where the same URL arrives in two chat messages at once,
-    // while metadata/TikTok resolution is still running.
+    // Lock the identity before any more asynchronous work so two requesters cannot race.
     pendingMediaRequestKeysRef.current.add(identityKey);
 
     // Fetch title/thumbnail and duration metadata. If title and thumbnail are already known,
@@ -2625,6 +2777,7 @@ function YediHubAppContent() {
 
     const newVideo = {
       id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
+      identityKey,
       channelRoom,
       title: cleanTitle,
       url: normalizedUrl,
@@ -2646,6 +2799,7 @@ function YediHubAppContent() {
       addedAt: new Date(requestedAt).toISOString(),
       queueOrder: getNextQueueOrder(),
       timestamp: requestedAt,
+      startSeconds: Math.max(0, Number(startSeconds) || parseMediaStartSeconds(normalizedUrl) || 0),
       note: note || `Added to ${channelRoom} deck`,
       thumbnail: resolvedThumbnail || parsed.thumbnail,
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
@@ -2783,17 +2937,8 @@ function YediHubAppContent() {
     setSimProgress(0);
 
     if (db && firebaseUser) {
-      const batch = writeBatch(db);
-      updatesById.forEach((updates, id) => {
-        const item = latestVideos.find((entry) => String(entry.id) === id) || { id };
-        batch.set(
-          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
-          { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
-          { merge: true }
-        );
-      });
-      batch.commit().catch((error) => {
-        console.warn('Play-now transition could not sync to Firestore.', error);
+      void persistQueuePatches(updatesById, latestVideos, true).catch((error) => {
+        console.warn('Versioned play-now transition could not commit.', error);
         setCloudSynced(false);
         setSyncStatusText('Playback changed locally — cloud sync failed');
       });
@@ -2824,12 +2969,8 @@ function YediHubAppContent() {
     setSimProgress(0);
 
     if (db && firebaseUser) {
-      const batch = writeBatch(db);
-      buildQueueSyncWrites(updatesById, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
-        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
-      });
-      batch.commit().catch((error) => {
-        console.warn('Next-track transition could not sync to Firestore.', error);
+      void persistQueuePatches(updatesById, latestVideos, true).catch((error) => {
+        console.warn('Versioned next-track transition could not commit.', error);
         setCloudSynced(false);
         setSyncStatusText('Next video changed locally — cloud sync failed');
       });
@@ -2921,12 +3062,8 @@ function YediHubAppContent() {
     setSimProgress(0);
 
     if (db && firebaseUser) {
-      const batch = writeBatch(db);
-      buildQueueSyncWrites(updates, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
-        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
-      });
-      batch.commit().catch((error) => {
-        console.warn('Previous-track transition could not sync to Firestore.', error);
+      void persistQueuePatches(updates, latestVideos, true).catch((error) => {
+        console.warn('Versioned previous-track transition could not commit.', error);
         setCloudSynced(false);
         setSyncStatusText('Previous track changed locally — cloud sync failed');
       });
@@ -3411,9 +3548,25 @@ function YediHubAppContent() {
     voteAttemptsRef.current.add(voteKey);
     reorderQueueAfterVoteRef.current = true;
     setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
-    await syncIncrementUpvote(videoId, voterLogin);
+    const voteResult = await syncIncrementUpvote(videoId, voterLogin);
+    if (!voteResult?.ok) {
+      voteAttemptsRef.current.delete(voteKey);
+      reorderQueueAfterVoteRef.current = false;
+      setVotedIds((prev) => {
+        const next = { ...prev };
+        delete next[voteKey];
+        return next;
+      });
+      const message = voteResult?.reason === 'already-voted'
+        ? 'You already upvoted this video. You can vote on other videos.'
+        : voteResult?.reason === 'own-request'
+          ? 'You cannot upvote your own request.'
+          : 'That video is no longer waiting in the queue.';
+      addToast(message, 'info');
+      return { ...voteResult, video: target };
+    }
     recordActivity('vote_cast', target, { actor: voterLogin, source: 'twitch-chat-or-dashboard' });
-    addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
+    addToast(\`+1 vote for "\${target.title.slice(0, 28)}" — queue priority updated.\`, 'success');
     return { ok: true, video: target };
   };
 
@@ -3578,31 +3731,25 @@ function YediHubAppContent() {
     });
     queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
     setSortBy('priority');
+    videosRef.current = nextVideos;
     setVideos(nextVideos);
 
     if (db && firebaseUser) {
       void (async () => {
-        const batch = writeBatch(db);
-        updates.forEach((video) => {
-          const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id));
-          batch.set(itemRef, { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
-        });
-        try {
-          await batch.commit();
-        } catch (error) {
-          console.warn('Atomic queue reorder failed; attempting a merge-write fallback.', error);
-          try {
-            await Promise.all(updates.map((video) => setDoc(
-              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
-              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
-              { merge: true }
-            )));
-          } catch (fallbackError) {
-            console.warn('Queue order could not sync to Firebase; the order remains stored locally.', fallbackError);
+        void persistQueuePatches(updates.map((video) => ({ id: String(video.id), queueOrder: video.queueOrder })), videos, true)
+          .catch((error) => {
+            console.warn('Versioned queue reorder did not commit.', error);
             setCloudSynced(false);
-            setSyncStatusText('Queue order saved locally — cloud update failed');
-          }
-        }
+            setSyncStatusText(String(error?.message || '').includes('QUEUE_VERSION_CONFLICT')
+              ? 'Queue changed in another session — refreshing before the next reorder'
+              : 'Queue order saved locally — cloud update failed');
+            if ((Number(queueVersionRef.current) || 0) === (Number(error?.currentVersion) || 0)) {
+              videosRef.current = videos;
+              setVideos(videos);
+            } else {
+              setVideos([...(videosRef.current || videos)]);
+            }
+          });
       })();
     }
   };
@@ -3631,30 +3778,20 @@ function YediHubAppContent() {
 
     if (db && firebaseUser) {
       void (async () => {
-        const batch = writeBatch(db);
-        updates.forEach((video) => {
-          batch.set(
-            doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
-            { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
-            { merge: true }
-          );
-        });
-        try {
-          await batch.commit();
-        } catch (error) {
-          console.warn('Drag-and-drop reorder batch failed; attempting merge writes.', error);
-          try {
-            await Promise.all(updates.map((video) => setDoc(
-              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
-              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
-              { merge: true }
-            )));
-          } catch (fallbackError) {
-            console.warn('Drag-and-drop queue order could not sync to Firebase.', fallbackError);
+        void persistQueuePatches(updates.map((video) => ({ id: String(video.id), queueOrder: video.queueOrder })), videos, true)
+          .catch((error) => {
+            console.warn('Versioned drag-and-drop reorder did not commit.', error);
             setCloudSynced(false);
-            setSyncStatusText('Queue order saved locally — cloud update failed');
-          }
-        }
+            setSyncStatusText(String(error?.message || '').includes('QUEUE_VERSION_CONFLICT')
+              ? 'Queue changed in another session — refreshing before the next reorder'
+              : 'Queue order saved locally — cloud update failed');
+            if ((Number(queueVersionRef.current) || 0) === (Number(error?.currentVersion) || 0)) {
+              videosRef.current = videos;
+              setVideos(videos);
+            } else {
+              setVideos([...(videosRef.current || videos)]);
+            }
+          });
       })();
     }
   };
@@ -3991,7 +4128,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}${Number(currentVideo.startSeconds) > 0 ? '&start=' + Math.floor(Number(currentVideo.startSeconds)) : ''}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -4364,6 +4501,7 @@ function YediHubAppContent() {
                   placeholder="YouTube, Twitch Clip, or TikTok share/video URL…"
                   className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
                 />
+                <p className="mt-1 text-[10px] text-slate-500">YouTube links can include ?t=83, ?start=83, #t=1m23s, or a timestamp after the link (1:23).</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
