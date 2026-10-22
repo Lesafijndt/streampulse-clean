@@ -138,7 +138,7 @@ export function classifyActivityStorageError(error) {
   const message = String(error?.message || '');
   const code = String(error?.code ?? '').toLowerCase();
 
-  if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured/i.test(message)) return 'missing_service_account';
+  if (/FIREBASE_SERVICE_ACCOUNT_JSON is not configured|Firebase Admin is not configured/i.test(message)) return 'missing_service_account';
   if (/not valid JSON or base64 JSON|must be a JSON object|missing the '(?:project_id|client_email|private_key)' field/i.test(message)) {
     return 'invalid_service_account_config';
   }
