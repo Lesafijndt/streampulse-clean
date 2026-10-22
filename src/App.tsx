@@ -2140,8 +2140,8 @@ function YediHubAppContent() {
         } else if (lowerText === '!help') {
           sendTwitchChatReply('Request: !assr <YouTube title or URL> · direct URLs: YouTube, TikTok, Twitch Clips, Kick. Queue must be open.');
           sendTwitchChatReply('Your requests: !remove / !unrequest (remove your latest waiting request) · !when / !position (spot and ETA) · !queue (queue status).');
-          sendTwitchChatReply('Vote: !bigcock [#] (upvote a waiting request; not your own, one vote per video). Mods: !skip.');
-          sendTwitchChatReply('Volume: Mods can use !volume up/down/0-100, !mute, !unmute on YouTube. TikTok/Twitch Clip volume uses the player controls.');
+          sendTwitchChatReply('Vote: !bigcock [#] (upvote a waiting request; not your own, one vote per video). Players auto-advance at the end when supported.');
+          sendTwitchChatReply('Mods: !skip · YouTube volume: !volume up/down/0-100, !volup, !voldown, !mute, !unmute. TikTok/Twitch Clip volume uses player controls.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -3825,7 +3825,7 @@ function YediHubAppContent() {
                     <iframe
                       key={`twitch-${currentVideo.videoId}`}
                       className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
-                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
+                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false&preload=metadata`}
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
                       allowFullScreen
