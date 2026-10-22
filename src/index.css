@@ -2112,3 +2112,81 @@ body { background: #03070b; }
 .gachi-theme [class*="to-blue-"] {
   --tw-gradient-to: #5e1a83 var(--tw-gradient-to-position) !important;
 }
+
+
+/* Queue readability: show full titles and request/playback metadata instead of clipping it. */
+.gachi-queue-item {
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  min-width: 0 !important;
+}
+.gachi-queue-item > div:first-child {
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  align-items: flex-start !important;
+}
+.gachi-queue-details {
+  min-width: 0 !important;
+  overflow: visible !important;
+  align-self: center !important;
+}
+.gachi-queue-details > div:first-child {
+  flex-wrap: wrap !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+.gachi-queue-details h4 {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: unset !important;
+  font-size: .78rem !important;
+  line-height: 1.35 !important;
+  margin: .2rem 0 !important;
+}
+.gachi-queue-details > div:last-child {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: baseline !important;
+  gap: .25rem .4rem !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
+  font-size: .66rem !important;
+  line-height: 1.35 !important;
+}
+.gachi-queue-details > div:last-child > span,
+.gachi-queue-details > div:last-child > span:last-child {
+  flex-shrink: 1 !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere !important;
+}
+.gachi-queue-details > div:last-child strong {
+  overflow-wrap: anywhere !important;
+}
+.gachi-queue-actions {
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+  align-self: auto !important;
+  overflow: visible !important;
+  padding-left: 0 !important;
+}
