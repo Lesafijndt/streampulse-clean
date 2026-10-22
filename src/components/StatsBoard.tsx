@@ -28,8 +28,8 @@ function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
 }
 
 export default function StatsBoard({
-  queueStats, activityEvents = [], currentSessionId = '', statsNow = Date.now(), statsExpanded, onToggle, onRefreshStats, durationLookupStats, onRefreshDurations,
-  isStaff, activitySyncStatus, activitySyncTone, activitySyncError, canRetryActivitySync,
+  queueStats, activityEvents = [], currentSessionId = '', statsNow = Date.now(), statsExpanded, onToggle, onRefreshStats,
+  activitySyncStatus, activitySyncTone, activitySyncError, canRetryActivitySync,
   onRetryActivitySync, networkOnline
 }) {
   const [statsPeriod, setStatsPeriod] = useState('lifetime');
@@ -93,14 +93,7 @@ export default function StatsBoard({
         <div className="mb-2 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Top requesters</span><span className="text-[9px] text-slate-500">{activityStats.removed} requests removed</span></div>
         {activityStats.requesters.length ? <div className="space-y-1.5">{activityStats.requesters.slice(0, 3).map((item, index) => <div key={item.label} className="flex items-center justify-between gap-2 text-[10px]"><span className="min-w-0 truncate text-slate-200">{index + 1}. @{item.label}</span><span className="font-mono font-bold text-amber-100">{item.count}</span></div>)}</div> : <p className="text-[10px] text-slate-600">No requester data recorded yet</p>}
       </div>
-      <div className="gachi-inset-card rounded-xl border p-3">
-        <div className="flex items-center justify-between gap-2 text-[10px]"><span className="font-bold uppercase tracking-wide text-slate-400">Duration lookup health</span><span className="font-mono text-slate-200">{durationLookupStats.pending} pending · {durationLookupStats.unavailable + durationLookupStats.errors} unavailable/failed</span></div>
-        {durationLookupStats.failedByPlatform?.length > 0 && <div className="mt-1.5 text-[9px] leading-4 text-slate-500">By provider: {durationLookupStats.failedByPlatform.join(' · ')}</div>}
-        {durationLookupStats.retrying > 0 && <div className="mt-1 text-[9px] leading-4 text-cyan-200">{durationLookupStats.retrying} missing duration(s) scheduled for automatic retry.</div>}
-        {durationLookupStats.latestFailureReason && <div className="mt-1 truncate text-[9px] leading-4 text-amber-200/80" title={durationLookupStats.latestFailureReason}>Latest lookup: {durationLookupStats.latestFailureReason}</div>}
-      </div>
       {activitySyncError && canRetryActivitySync && <button type="button" onClick={onRetryActivitySync} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold"><RefreshCw className="h-3.5 w-3.5" /> Retry activity sync</button>}
-      {isStaff && <button type="button" onClick={onRefreshDurations} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold" title="Retry provider metadata lookups for entries whose duration is still unknown"><RefreshCw className="h-3.5 w-3.5" /> Refresh missing durations</button>}
       <div className="text-[9px] leading-4 text-slate-500">{periodLabel} filters recorded requests, people, completion, skips, votes, and rankings. Waiting count and queue runway always describe the current queue. Events are recorded as they happen; legacy queue/history items may be imported when available, and completion is counted only when the player reports an ended event.</div>
     </div>}
   </section>;

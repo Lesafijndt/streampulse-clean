@@ -1873,52 +1873,6 @@ function YediHubAppContent() {
     : twitchAuth.authenticated && activityCloudReady
     ? 'success'
     : 'neutral';
-  const durationLookupStats = useMemo(() => {
-    const videoById = new Map(videos.map((video) => [String(video.id), video]));
-    const currentIds = new Set(videoById.keys());
-    const entries = Object.entries(durationLookupOutcomes).filter(([id]) => currentIds.has(String(id)));
-    const statuses = entries.map(([id, value]) => {
-      const status = typeof value === 'string' ? value : value?.status;
-      // Don't count a stale server failure if the provider player has since delivered the real length.
-      return ['unavailable', 'error'].includes(status) && !videoNeedsDurationLookup(videoById.get(String(id)))
-        ? 'found'
-        : status;
-    });
-    const failedByPlatform = {};
-    let retrying = 0;
-    let latestFailure = null;
-    entries.forEach(([id, value]) => {
-      const status = typeof value === 'string' ? value : value?.status;
-      if (!['unavailable', 'error'].includes(status) || !videoNeedsDurationLookup(videoById.get(String(id)))) return;
-      const platform = String(typeof value === 'object' ? value?.platform : 'external').toLowerCase() || 'external';
-      failedByPlatform[platform] = (failedByPlatform[platform] || 0) + 1;
-      const nextRetryAt = Number(typeof value === 'object' ? value?.nextRetryAt : 0) || 0;
-      if (nextRetryAt > statsNow) retrying += 1;
-      if (!latestFailure || (Number(value?.at) || 0) > (Number(latestFailure.value?.at) || 0)) {
-        latestFailure = { id, value: typeof value === 'object' ? value : { status, platform } };
-      }
-    });
-    return {
-      pending: statuses.filter((status) => status === 'pending').length,
-      unavailable: statuses.filter((status) => status === 'unavailable').length,
-      errors: statuses.filter((status) => status === 'error').length,
-      found: statuses.filter((status) => status === 'found').length,
-      retrying,
-      latestFailureReason: latestFailure?.value?.reason || '',
-      failedByPlatform: Object.entries(failedByPlatform)
-        .sort((a, b) => b[1] - a[1])
-        .map(([platform, count]) => platform + ' ' + count)
-    };
-  }, [durationLookupOutcomes, videos, statsNow]);
-
-  const handleRefreshDurations = () => {
-    // Keep active lookups marked in-flight to avoid spawning duplicate metadata requests.
-    setDurationLookupOutcomes((prev) => Object.fromEntries(
-      Object.entries(prev).filter(([, value]) => (typeof value === 'object' ? value?.status : value) === 'found')
-    ));
-    setDurationRefreshCount((count) => count + 1);
-  };
-
   const nextQueuedVideo = useMemo(
     () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
     [videos]
@@ -3553,7 +3507,7 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
-              <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'} · {durationLookupStats.unavailable + durationLookupStats.errors} duration lookup failures</div>
+              <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'}</div>
             </div>
           </div>
         )}
@@ -3581,8 +3535,6 @@ function YediHubAppContent() {
             statsExpanded={statsExpanded}
             onToggle={() => setStatsExpanded((expanded) => !expanded)}
             onRefreshStats={handleRefreshStats}
-            durationLookupStats={durationLookupStats}
-            onRefreshDurations={handleRefreshDurations}
             isStaff={isStaff}
             activitySyncStatus={activitySyncStatus}
             activitySyncTone={activitySyncTone}
