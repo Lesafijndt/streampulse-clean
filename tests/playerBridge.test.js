@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
+import { getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
@@ -33,4 +33,27 @@ test('visibility restoration does not send play when returning to a tab', () => 
 test('TikTok visibility restoration honors explicit mute and pause preferences', () => {
   assert.deepEqual(getVisibilityRestoreCommands('tiktok', { paused: true, muted: true }), ['pause', 'mute']);
   assert.deepEqual(getVisibilityRestoreCommands('tiktok', { paused: true, muted: false }), ['pause', 'unMute']);
+});
+
+test('visibility restoration seeks YouTube to the previous timestamp before re-pausing', () => {
+  assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: true, muted: false, currentTime: 83.25 }), [
+    { command: 'seekTo', args: [83.25, true] },
+    { command: 'pauseVideo' },
+    { command: 'unMute' },
+  ]);
+});
+
+test('visibility restoration uses TikTok seekTo seconds and keeps it paused and muted', () => {
+  assert.deepEqual(getVisibilityRestoreActions('tiktok', { paused: true, muted: true, currentTime: 21 }), [
+    { command: 'seekTo', value: 21 },
+    { command: 'pause' },
+    { command: 'mute' },
+  ]);
+});
+
+test('visibility restoration does not seek when no reliable playback position is known', () => {
+  assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: true, muted: true, currentTime: 0 }), [
+    { command: 'pauseVideo' },
+    { command: 'mute' },
+  ]);
 });

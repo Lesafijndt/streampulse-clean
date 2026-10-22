@@ -99,7 +99,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
+import { getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand } from './playerBridge.js';
 
 
 
@@ -459,8 +459,10 @@ function YediHubAppContent() {
   // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
   // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
   const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
+  const playbackPositionRef = useRef({ videoId: '', seconds: 0 });
   const playbackVisibilitySnapshotRef = useRef(null);
-  const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null });
+  const pendingPlaybackRestoreRef = useRef(null);
+  const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null, currentTime: 0 });
   const tiktokIframeRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
@@ -1627,15 +1629,34 @@ function YediHubAppContent() {
 
   const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
 
+  const recordPlaybackPosition = (videoId, seconds) => {
+    const id = String(videoId || '');
+    const value = Number(seconds);
+    if (!id || !Number.isFinite(value) || value < 0) return;
+    const pending = pendingPlaybackRestoreRef.current;
+    if (pending?.videoId === id && Date.now() < pending.expiresAt && pending.currentTime > 0.5) {
+      // A recreated iframe may report 0 before its seek completes; do not overwrite
+      // the timestamp we are actively trying to restore.
+      if (value < pending.currentTime - 2) return;
+      if (Math.abs(value - pending.currentTime) <= 2) pendingPlaybackRestoreRef.current = null;
+    }
+    playbackPositionRef.current = { videoId: id, seconds: value };
+  };
+
   // On a new queue item, restore only this tab's previous intent for that exact video.
   useEffect(() => {
     if (!currentVideo) {
       playbackIntentRef.current = { videoId: '', storageKey: '', paused: false, muted: null };
       playbackVisibilitySnapshotRef.current = null;
-      playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+      pendingPlaybackRestoreRef.current = null;
+      playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null, currentTime: 0 };
       return;
     }
     const videoId = String(currentVideo.id);
+    if (playbackPositionRef.current.videoId !== videoId) {
+      playbackPositionRef.current = { videoId, seconds: 0 };
+      pendingPlaybackRestoreRef.current = null;
+    }
     const intent = getPlaybackIntentForVideo(videoId);
     playbackIntentRef.current = intent;
     playbackVisibilitySnapshotRef.current = null;
@@ -1665,10 +1686,22 @@ function YediHubAppContent() {
           : platform === 'tiktok'
             ? (tiktokPreference === 'muted' ? true : intent.muted === true ? true : false)
             : intent.muted;
+        const knownPosition = playbackPositionRef.current.videoId === videoId
+          ? Number(playbackPositionRef.current.seconds) || 0
+          : 0;
+        const reportedPosition = platform === 'youtube'
+          ? Number(youtubePlaybackInfoRef.current.currentTime)
+          : knownPosition;
+        // Keep the last useful timestamp if the browser/provider has already reset an
+        // iframe while backgrounding the tab.
+        const currentTime = Number.isFinite(reportedPosition) && reportedPosition > 0.5
+          ? reportedPosition
+          : knownPosition;
+        recordPlaybackPosition(videoId, currentTime);
         const paused = intent.paused ||
           (platform === 'youtube' && youtubePlaybackInfoRef.current.playerState === 2) ||
           (platform === 'tiktok' && keyboardPausedRef.current.videoId === videoId && keyboardPausedRef.current.paused);
-        playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted };
+        playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted, currentTime };
         if (paused) updatePlaybackIntent(videoId, { paused: true });
         return;
       }
@@ -1678,19 +1711,26 @@ function YediHubAppContent() {
       const intent = getPlaybackIntentForVideo(videoId);
       const paused = snapshot.paused || intent.paused;
       const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
+      const currentTime = Math.max(0, Number(snapshot.currentTime) || 0);
+      const expiresAt = Date.now() + 5000;
       playbackRestoreGuardRef.current = {
         videoId,
-        until: Date.now() + 2500,
+        until: expiresAt,
         paused,
         muted: typeof muted === 'boolean' ? muted : null,
+        currentTime,
       };
+      if (currentTime > 0.5) {
+        pendingPlaybackRestoreRef.current = { videoId, platform, currentTime, paused, muted, expiresAt };
+        recordPlaybackPosition(videoId, currentTime);
+      }
       if (paused) updatePlaybackIntent(videoId, { paused: true });
       if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
 
-      const commands = getVisibilityRestoreCommands(platform, { paused, muted });
-      for (const command of commands) {
-        if (platform === 'youtube') youtubePlayerRef.current?.[command]?.();
-        else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, command, null);
+      const actions = getVisibilityRestoreActions(platform, { paused, muted, currentTime });
+      for (const action of actions) {
+        if (platform === 'youtube') youtubePlayerRef.current?.[action.command]?.(...(action.args || []));
+        else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, action.command, action.value ?? null);
       }
       playbackVisibilitySnapshotRef.current = null;
     };
@@ -2596,6 +2636,7 @@ function YediHubAppContent() {
       getCurrentTime: () => Number(youtubePlaybackInfoRef.current.currentTime) || 0,
       getDuration: () => Number(youtubePlaybackInfoRef.current.duration) || 0,
       getVolume: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.volume)) ? Number(youtubePlaybackInfoRef.current.volume) : 100,
+      seekTo: (seconds, allowSeekAhead = true) => postCommand('seekTo', [Math.max(0, Number(seconds) || 0), Boolean(allowSeekAhead)]),
       getPlayerState: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.playerState)) ? Number(youtubePlaybackInfoRef.current.playerState) : -1,
       setVolume: (value) => postCommand('setVolume', [Math.max(0, Math.min(100, Number(value) || 0))]),
       mute: () => postCommand('mute'),
@@ -2617,7 +2658,17 @@ function YediHubAppContent() {
       postCommand('getDuration');
       postCommand('getVolume');
       const intent = getPlaybackIntentForVideo(video.id);
+      const pending = pendingPlaybackRestoreRef.current;
+      const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
+      const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
+        ? pending.currentTime
+        : known;
+      if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
+        postCommand('seekTo', [restoreSeconds, true]);
+      }
       postCommand(intent.paused ? 'pauseVideo' : 'playVideo');
+      if (intent.muted === true) postCommand('mute');
+      else if (intent.muted === false) postCommand('unMute');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -2642,6 +2693,9 @@ function YediHubAppContent() {
         }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
+        if (Number.isFinite(now) && now >= 0 && currentVideoRef.current?.id === video.id) {
+          recordPlaybackPosition(video.id, now);
+        }
         if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
           playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
           reportPlayerDuration(video.id, duration);
@@ -2716,12 +2770,21 @@ function YediHubAppContent() {
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
-        // A recreated iframe must respect a pause saved before the tab was hidden.
+        // A recreated iframe must restore position and controls, not just pause state.
         const intent = getPlaybackIntentForVideo(video.id);
+        const pending = pendingPlaybackRestoreRef.current;
+        const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
+        const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
+          ? pending.currentTime
+          : known;
+        if (restoreSeconds > 0.5) sendCommand('seekTo', tiktokIframeRef.current?.contentWindow, restoreSeconds);
         sendCommand(intent.paused ? 'pause' : 'play');
+        if (intent.muted === true) sendCommand('mute');
+        else if (intent.muted === false) sendCommand('unMute');
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
+        if (currentVideoRef.current?.id === video.id) recordPlaybackPosition(video.id, currentTime);
         if (duration > 0) {
           if (currentVideoRef.current?.id === video.id) {
             playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
@@ -3407,7 +3470,18 @@ function YediHubAppContent() {
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
-                        send(isPlaybackPaused(currentVideo.id) ? 'pauseVideo' : 'playVideo');
+                        const pending = pendingPlaybackRestoreRef.current;
+                        const known = playbackPositionRef.current.videoId === String(currentVideo.id) ? playbackPositionRef.current.seconds : 0;
+                        const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
+                          ? pending.currentTime
+                          : known;
+                        if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
+                          send('seekTo', [restoreSeconds, true]);
+                        }
+                        const intent = getPlaybackIntentForVideo(currentVideo.id);
+                        send(intent.paused ? 'pauseVideo' : 'playVideo');
+                        if (intent.muted === true) send('mute');
+                        else if (intent.muted === false) send('unMute');
                       }}
                     />
                     </div>

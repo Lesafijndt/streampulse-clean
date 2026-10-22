@@ -1,6 +1,6 @@
 const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 const YOUTUBE_ORIGIN = 'https://www.youtube.com';
-const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seek', 'setVolume']);
+const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo', 'setVolume']);
 const YOUTUBE_COMMANDS = new Set(['addEventListener','playVideo','pauseVideo','mute','unMute','setVolume','seekTo','getCurrentTime','getDuration','getVolume','getPlayerState','isMuted']);
 
 export function postTikTokPlayerCommand(target, type, value = null) {
@@ -30,4 +30,22 @@ export function getVisibilityRestoreCommands(platform, { paused = false, muted =
   if (muted === true) commands.push('mute');
   else if (muted === false) commands.push(platform === 'youtube' ? 'unMute' : platform === 'tiktok' ? 'unMute' : '');
   return commands.filter(Boolean);
+}
+
+
+/** Build ordered player commands to restore the prior position and controls after tab return. */
+export function getVisibilityRestoreActions(platform, { paused = false, muted = null, currentTime = 0 } = {}) {
+  const actions = [];
+  const seconds = Number(currentTime);
+  if (Number.isFinite(seconds) && seconds > 0.5) {
+    if (platform === 'youtube') actions.push({ command: 'seekTo', args: [seconds, true] });
+    else if (platform === 'tiktok') actions.push({ command: 'seekTo', value: seconds });
+  }
+  if (paused) {
+    if (platform === 'youtube') actions.push({ command: 'pauseVideo' });
+    else if (platform === 'tiktok') actions.push({ command: 'pause' });
+  }
+  if (muted === true) actions.push({ command: 'mute' });
+  else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
+  return actions;
 }
