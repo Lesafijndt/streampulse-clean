@@ -871,7 +871,7 @@ function YediHubAppContent() {
     }, isStreamer ? 2200 : 500);
     const pollTimer = window.setInterval(() => {
       void refreshCloudChatListener(false);
-    }, 25000);
+    }, 120000);
     const onFocus = () => void refreshCloudChatListener(false);
     window.addEventListener('focus', onFocus);
 
@@ -4091,7 +4091,7 @@ function YediHubAppContent() {
                 <Activity className="h-4 w-4 text-cyan-300" />
                 <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">Technical diagnostics</h3>
               </div>
-              <span className="rounded-md border border-cyan-500/20 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-200/80">Moderator view · read only · refreshes every 25s</span>
+              <span className="rounded-md border border-cyan-500/20 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-200/80">Moderator view · read only · refreshes every 2m</span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="min-w-0">

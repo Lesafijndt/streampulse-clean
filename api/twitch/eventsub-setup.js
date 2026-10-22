@@ -3,6 +3,7 @@ import { getFirebaseAdminDb, getFirebaseNamespace } from '../_lib/firebase-admin
 import { classifyFirebaseHealthError } from '../_lib/firebase-health-diagnostic.js';
 import { waitUntil } from '@vercel/functions';
 import { processPendingEventSubChatMessages } from '../_lib/cloud-chat-requests.js';
+import { shouldScheduleEventSubDrain, EVENTSUB_STATUS_DRAIN_INTERVAL_MS } from '../_lib/eventsub-drain-throttle.js';
 
 const STREAMER_LOGIN = '2o3a';
 const BOT_LOGIN = 'gachibot69';
@@ -11,6 +12,7 @@ const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
 const REQUIRED_STREAMER_SCOPES = ['channel:bot'];
 let cachedAppToken = { value: '', expiresAt: 0 };
+let lastInboxDrainScheduledAt = 0;
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
@@ -364,12 +366,19 @@ export default async function handler(req, res) {
         (health.lastProcessingError ? ' Last processing error: ' + String(health.lastProcessingError).slice(0, 140) : ''),
     };
     if (currentStatus.active || currentStatus.status === 'pending') {
-      try {
-        waitUntil(processPendingEventSubChatMessages(2).catch((error) => {
-          console.error('EventSub status-triggered inbox drain failed:', String(error?.message || error).slice(0, 300));
-        }));
-      } catch (error) {
-        console.warn('Could not schedule EventSub inbox drain from status check:', String(error?.message || error).slice(0, 240));
+      // Status checks are polled by authenticated dashboards. Drain failed/pending inbox
+      // messages only occasionally here; incoming EventSub deliveries trigger processing
+      // immediately, so polling is a recovery path, not the primary worker.
+      const now = Date.now();
+      if (shouldScheduleEventSubDrain(now, lastInboxDrainScheduledAt)) {
+        lastInboxDrainScheduledAt = now;
+        try {
+          waitUntil(processPendingEventSubChatMessages(2).catch((error) => {
+            console.error('EventSub status-triggered inbox drain failed:', String(error?.message || error).slice(0, 300));
+          }));
+        } catch (error) {
+          console.warn('Could not schedule EventSub inbox drain from status check:', String(error?.message || error).slice(0, 240));
+        }
       }
       return res.status(200).json(withHealth);
     }
