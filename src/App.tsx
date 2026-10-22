@@ -3566,7 +3566,7 @@ function YediHubAppContent() {
       return { ...voteResult, video: target };
     }
     recordActivity('vote_cast', target, { actor: voterLogin, source: 'twitch-chat-or-dashboard' });
-    addToast(\`+1 vote for "\${target.title.slice(0, 28)}" — queue priority updated.\`, 'success');
+    addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
     return { ok: true, video: target };
   };
 

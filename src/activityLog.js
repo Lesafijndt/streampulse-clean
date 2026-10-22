@@ -45,8 +45,10 @@ function countsFor(items, getValue) {
     const value = getValue(item);
     if (value) counts.set(value, (counts.get(value) || 0) + 1);
   }
+  // Stable sorting keeps equally ranked requesters in first-seen order instead of
+  // moving viewer10/viewer11 ahead of viewer2/viewer3 by lexical string comparison.
   return [...counts.entries()].map(([label, count]) => ({ label, count }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    .sort((a, b) => b.count - a.count);
 }
 
 export function buildActivityStatistics(events = []) {
