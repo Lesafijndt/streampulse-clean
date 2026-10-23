@@ -86,8 +86,9 @@ test('successful server queue mutations refresh the write heartbeat and preserve
   assert.equal(update.queueUpdatedAt, NOW);
   assert.equal(update.chatIntakeHealth.lastWriteAt, NOW);
   assert.equal(update.chatIntakeHealth.lastWriteStatus, 'ok');
+  assert.equal(update.chatIntakeHealth.lastWriteSource, 'eventsub');
   assert.equal(update.chatIntakeHealth.lastWebhookAt, NOW - 500);
-  assert.equal(update.chatIntakeHealth.lastProcessingError, 'a prior failed request');
+  assert.equal(update.chatIntakeHealth.lastProcessingError, null);
 });
 
 test('EventSub API candidate filter accepts media requests and supported queue commands only', () => {

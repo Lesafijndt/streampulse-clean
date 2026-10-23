@@ -76,6 +76,7 @@ import {
   getDocs,
   onSnapshot
 } from 'firebase/firestore';
+import { classifyFirebaseHealthError } from '../api/_lib/firebase-health-diagnostic.js';
 import {
   buildCategoryCounts,
   buildNextTrackTransition,
@@ -353,8 +354,9 @@ function YediHubAppContent() {
   const [cloudChatListener, setCloudChatListener] = useState({
     status: 'checking', active: false, code: '', message: 'Checking cloud chat listener…',
     subscriptionStatus: 'unknown', healthDiagnosticCode: '', healthDiagnosticMessage: '',
-    firebaseAdminConfigured: null, firebaseWebConfigConfigured: null,
+    firestoreStatus: 'unknown', firebaseAdminConfigured: null, firebaseWebConfigConfigured: null,
     lastWebhookAt: 0, lastWebhookStatus: 'unknown', lastWriteAt: 0, lastWriteStatus: 'unknown',
+    lastWriteSource: '',
     lastProcessingError: '', lastProcessingErrorAt: 0, lastProcessingStatus: 'unknown',
     queueVersion: 0, queueUpdatedAt: 0,
   });
@@ -375,6 +377,43 @@ function YediHubAppContent() {
   // Streamers and mods share the room based on the Broadcaster's Twitch username
   const [channelRoom, setChannelRoom] = useState(() => getSavedRoom());
   const [roomInput, setRoomInput] = useState(() => getSavedRoom());
+  const localQueueWriteHealthKey = roomStorageKey(channelRoom, 'queue-write-health');
+  const [localQueueWriteHealth, setLocalQueueWriteHealth] = useState(() => {
+    const stored = readStoredValue(localQueueWriteHealthKey, null);
+    return stored && typeof stored === 'object'
+      ? stored
+      : { status: 'unknown', code: '', message: '', lastSuccessAt: 0, lastFailureAt: 0 };
+  });
+  useEffect(() => {
+    const stored = readStoredValue(localQueueWriteHealthKey, null);
+    setLocalQueueWriteHealth(stored && typeof stored === 'object'
+      ? stored
+      : { status: 'unknown', code: '', message: '', lastSuccessAt: 0, lastFailureAt: 0 });
+  }, [localQueueWriteHealthKey]);
+  const recordLocalQueueWriteHealth = (error = null) => {
+    const previous = readStoredValue(localQueueWriteHealthKey, {});
+    const timestamp = Date.now();
+    const diagnostic = error ? classifyFirebaseHealthError(error) : null;
+    const pendingCount = pendingQueueAddsRef.current?.size || 0;
+    const next = error
+      ? {
+          status: 'error', code: diagnostic.code,
+          message: diagnostic.message + ' The queue change is not confirmed in the shared queue. Pending additions are retried every five minutes while this moderator dashboard stays open.',
+          lastSuccessAt: Number(previous?.lastSuccessAt) || 0, lastFailureAt: timestamp,
+        }
+      : pendingCount > 0
+        ? {
+          status: 'pending', code: 'queue_write_retry_pending',
+          message: pendingCount + ' pending queue addition(s) are still only saved on this moderator dashboard and are not confirmed for the streamer.',
+          lastSuccessAt: timestamp, lastFailureAt: Number(previous?.lastFailureAt) || 0,
+        }
+        : {
+          status: 'ok', code: '', message: '',
+          lastSuccessAt: timestamp, lastFailureAt: 0,
+        };
+    writeStoredValue(localQueueWriteHealthKey, next);
+    setLocalQueueWriteHealth(next);
+  };
 
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
@@ -867,12 +906,14 @@ function YediHubAppContent() {
           subscriptionStatus: String(result.subscriptionStatus || (result.active === true ? 'enabled' : 'unknown')),
           healthDiagnosticCode: String(result.healthDiagnosticCode || ''),
           healthDiagnosticMessage: String(result.healthDiagnosticMessage || ''),
+          firestoreStatus: String(result.firestoreStatus || 'unknown'),
           firebaseAdminConfigured: typeof result.firebaseAdminConfigured === 'boolean' ? result.firebaseAdminConfigured : null,
           firebaseWebConfigConfigured: typeof result.firebaseWebConfigConfigured === 'boolean' ? result.firebaseWebConfigConfigured : null,
           lastWebhookAt: Number(result.lastWebhookAt) || 0,
           lastWebhookStatus: String(result.lastWebhookStatus || 'unknown'),
           lastWriteAt: Number(result.lastWriteAt) || 0,
           lastWriteStatus: String(result.lastWriteStatus || 'unknown'),
+          lastWriteSource: String(result.lastWriteSource || ''),
           lastProcessingError: String(result.lastProcessingError || ''),
           lastProcessingErrorAt: Number(result.lastProcessingErrorAt) || 0,
           lastProcessingStatus: String(result.lastProcessingStatus || 'unknown'),
@@ -886,6 +927,7 @@ function YediHubAppContent() {
           status: 'unavailable',
           active: false,
           code: 'status_unavailable',
+          firestoreStatus: 'unknown',
           message: 'Could not check the cloud chat listener. Requests may rely on the open streamer dashboard until it is healthy.',
         });
       } finally {
@@ -1087,15 +1129,7 @@ function YediHubAppContent() {
             retryBatch.forEach((video) => {
               const id = String(video.id);
               pendingQueueAddAttemptAtRef.current.set(id, now);
-              const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id);
-              void setDoc(itemRef, { ...video, createdAt: video.timestamp || now }, { merge: true })
-                .catch((error) => {
-                  console.warn('Retrying a locally pending queue item failed.', error);
-                  if (active) {
-                    setCloudSynced(false);
-                    setSyncStatusText('Cloud write failed — pending request remains saved in this browser');
-                  }
-                });
+              void syncAddVideo(video, { retryOnly: true });
             });
           }
 
@@ -1291,15 +1325,26 @@ function YediHubAppContent() {
         });
 
         writes.forEach(({ ref, payload }) => transaction.set(ref, payload, { merge: true }));
+        const writeAt = Date.now();
+        const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+          ? settings.chatIntakeHealth : {};
         transaction.set(settingsRef, {
           queueVersion: currentVersion + 1,
-          queueUpdatedAt: Date.now(),
+          queueUpdatedAt: writeAt,
+          chatIntakeHealth: {
+            ...previousHealth,
+            lastWriteAt: writeAt,
+            lastWriteStatus: 'ok',
+            lastWriteSource: 'moderator-browser',
+          },
         }, { merge: true });
         return currentVersion + 1;
       });
       queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(newVersion) || 0);
+      recordLocalQueueWriteHealth();
       return true;
     } catch (error) {
+      recordLocalQueueWriteHealth(error);
       if (Number.isFinite(Number(error?.currentVersion))) {
         queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(error.currentVersion));
       }
@@ -1604,16 +1649,28 @@ function YediHubAppContent() {
             }, { merge: true });
           }
           const version = Number(settings.queueVersion) || 0;
+          const writeAt = Date.now();
+          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+            ? settings.chatIntakeHealth : {};
           transaction.set(settingsRef, {
-            queueVersion: version + 1, queueUpdatedAt: Date.now(),
+            queueVersion: version + 1,
+            queueUpdatedAt: writeAt,
+            chatIntakeHealth: {
+              ...previousHealth,
+              lastWriteAt: writeAt,
+              lastWriteStatus: 'ok',
+              lastWriteSource: 'moderator-browser',
+            },
           }, { merge: true });
           return { ok: true, upvotes, voters: nextVoters, version: version + 1 };
         });
         if (!result.ok) return result;
         queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(result.version) || 0);
+        recordLocalQueueWriteHealth();
         applyLocalVote({ upvotes: result.upvotes, voters: result.voters });
         return { ok: true };
       } catch (error) {
+        recordLocalQueueWriteHealth(error);
         console.warn('Transactional vote could not reach Firestore; retaining the vote locally.', error);
         setCloudSynced(false);
         setSyncStatusText('Vote saved locally — cloud update failed');
@@ -1712,17 +1769,21 @@ function YediHubAppContent() {
     })();
   };
 
-  const syncAddVideo = async (videoObj) => {
-    const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
-    // Persist an optimistic-add journal before starting the cloud write. If Firestore denies
-    // the write (for example after quota exhaustion), later snapshots and page reloads retain it.
-    pendingQueueAddsRef.current.set(String(localItem.id), localItem);
-    persistPendingQueueAdds();
+  const syncAddVideo = async (videoObj, options = {}) => {
+    const retryOnly = options.retryOnly === true;
+    const pendingItem = retryOnly ? pendingQueueAddsRef.current.get(String(videoObj.id)) : null;
+    const localItem = { ...(pendingItem || videoObj), channelRoom: normalizeRoomName(channelRoom) };
+    if (!retryOnly) {
+      // Persist an optimistic-add journal before starting the cloud write. If Firestore denies
+      // the write (for example after quota exhaustion), later snapshots and page reloads retain it.
+      pendingQueueAddsRef.current.set(String(localItem.id), localItem);
+      persistPendingQueueAdds();
 
-    // Update the ref synchronously so back-to-back chat messages see the new item immediately.
-    videosRef.current = [localItem, ...videosRef.current.filter((video) => String(video.id) !== String(localItem.id))];
-    setVideos((prev) => [localItem, ...prev.filter((video) => String(video.id) !== String(localItem.id))]);
-    recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
+      // Update the ref synchronously so back-to-back chat messages see the new item immediately.
+      videosRef.current = [localItem, ...videosRef.current.filter((video) => String(video.id) !== String(localItem.id))];
+      setVideos((prev) => [localItem, ...prev.filter((video) => String(video.id) !== String(localItem.id))]);
+      recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
+    }
 
     if (db && firebaseUser) {
       const itemId = String(localItem.id);
@@ -1745,14 +1806,29 @@ function YediHubAppContent() {
               throw duplicate;
             }
           }
+          const writeAt = Date.now();
+          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+            ? settings.chatIntakeHealth : {};
           transaction.set(itemRef, { ...localItem, createdAt: Date.now() });
-          transaction.set(settingsRef, { queueVersion: version + 1, queueUpdatedAt: Date.now() }, { merge: true });
+          transaction.set(settingsRef, {
+            queueVersion: version + 1,
+            queueUpdatedAt: writeAt,
+            chatIntakeHealth: {
+              ...previousHealth,
+              lastWriteAt: writeAt,
+              lastWriteStatus: 'ok',
+              lastWriteSource: 'moderator-browser',
+              lastWrittenMediaId: itemId,
+              lastProcessingError: null,
+            },
+          }, { merge: true });
           return version + 1;
         });
         queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
         pendingQueueAddsRef.current.delete(itemId);
         pendingQueueAddAttemptAtRef.current.delete(itemId);
         persistPendingQueueAdds();
+        recordLocalQueueWriteHealth();
       } catch (error) {
         if (error?.code === 'duplicate_queue_item') {
           pendingQueueAddsRef.current.delete(itemId);
@@ -1762,15 +1838,33 @@ function YediHubAppContent() {
           setVideos((prev) => prev.filter((video) => String(video.id) !== itemId));
           return;
         }
+        recordLocalQueueWriteHealth(error);
         console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
         setCloudSynced(false);
         setSyncStatusText('Cloud write failed — sync needs attention');
-        if (String(localItem.note || '').toLowerCase().includes('twitch chat')) {
-          sendTwitchChatReply('@' + normalizeTwitchLogin(localItem.requestedBy) + ' I could not save your request to the shared cloud queue. Please retry later; it is not confirmed for the streamer.');
-        }
       }
     }
   };
+
+  // A quota outage may produce no later Firestore snapshot to trigger the existing recovery
+  // path. Retry a few pending rows at a five-minute per-item interval while the moderator view
+  // stays open, so recovery after a quota reset does not require a page refresh.
+  useEffect(() => {
+    if (!db || !firebaseUser) return undefined;
+    const retryTimer = window.setInterval(() => {
+      if (!networkOnlineRef.current) return;
+      const now = Date.now();
+      const retryBatch = [...pendingQueueAddsRef.current.values()]
+        .filter((video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom))
+        .filter((video) => now - (pendingQueueAddAttemptAtRef.current.get(String(video.id)) || 0) >= 5 * 60 * 1000)
+        .slice(0, 3);
+      retryBatch.forEach((video) => {
+        pendingQueueAddAttemptAtRef.current.set(String(video.id), now);
+        void syncAddVideo(video, { retryOnly: true });
+      });
+    }, 60 * 1000);
+    return () => window.clearInterval(retryTimer);
+  }, [db, firebaseUser, channelRoom]);
 
   const syncDeleteVideo = async (videoId, options = {}) => {
     const removedItem = videosRef.current.find((video) => String(video.id) === String(videoId));
@@ -1797,11 +1891,25 @@ function YediHubAppContent() {
           const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
           const version = Number(settings.queueVersion) || 0;
           if (itemSnapshot.exists()) transaction.delete(docRef);
-          transaction.set(settingsRef, { queueVersion: version + 1, queueUpdatedAt: Date.now() }, { merge: true });
+          const writeAt = Date.now();
+          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+            ? settings.chatIntakeHealth : {};
+          transaction.set(settingsRef, {
+            queueVersion: version + 1,
+            queueUpdatedAt: writeAt,
+            chatIntakeHealth: {
+              ...previousHealth,
+              lastWriteAt: writeAt,
+              lastWriteStatus: 'ok',
+              lastWriteSource: 'moderator-browser',
+            },
+          }, { merge: true });
           return version + 1;
         });
         queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
+        recordLocalQueueWriteHealth();
       } catch (error) {
+        recordLocalQueueWriteHealth(error);
         console.warn('Firestore delete failed; the item was removed locally.', error);
         setCloudSynced(false);
         setSyncStatusText('Cloud delete failed — local save is active');
@@ -2766,11 +2874,11 @@ function YediHubAppContent() {
     const requestTextWithoutTimestamp = stripMediaTimestampSuffix(requestText).text;
     const startSeconds = parseMediaStartSeconds(rawText);
     if (!requestText) {
-      sendTwitchChatReply(`@${requester} Use !assr <URL or title>.`);
+      addToast(`Ignored an empty !assr request from @${requester}.`, 'warning');
       return;
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} Requests are closed.`);
+      addToast(`Ignored @${requester}'s request because the queue is closed.`, 'warning');
       return;
     }
 
@@ -2787,27 +2895,27 @@ function YediHubAppContent() {
         const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(searchTitle.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
-          sendTwitchChatReply(`@${requester} No YouTube match. Try a shorter title or URL.`);
+          addToast(`No YouTube match for @${requester}'s chat request.`, 'warning');
           return;
         }
         url = result.results[0].url;
         title = result.results[0].title || '';
       } catch (error) {
         console.warn('Chat title search failed:', error);
-        sendTwitchChatReply(`@${requester} Search unavailable; try a direct URL.`);
+        addToast(`Title search failed for @${requester}'s chat request.`, 'warning');
         return;
       }
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} Requests are closed.`);
+      addToast(`Ignored @${requester}'s request because the queue closed during title search.`, 'warning');
       return;
     }
     // Timestamp may be in the YouTube URL (t= / start= / #t=) or written after it (1:23).
     const resolvedStartSeconds = startSeconds || parseMediaStartSeconds(url);
-    // Keep successful requests quiet in Twitch chat. Failure responses are sent by the request flow.
+    // Keep media requests quiet in Twitch chat; the moderator dashboard shows request failures.
     await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role, startSeconds: resolvedStartSeconds,
-      note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
+      note: 'Requested via Twitch chat', manualCategory: null,
     });
   };
 
@@ -2823,12 +2931,10 @@ function YediHubAppContent() {
     requestedBy,
     userRole = 'viewer',
     manualCategory = null,
-    fromChat = false,
     startSeconds = null
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Room is not set.');
       return false;
     }
     // A closed queue blocks every new request, including requests sent by staff. Staff can
@@ -2836,7 +2942,6 @@ function YediHubAppContent() {
     // latest setting, not the value captured by an older render.
     if (!queueOpenRef.current) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -2854,7 +2959,6 @@ function YediHubAppContent() {
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.videoId || !result.url) {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
-          if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
           return false;
         }
         if (typeof result.metadataUrl === 'string' && result.metadataUrl.startsWith('https://')) {
@@ -2866,7 +2970,6 @@ function YediHubAppContent() {
       } catch (error) {
         console.warn('TikTok short-link resolution failed.', error);
         addToast('Could not resolve this TikTok share link here. Try copying the full TikTok URL with /video/ followed by its ID.', 'warning');
-        if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
         return false;
       }
     }
@@ -2885,7 +2988,6 @@ function YediHubAppContent() {
       isMediaHistoryCooldownExpired(existingItem, Date.now());
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
     if ((existingItem && !historyCanBeRequestedAgain) || requestAlreadyPending) {
-      const requester = normalizeTwitchLogin(requestedBy);
       const remainingMs = existingItem?.status === 'watched'
         ? getMediaHistoryCooldownRemainingMs(existingItem, Date.now())
         : 0;
@@ -2894,7 +2996,6 @@ function YediHubAppContent() {
         ? 'That video is in History; it can be requested again ' + remainingHours + 'h after its last play.'
         : 'That video is already queued or playing. Duplicate request ignored.';
       addToast(message, 'warning');
-      if (fromChat) sendTwitchChatReply('@' + (requester || 'viewer') + ' ' + message);
       return false;
     }
     // Lock the identity before any more asynchronous work so two requesters cannot race.
@@ -2935,7 +3036,6 @@ function YediHubAppContent() {
     if (!queueOpenRef.current) {
       pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -4618,10 +4718,10 @@ function YediHubAppContent() {
               </div>
               <span className="rounded-md border border-cyan-500/20 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-200/80">Moderator view · read only · refreshes every 2m</span>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <div className="min-w-0">
                 <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firebase auth / sync</div>
-                <div className={cloudSynced ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>{firebaseLoginToken ? (cloudSynced ? 'Custom token issued · Firestore connected' : syncStatusText) : syncStatusText}</div>
+                <div className={cloudSynced ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>{firebaseLoginToken ? (cloudSynced ? 'Custom token issued · Firestore listener connected' : syncStatusText) : syncStatusText}</div>
               </div>
               <div className="min-w-0">
                 <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Twitch EventSub subscription</div>
@@ -4633,9 +4733,15 @@ function YediHubAppContent() {
               </div>
               <div className="min-w-0">
                 <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firestore writes</div>
-                <div className={cloudChatListener.lastWriteStatus === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : 'mt-1 text-[11px] font-bold text-amber-200'}>{cloudChatListener.lastWriteStatus || 'unknown'}</div>
-                <div className="mt-1 break-words text-[10px] text-slate-500">Last successful queue write: {formatTechnicalTimestamp(cloudChatListener.lastWriteAt)}</div>
-                <div className="mt-1 text-[10px] text-slate-500">Queue version: {cloudChatListener.queueVersion || 0}{cloudChatListener.queueUpdatedAt ? ' · updated ' + formatTechnicalTimestamp(cloudChatListener.queueUpdatedAt) : ''}</div>
+                <div className={cloudChatListener.firestoreStatus === 'unavailable' ? 'mt-1 text-[11px] font-bold text-rose-200' : cloudChatListener.lastWriteStatus === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : 'mt-1 text-[11px] font-bold text-amber-200'}>{cloudChatListener.firestoreStatus === 'unavailable' ? 'unavailable' : cloudChatListener.lastWriteStatus || 'unknown'}</div>
+                <div className="mt-1 break-words text-[10px] text-slate-500">Last successful queue write: {formatTechnicalTimestamp(cloudChatListener.lastWriteAt)}{cloudChatListener.lastWriteSource ? ' · via ' + cloudChatListener.lastWriteSource.replace('-', ' ') : ''}</div>
+                <div className="mt-1 text-[10px] text-slate-500">Queue version: {cloudChatListener.firestoreStatus === 'unavailable' ? 'unavailable' : cloudChatListener.queueVersion || 0}{cloudChatListener.firestoreStatus !== 'unavailable' && cloudChatListener.queueUpdatedAt ? ' · updated ' + formatTechnicalTimestamp(cloudChatListener.queueUpdatedAt) : ''}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Moderator browser writes</div>
+                <div className={localQueueWriteHealth.status === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : localQueueWriteHealth.status === 'error' ? 'mt-1 text-[11px] font-bold text-rose-200' : 'mt-1 text-[11px] font-bold text-amber-200'}>{localQueueWriteHealth.status || 'unknown'}</div>
+                <div className="mt-1 break-words text-[10px] text-slate-500">Last confirmed: {formatTechnicalTimestamp(localQueueWriteHealth.lastSuccessAt)}</div>
+                {['error', 'pending'].includes(localQueueWriteHealth.status) && <div className="mt-1 break-words text-[10px] text-amber-200">{localQueueWriteHealth.code}: not confirmed for the streamer</div>}
               </div>
               <div className="min-w-0">
                 <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Backend configuration</div>
@@ -4643,11 +4749,22 @@ function YediHubAppContent() {
                 <div className="mt-1 break-words text-[10px] text-slate-200">Firebase web config: {typeof cloudChatListener.firebaseWebConfigConfigured !== 'boolean' ? 'checking' : cloudChatListener.firebaseWebConfigConfigured ? 'configured' : 'missing'}</div>
               </div>
             </div>
-            {(cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError) && (
+            {(cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError || ['error', 'pending'].includes(localQueueWriteHealth.status)) && (
               <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
                 <div className="text-[9px] font-black uppercase tracking-wider text-amber-200">Actionable diagnostic</div>
-                <div className="mt-1 break-words font-mono text-[10px] text-amber-100">Code: {cloudChatListener.healthDiagnosticCode || cloudChatListener.code || 'processing_error'}</div>
-                <div className="mt-1 break-words text-[11px] text-slate-200">{cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError || cloudChatListener.message}</div>
+                {cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage ? (
+                  <>
+                    <div className="mt-1 break-words font-mono text-[10px] text-amber-100">Server check · {cloudChatListener.healthDiagnosticCode || cloudChatListener.code || 'firestore_health_check_failed'}</div>
+                    <div className="mt-1 break-words text-[11px] text-slate-200">{cloudChatListener.healthDiagnosticMessage || cloudChatListener.message}</div>
+                  </>
+                ) : null}
+                {['error', 'pending'].includes(localQueueWriteHealth.status) && (
+                  <>
+                    <div className="mt-2 break-words font-mono text-[10px] text-amber-100">Moderator browser · {localQueueWriteHealth.code || 'firestore_write_failed'}</div>
+                    <div className="mt-1 break-words text-[11px] text-slate-200">{localQueueWriteHealth.message || 'Firestore did not confirm the queue write. The request remains only on this moderator dashboard until a retry succeeds.'}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">Last failed queue write: {formatTechnicalTimestamp(localQueueWriteHealth.lastFailureAt)}</div>
+                  </>
+                )}
                 {cloudChatListener.lastProcessingError && cloudChatListener.healthDiagnosticMessage && (
                   <div className="mt-1 break-words text-[10px] text-slate-400">Last processor error: {cloudChatListener.lastProcessingError}</div>
                 )}

@@ -313,9 +313,15 @@ export default async function handler(req, res) {
     const subscription = await findSubscription(origin, broadcasterId, botId);
     const currentStatus = statusResult(subscription);
     let roomSettingsSnapshot;
+    let latestInboxSnapshot;
     try {
       const db = await getFirebaseAdminDb();
-      roomSettingsSnapshot = await db.doc('artifacts/' + getFirebaseNamespace() + '/public/data/room_settings/' + STREAMER_LOGIN).get();
+      const namespace = getFirebaseNamespace();
+      [roomSettingsSnapshot, latestInboxSnapshot] = await Promise.all([
+        db.doc('artifacts/' + namespace + '/public/data/room_settings/' + STREAMER_LOGIN).get(),
+        db.collection('artifacts/' + namespace + '/public/data/chat_request_inbox')
+          .orderBy('receivedAt', 'desc').limit(1).get(),
+      ]);
     } catch (error) {
       const diagnostic = classifyFirebaseHealthError(error);
       const firebaseAdminConfigured = Boolean(String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim());
@@ -328,6 +334,7 @@ export default async function handler(req, res) {
         active: false,
         status: 'error',
         code: 'firebase_unavailable',
+        firestoreStatus: 'unavailable',
         healthDiagnosticCode: diagnostic.code,
         healthDiagnosticMessage: diagnostic.message,
         firebaseAdminConfigured,
@@ -339,21 +346,32 @@ export default async function handler(req, res) {
     const roomSettings = roomSettingsSnapshot?.exists ? roomSettingsSnapshot.data() : {};
     const health = roomSettings?.chatIntakeHealth && typeof roomSettings.chatIntakeHealth === 'object'
       ? roomSettings.chatIntakeHealth : {};
+    const latestInbox = latestInboxSnapshot?.docs?.[0]?.data?.() || null;
     const lastWriteAt = Number(health.lastWriteAt) || 0;
-    const lastWebhookAt = Number(health.lastWebhookAt) || 0;
+    const lastWebhookAt = Math.max(Number(health.lastWebhookAt) || 0, Number(latestInbox?.receivedAt) || 0);
+    const latestInboxStatus = String(latestInbox?.status || '');
+    const latestInboxError = String(latestInbox?.lastError || '').slice(0, 180);
     const writeAge = lastWriteAt > 0 ? Math.max(0, Math.floor((Date.now() - lastWriteAt) / 60000)) : null;
     const healthMessage = lastWriteAt > 0
       ? ' Last successful server queue write: ' + (writeAge < 1 ? 'under 1 minute ago.' : writeAge + ' minute(s) ago.')
       : ' Waiting for the first successful queue write.';
     const withHealth = {
       ...currentStatus,
+      firestoreStatus: 'connected',
       lastWriteAt: lastWriteAt || null,
       lastWebhookAt: lastWebhookAt || null,
       lastWriteStatus: String(health.lastWriteStatus || 'unknown'),
-      lastWebhookStatus: String(health.lastWebhookStatus || 'unknown'),
-      lastProcessingError: String(health.lastProcessingError || '').slice(0, 180),
-      lastProcessingErrorAt: Number(health.lastProcessingErrorAt) || null,
-      lastProcessingStatus: String(health.lastProcessingStatus || 'unknown'),
+      lastWriteSource: String(health.lastWriteSource || ''),
+      lastWebhookStatus: latestInbox ? 'persisted' : String(health.lastWebhookStatus || 'unknown'),
+      lastProcessingError: latestInboxError || (latestInbox ? '' : String(health.lastProcessingError || '').slice(0, 180)),
+      lastProcessingErrorAt: latestInboxError
+        ? Number(latestInbox?.lastFailedAt) || null
+        : (latestInbox ? null : Number(health.lastProcessingErrorAt) || null),
+      lastProcessingStatus: latestInbox
+        ? latestInboxStatus === 'processed' ? 'ok'
+          : latestInboxError ? (latestInboxStatus === 'failed' ? 'failed' : 'retrying')
+            : latestInboxStatus || 'unknown'
+        : String(health.lastProcessingStatus || 'unknown'),
       queueVersion: Number(roomSettings.queueVersion) || 0,
       queueUpdatedAt: Number(roomSettings.queueUpdatedAt) || null,
       subscriptionStatus: String(currentStatus.status || 'unknown'),
@@ -396,6 +414,7 @@ export default async function handler(req, res) {
       active: false,
       status: 'unavailable',
       code: 'status_unavailable',
+      firestoreStatus: 'unknown',
       message: 'Could not verify the cloud chat listener. Check connection details and retry.',
     });
   }

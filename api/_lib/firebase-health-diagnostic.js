@@ -16,13 +16,19 @@ export function classifyFirebaseHealthError(error) {
   if (/ERR_MODULE_NOT_FOUND|Cannot find package|Cannot find module|firebase-admin.*(?:load|import)/i.test(message)) {
     return { code: 'firebase_admin_sdk_unavailable', message: 'The Firebase Admin SDK could not be loaded by the server function.' };
   }
-  if (/PERMISSION_DENIED|permission denied|insufficient permissions|not authorized|\b403\b/i.test(message)) {
+  if (/PERMISSION_DENIED|permission denied|insufficient permissions|not authorized|\b403\b/i.test(message) ||
+      code === 'permission-denied' || code === '7') {
     return { code: 'firestore_permission_denied', message: 'Firestore denied access. Check the service account and the target Firebase project.' };
   }
-  if (/RESOURCE_EXHAUSTED|quota/i.test(message)) {
-    return { code: 'firestore_quota_exceeded', message: 'The Firebase project may have exceeded a Firestore quota or rate limit.' };
+  if (/RESOURCE_EXHAUSTED|resource[- ]exhausted|quota|rate limit/i.test(message) ||
+      code === 'resource-exhausted' || code === '8') {
+    return {
+      code: 'firestore_quota_exceeded',
+      message: 'Firestore returned RESOURCE_EXHAUSTED. This can mean a daily project quota or regional capacity limit; check Firebase Console → Firestore → Usage and Cloud Firestore API quotas.',
+    };
   }
-  if (/UNAVAILABLE|ECONNRESET|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|deadline exceeded|timed? ?out|network/i.test(message)) {
+  if (/UNAVAILABLE|ECONNRESET|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|deadline exceeded|timed? ?out|network/i.test(message) ||
+      code === 'unavailable' || code === '14') {
     return { code: 'firestore_unreachable', message: 'The Firestore health check could not reach Firebase. Check service availability and network errors.' };
   }
   if (/private.?key|PEM|invalid_grant|invalid credentials/i.test(message)) {
