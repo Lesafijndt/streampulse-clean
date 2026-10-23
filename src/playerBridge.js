@@ -97,7 +97,8 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
     if (platform === 'youtube') actions.push({ command: 'playVideo' });
     else if (platform === 'tiktok' || platform === 'twitch') actions.push({ command: 'play' });
   }
-  if ((platform === 'youtube' || platform === 'twitch') && Number.isFinite(Number(volume))) {
+  if ((platform === 'youtube' || platform === 'twitch') &&
+      volume !== null && volume !== undefined && Number.isFinite(Number(volume))) {
     actions.push({ command: 'setVolume', args: [clampPlayerVolume(volume)] });
   }
   if (platform === 'twitch' && typeof muted === 'boolean') {
