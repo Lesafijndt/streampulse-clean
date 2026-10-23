@@ -78,7 +78,7 @@ export function getVisibilityRestoreCommands(platform, { paused = false, muted =
 
 
 /** Build ordered player commands to restore the prior position and controls after tab return. */
-export function getVisibilityRestoreActions(platform, { paused = false, muted = null, currentTime = 0 } = {}) {
+export function getVisibilityRestoreActions(platform, { paused = false, muted = null, currentTime = 0, volume = null } = {}) {
   const actions = [];
   const seconds = Number(currentTime);
   // Pause first so seeking after an iframe resumes from an unstarted state does not
