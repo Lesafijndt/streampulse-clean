@@ -97,7 +97,12 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
     if (platform === 'youtube') actions.push({ command: 'playVideo' });
     else if (platform === 'tiktok' || platform === 'twitch') actions.push({ command: 'play' });
   }
-  if (muted === true) actions.push({ command: 'mute' });
+  if ((platform === 'youtube' || platform === 'twitch') && Number.isFinite(Number(volume))) {
+    actions.push({ command: 'setVolume', args: [clampPlayerVolume(volume)] });
+  }
+  if (platform === 'twitch' && typeof muted === 'boolean') {
+    actions.push({ command: 'setMuted', args: [muted] });
+  } else if (muted === true) actions.push({ command: 'mute' });
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
   return actions;
 }
