@@ -536,6 +536,13 @@ function YediHubAppContent() {
   const playerStageRef = useRef(null);
   const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
   const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    updateFullscreenState();
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [twitchClipReadyId, setTwitchClipReadyId] = useState('');
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -3989,13 +3996,6 @@ function YediHubAppContent() {
       addToast('The browser blocked fullscreen. Try the fullscreen button again.', 'warning');
     }
   };
-
-  useEffect(() => {
-    const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
-    document.addEventListener('fullscreenchange', updateFullscreenState);
-    updateFullscreenState();
-    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
-  }, []);
 
   const startYouTubeFromPrompt = () => {
     const video = currentVideoRef.current || currentVideo;
