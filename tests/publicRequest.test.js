@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/public-request.js';
+import handler from '../api/_lib/public-request-handler.js';
 
 function makeResponse() {
   return {
