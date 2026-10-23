@@ -8,6 +8,7 @@ test('TikTok commands are allowlisted and target the official embed origin', () 
   assert.equal(postTikTokPlayerCommand(target, 'pause'), true);
   assert.equal(postTikTokPlayerCommand(target, 'mute'), true);
   assert.equal(postTikTokPlayerCommand(target, 'unMute'), true);
+  assert.equal(postTikTokPlayerCommand(target, 'setVolume', 50), false);
   assert.equal(postTikTokPlayerCommand(target, 'executeArbitraryCode'), false);
   assert.equal(messages.length, 3); assert.equal(messages[0].origin, 'https://www.tiktok.com');
   assert.deepEqual(messages[0].data, { type: 'pause', value: null, 'x-tiktok-player': true });
@@ -168,4 +169,15 @@ test('Twitch visibility restoration preserves pause, seek, volume, and mute stat
     { command: 'setVolume', args: [100] },
     { command: 'setMuted', args: [false] },
   ]);
+});
+
+test('shared player preferences persist volume and route Twitch Clips through a controlled VOD when available', async () => {
+  const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(appSource, /player-audio-preferences-v1/);
+  assert.match(appSource, /onVolumeChange/);
+  assert.match(appSource, /new TwitchPlayer\(mount\.id/);
+  assert.match(appSource, /currentTime >= clipEnd - 0\.3/);
+  assert.match(appSource, /player\.isPaused\?\.\(\)/);
+  assert.match(appSource, /status: 'native'/);
+  assert.doesNotMatch(appSource, /durationSeconds \+ 4/);
 });
