@@ -386,6 +386,7 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
   const [showLayoutCustomizer, setShowLayoutCustomizer] = useState(false);
   const [workspaceLayout, setWorkspaceLayout] = useState(() =>
     normalizeWorkspaceLayout(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, DEFAULT_WORKSPACE_LAYOUT))
@@ -531,6 +532,10 @@ function YediHubAppContent() {
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
+  const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
+  const playerStageRef = useRef(null);
+  const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
+  const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [twitchClipReadyId, setTwitchClipReadyId] = useState('');
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -2142,6 +2147,21 @@ function YediHubAppContent() {
     return queued[0] || null;
   }, [videos]);
 
+  // Replace a black YouTube viewport with an explicit start control if autoplay is blocked.
+  useEffect(() => {
+    setYoutubeNeedsGesture('');
+    youtubeStartupMuteRef.current = { videoId: String(currentVideo?.id || ''), pending: false };
+    if (!currentVideo || currentVideo.platform !== 'youtube') return undefined;
+    const videoId = String(currentVideo.id);
+    const timer = window.setTimeout(() => {
+      if (String(currentVideoRef.current?.id || '') !== videoId) return;
+      const intent = getPlaybackIntentForVideo(videoId, 'youtube');
+      const state = Number(youtubePlaybackInfoRef.current.playerState);
+      if (!intent.paused && state !== 1 && state !== 3) setYoutubeNeedsGesture(videoId);
+    }, 4200);
+    return () => window.clearTimeout(timer);
+  }, [currentVideo?.id, currentVideo?.platform]);
+
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
     const id = String(videoId || '');
     const matchingVideo = videosRef.current.find((video) => String(video.id) === id);
@@ -3283,7 +3303,8 @@ function YediHubAppContent() {
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
-      const intent = getPlaybackIntentForVideo(video.id);
+      const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+      if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(video.id), pending: true };
       const pending = pendingPlaybackRestoreRef.current;
       const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
       const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
@@ -3293,9 +3314,10 @@ function YediHubAppContent() {
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
+      // Muted autoplay is widely permitted when autoplay with sound is blocked.
+      if (intent.muted !== false) postCommand('mute');
       postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-      if (intent.muted === true) postCommand('mute');
-      else if (intent.muted === false) postCommand('unMute');
+      if (intent.muted === false) postCommand('unMute');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -3315,8 +3337,13 @@ function YediHubAppContent() {
         if (typeof info.muted === 'boolean') {
           const guard = playbackRestoreGuardRef.current;
           const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
-          const intent = getPlaybackIntentForVideo(video.id);
-          if (!restoringMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted });
+          const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+          const startupMute = youtubeStartupMuteRef.current;
+          const ignoringInitialAutoplayMute = startupMute.videoId === String(video.id) && startupMute.pending && info.muted === true;
+          if (startupMute.videoId === String(video.id) && startupMute.pending && info.muted === false) {
+            youtubeStartupMuteRef.current = { videoId: String(video.id), pending: false };
+          }
+          if (!restoringMute && !ignoringInitialAutoplayMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted }, 'youtube');
         }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
@@ -3331,6 +3358,7 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        if (stateFromEvent === 1) setYoutubeNeedsGesture('');
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId);
         const restoreGuard = playbackRestoreGuardRef.current;
