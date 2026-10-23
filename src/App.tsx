@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
+  Pause,
+  Volume2,
+  VolumeX,
   SkipForward,
   RotateCcw,
   Clock,
@@ -531,6 +534,7 @@ function YediHubAppContent() {
   const [simProgress, setSimProgress] = useState(0);
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
+  const [playerControlState, setPlayerControlState] = useState({ videoId: '', paused: false, muted: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const playerStageRef = useRef(null);
@@ -2213,6 +2217,14 @@ function YediHubAppContent() {
     const isTikTok = Boolean(previous.tiktokMuteStorageKey);
     const next = { ...previous, ...updates, videoId: String(videoId || '') };
     playbackIntentRef.current = next;
+    setPlayerControlState((current) => {
+      const sameVideo = current.videoId === next.videoId;
+      return {
+        videoId: next.videoId,
+        paused: typeof updates?.paused === 'boolean' ? updates.paused : sameVideo ? current.paused : Boolean(next.paused),
+        muted: typeof updates?.muted === 'boolean' ? updates.muted : sameVideo ? current.muted : next.muted === true,
+      };
+    });
     try {
       // Keep TikTok preference separate so legacy autoplay mute cannot override startup audio.
       window.sessionStorage.setItem(next.storageKey, JSON.stringify({
@@ -2227,6 +2239,19 @@ function YediHubAppContent() {
   };
 
   const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
+
+  useEffect(() => {
+    if (!currentVideo) {
+      setPlayerControlState({ videoId: '', paused: false, muted: false });
+      return;
+    }
+    const intent = getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform);
+    setPlayerControlState({
+      videoId: String(currentVideo.id),
+      paused: Boolean(intent.paused),
+      muted: intent.muted === true,
+    });
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
 
   // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
   // Its autoplay query is only an initial-load setting; deriving it on every render
@@ -3096,12 +3121,14 @@ function YediHubAppContent() {
       else if (volumeCommand.action === 'mute') {
         player.mute();
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
+        updatePlaybackIntent(currentVideo.id, { muted: true }, 'youtube');
         addToast('YouTube player muted by staff command.', 'info');
         return;
       }
       else if (volumeCommand.action === 'unmute') {
         player.unMute();
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
+        updatePlaybackIntent(currentVideo.id, { muted: false }, 'youtube');
         addToast('YouTube player unmuted by staff command.', 'info');
         return;
       }
@@ -3109,6 +3136,7 @@ function YediHubAppContent() {
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
       youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
+      updatePlaybackIntent(currentVideo.id, { muted: next === 0 }, 'youtube');
       addToast(`YouTube volume set to ${next}%.`, 'success');
       return;
     }
@@ -3192,7 +3220,9 @@ function YediHubAppContent() {
         return;
       }
       const state = Number(player.getPlayerState());
-      if (state === 1 || state === 3) {
+      const shouldPause = state === 1 || state === 3 ||
+        (state < 0 && !getPlaybackIntentForVideo(video.id, 'youtube').paused);
+      if (shouldPause) {
         updatePlaybackIntent(video.id, { paused: true });
         keyboardPausedRef.current = { videoId: String(video.id), paused: true };
         player.pauseVideo?.();
@@ -3947,6 +3977,13 @@ function YediHubAppContent() {
   // MAIN APP INTERFACE
   // ==========================================
   const workspaceVisibleOrder = workspaceLayout.order.filter((panelId) => workspaceLayout.visible[panelId]);
+  const playerControlStateMatchesCurrentVideo = Boolean(currentVideo && playerControlState.videoId === String(currentVideo.id));
+  const playerIsPaused = currentVideo
+    ? (playerControlStateMatchesCurrentVideo ? playerControlState.paused : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).paused)
+    : false;
+  const playerIsMuted = currentVideo
+    ? (playerControlStateMatchesCurrentVideo ? playerControlState.muted : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).muted === true)
+    : false;
   const workspaceHasPlayer = workspaceVisibleOrder.includes('player');
   const workspaceGridColumns = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).map((panelId) => {
     if (workspaceVisibleOrder.length === 1 || !workspaceHasPlayer) return 'minmax(0, 1fr)';
@@ -4492,6 +4529,36 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
+                    {['youtube', 'tiktok'].includes(currentVideo.platform) && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={togglePlaybackFromKeyboard}
+                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
+                          title={playerIsPaused ? 'Resume video playback' : 'Pause video playback'}
+                          aria-label={playerIsPaused ? 'Play video' : 'Pause video'}
+                        >
+                          {playerIsPaused ? <Play className="h-4 w-4 fill-current" /> : <Pause className="h-4 w-4" />}
+                          <span>{playerIsPaused ? 'Play' : 'Pause'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={toggleMuteFromKeyboard}
+                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
+                          title={playerIsMuted ? 'Unmute video audio' : 'Mute video audio'}
+                          aria-label={playerIsMuted ? 'Unmute video' : 'Mute video'}
+                        >
+                          {playerIsMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                          <span>{playerIsMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+                      </>
+                    )}
+                    {currentVideo.platform === 'twitch' && (
+                      <span className="self-center px-2 text-[10px] text-slate-500" title="Twitch Clips use their own embedded controls for pause and sound.">
+                        Twitch Clip controls
+                      </span>
+                    )}
+
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
                     {currentVideo.status !== 'playing' && (
                       <button
