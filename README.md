@@ -7,7 +7,7 @@ WHALE CUM is a private Vite + React dashboard for running a community media queu
 - **Shared queue:** Accepts supported YouTube videos and Shorts, TikTok videos, Twitch Clips, and Kick Clips. The dashboard can also add media directly; title-based chat requests search YouTube and use the best match returned by the search route.
 - **Queue management:** Active Queue, Watch Later, and History views; search; category and media-type filters; sorting for non-active lists; upvotes; pinned priority; drag-and-drop ordering and move controls; Play Now; Previous Video and Next Video; and automatic advance when the player reports that media ended.
 - **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
-- **Twitch chat requests:** Twitch EventSub stores eligible request/queue-command events in a durable Firestore inbox and acknowledges Twitch immediately. A Vercel background task handles title search, media metadata, chat replies, and queue writes afterward. Queue actions use Firestore transactions and a shared queue version; transient inbox failures use exponential backoff for up to five attempts and then remain visible as failed health records. Once enabled, requests and queue commands keep working with every dashboard/browser closed; volume controls still require the player browser.
+- **Twitch chat requests:** Regular viewers can request supported links or use `!assr <URL or title>` in Twitch chat. Twitch EventSub stores eligible requests in a durable Firestore inbox when cloud intake is healthy. If it is inactive, the signed-in moderator dashboard runs the local IRC fallback and shows requests in that browser; those requests still require a working shared Firestore write to appear on other browsers. Volume controls depend on the browser playing the media.
 - **Stats & analytics:** Request totals, completions, skips, votes, estimated queue runway, and a Top 10 Requesters list. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
 - **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
 
@@ -20,7 +20,7 @@ Only the Twitch accounts below are allowed to sign in to the dashboard:
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. Only `2o3a` runs the local IRC command bridge and owns automatic playback advance. Cloud chat request intake runs through Twitch EventSub after the one-time setup in the dashboard's **Cloud chat intake** connection status. Until that status says active, request capture can still depend on the streamer dashboard being open. The moderator account `paim_beach_pete` also gets an expanded, read-only **Technical diagnostics** panel with safe Firebase/EventSub diagnostics, last webhook and successful queue-write times, queue version, and configuration-presence checks; secret values are never shown.
+The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. `2o3a` gets a playback-first dashboard and owns automatic playback advance. The moderator account `paim_beach_pete` runs the local IRC fallback when cloud intake is inactive and gets the connection controls plus an expanded, read-only **Technical diagnostics** panel with safe Firebase/EventSub diagnostics, last webhook and successful queue-write times, queue version, and configuration-presence checks; secret values are never shown. Healthy EventSub intake works without either dashboard staying open.
 
 ## Chat commands
 
@@ -61,7 +61,7 @@ Cloud sync is optional. Without a valid Firebase web configuration and server se
 
 ### Enable cloud chat intake (one time)
 
-1. Open the production WHALE CUM dashboard and sign in as `2o3a`. In **Connection details → Cloud chat intake**, use **Authorize 2o3a for cloud chat** if prompted. Twitch must grant `channel:bot` to this app.
+1. Open the production WHALE CUM dashboard and sign in as `2o3a`. The app attempts cloud intake setup automatically. If authorization is needed, use the moderator's connection details to identify the missing scope; Twitch must grant `channel:bot` to this app.
 2. Use **Reconnect @gachibot69** if the dashboard prompts for it. That account must grant `user:read:chat`, `user:write:chat`, and `user:bot` to the same Twitch developer application.
 3. Keep the dashboard open until **Cloud chat intake** reports **active**. Vercel creates a webhook subscription for `channel.chat.message`; Twitch verifies the callback and the app reports whether the subscription is active.
 4. Once active, EventSub first persists supported media requests and queue commands in a durable inbox and acknowledges the webhook quickly. A Vercel `waitUntil` task processes the inbox, writes queue/stat updates transactionally, and leaves failures pending for a later retry. Server-side commands include `!queue`, `!when`, `!remove`, `!bigcock`, `!help`, and moderator/broadcaster `!skip`. Queue status shows the last successful server queue write. The streamer's browser does not need to be open to queue requests; volume changes still require the player browser.
@@ -74,7 +74,7 @@ The server issues a Firebase custom token only after validating an approved Twit
 - Export a queue backup before major changes. The dashboard supports importing a valid JSON backup and restoring the last local safety snapshot.
 - Treat the cloud-sync indicator as authoritative for cross-browser sync. A local save protects this browser, but local-only changes do not guarantee that another browser has received them.
 - A provider may block autoplay with sound until a staff member starts playback manually. TikTok, Twitch Clips, and Kick Clips expose different embed/control capabilities; some items may have to be opened from their source page.
-- If cloud chat intake is not **active**, check the connection-details message for the missing Twitch scope, bot authorization, EventSub setup, or Firebase availability. The local fallback no longer claims a request is confirmed when the shared cloud write fails. Pending dashboard-only items are recovery data, not proof that the streamer can see them.
+- If cloud chat intake is not **active**, the moderator dashboard provides a local IRC fallback while it stays open. Check its connection details for the missing Twitch scope, bot authorization, EventSub setup, or Firebase availability. A Firestore write failure leaves a pending local recovery item, not a confirmed shared request.
 
 ## Development and verification
 
