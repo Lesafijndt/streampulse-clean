@@ -101,6 +101,7 @@ import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerComm
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
+import { canHostLocalChatBridge } from './chatBridgeAccess.js';
 import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
 
@@ -376,7 +377,7 @@ function YediHubAppContent() {
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
   // The moderator owns the local IRC fallback so the streamer can keep the dashboard focused on playback.
   const isModerator = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
-  const isCommandBridgeOwner = isModerator;
+  const isCommandBridgeOwner = canHostLocalChatBridge(twitchAuth);
   const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
   const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
   const authorizedLoginRef = useRef('');
@@ -2564,13 +2565,12 @@ function YediHubAppContent() {
     setIrcConnected(false);
   };
 
-  // The local IRC bridge is reserved for 2o3a's player browser. Other staff sessions can
-  // monitor/moderate the shared queue without opening a second command processor.
-  // Durable media requests are handled by the server-side EventSub webhook when active.
+  // Only the moderator browser owns the local IRC fallback. The streamer keeps playback
+  // controls independent, while EventSub remains the durable request path when active.
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    const isBridgeOwner = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
+    const isBridgeOwner = canHostLocalChatBridge(twitchAuth);
     shouldReconnectIrcRef.current = Boolean(isBridgeOwner);
     if (!isBridgeOwner) {
       disconnectTwitchIrc(false);
@@ -2583,7 +2583,7 @@ function YediHubAppContent() {
     };
     // The bridge always joins 2o3a and only runs in the moderator's authenticated browser.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated, twitchAuth.username]);
+  }, [twitchAuth.authenticated, twitchAuth.username, twitchAuth.role]);
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -4086,7 +4086,7 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'Reconnecting / offline' : 'Streamer browser only'}</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : isCommandBridgeOwner ? 'Reconnecting / offline' : 'Moderator browser only'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
