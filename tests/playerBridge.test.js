@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
+import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
@@ -140,4 +140,32 @@ test('TikTok mute intent is isolated from legacy autoplay mute reports and start
   assert.match(appSource, /shouldIgnoreTikTokStartupMute/);
   assert.match(appSource, /requestStartupUnmute/);
   assert.match(appSource, /tiktokAudioStateRef/);
+});
+
+test('player volume is clamped and Twitch offsets use the documented time format', () => {
+  assert.equal(clampPlayerVolume(-12), 0);
+  assert.equal(clampPlayerVolume(37.4), 37);
+  assert.equal(clampPlayerVolume(140), 100);
+  assert.equal(clampPlayerVolume('invalid'), 100);
+  assert.equal(formatTwitchPlayerTime(0), '0s');
+  assert.equal(formatTwitchPlayerTime(185), '3m5s');
+  assert.equal(formatTwitchPlayerTime(3723), '1h2m3s');
+});
+
+test('Twitch visibility restoration preserves pause, seek, volume, and mute state', () => {
+  assert.deepEqual(getVisibilityRestoreActions('twitch', {
+    paused: true, muted: true, currentTime: 185, volume: 42,
+  }), [
+    { command: 'pause' },
+    { command: 'seek', args: [185] },
+    { command: 'setVolume', args: [42] },
+    { command: 'setMuted', args: [true] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', {
+    paused: false, muted: false, currentTime: 0, volume: 100,
+  }), [
+    { command: 'play' },
+    { command: 'setVolume', args: [100] },
+    { command: 'setMuted', args: [false] },
+  ]);
 });
