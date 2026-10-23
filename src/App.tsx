@@ -3953,6 +3953,44 @@ function YediHubAppContent() {
     });
   };
 
+  const togglePlayerFullscreen = async () => {
+    const stage = playerStageRef.current;
+    if (!stage) {
+      addToast('The player is not ready for fullscreen yet.', 'warning');
+      return;
+    }
+    try {
+      if (document.fullscreenElement === stage) {
+        await document.exitFullscreen();
+      } else if (typeof stage.requestFullscreen === 'function') {
+        await stage.requestFullscreen();
+      } else {
+        addToast('Fullscreen is not supported by this browser.', 'warning');
+      }
+    } catch (error) {
+      console.warn('Could not enter player fullscreen.', error);
+      addToast('The browser blocked fullscreen. Try the fullscreen button again.', 'warning');
+    }
+  };
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    updateFullscreenState();
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
+
+  const startYouTubeFromPrompt = () => {
+    const video = currentVideoRef.current || currentVideo;
+    const playerWindow = youtubeIframeRef.current?.contentWindow;
+    if (!video || video.platform !== 'youtube' || !playerWindow) return;
+    const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+    if (intent.muted !== false) postYouTubePlayerCommand(playerWindow, 'mute');
+    postYouTubePlayerCommand(playerWindow, 'playVideo');
+    updatePlaybackIntent(video.id, { paused: false }, 'youtube');
+    youtubeIframeRef.current?.focus();
+  };
+
   return (
     <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
       {/* ==========================================
@@ -4228,11 +4266,29 @@ function YediHubAppContent() {
 
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
+                  onClick={() => setShowRequestModal(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-purple-500/35 bg-purple-600/20 px-2.5 py-1.5 text-[10px] font-black text-purple-100 transition hover:bg-purple-600/35 sm:text-xs"
+                  title="Request a video for the community queue"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Request Video
+                </button>
+                <button
                   onClick={() => setIsTheatreMode(!isTheatreMode)}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                   title="Toggle Player Height"
                 >
                   {isTheatreMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={togglePlayerFullscreen}
+                  disabled={!currentVideo}
+                  className="p-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  title={isPlayerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  aria-label={isPlayerFullscreen ? 'Exit player fullscreen' : 'Enter player fullscreen'}
+                >
+                  {isPlayerFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
@@ -4241,10 +4297,13 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
+                  ref={playerStageRef}
                   className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
-                    isTheatreMode
-                      ? 'h-[75vh] min-h-[580px] max-h-[960px]'
-                      : 'h-[62vh] min-h-[460px] max-h-[780px]'
+                    isPlayerFullscreen
+                      ? 'h-screen min-h-0 max-h-none w-screen'
+                      : isTheatreMode
+                        ? 'h-[75vh] min-h-[580px] max-h-[960px]'
+                        : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
                   {isVerticalMedia(currentVideo) && (
@@ -4255,6 +4314,16 @@ function YediHubAppContent() {
                       <div className="gachi-vertical-letterbox absolute inset-0" />
                     </div>
                   )}
+                  {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) && (
+                    <button
+                      type="button"
+                      onClick={startYouTubeFromPrompt}
+                      className="absolute z-30 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                      aria-label="Start YouTube playback"
+                    >
+                      <Play className="h-4 w-4 fill-current" /> Click to start video
+                    </button>
+                  )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div className={isVerticalMedia(currentVideo)
                       ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
@@ -4263,7 +4332,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}${Number(currentVideo.startSeconds) > 0 ? '&start=' + Math.floor(Number(currentVideo.startSeconds)) : ''}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&mute=${getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted === false ? 0 : 1}&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}${Number(currentVideo.startSeconds) > 0 ? '&start=' + Math.floor(Number(currentVideo.startSeconds)) : ''}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -4284,14 +4353,15 @@ function YediHubAppContent() {
                         const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
                           ? pending.currentTime
                           : known;
-                        const intent = getPlaybackIntentForVideo(currentVideo.id);
+                        const intent = getPlaybackIntentForVideo(currentVideo.id, 'youtube');
+                        if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(currentVideo.id), pending: true };
                         if (intent.paused) send('pauseVideo');
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
+                        if (intent.muted !== false) send('mute');
                         send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-                        if (intent.muted === true) send('mute');
-                        else if (intent.muted === false) send('unMute');
+                        if (intent.muted === false) send('unMute');
                       }}
                     />
                     </div>
@@ -4606,22 +4676,39 @@ function YediHubAppContent() {
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!reqUrl.trim()) return;
-                const ok = await processAndQueueRequest({
-                  url: reqUrl,
-                  title: reqTitle,
-                  note: reqNote,
-                  requestedBy: reqUsername || twitchAuth.username,
-                  userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
-                  manualCategory: reqCategory,
-                  startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null
-                });
-                if (ok) {
+                if (!reqUrl.trim() || requestSubmitting) return;
+                setRequestSubmitting(true);
+                try {
+                  const response = await fetch('/api/public-request', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      url: reqUrl.trim(),
+                      title: reqTitle.trim(),
+                      note: reqNote.trim(),
+                      requestedBy: reqUsername || twitchAuth.username || '',
+                      category: reqCategory,
+                      startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null,
+                    }),
+                  });
+                  const result = await response.json().catch(() => ({}));
+                  if (!response.ok || !result.ok) {
+                    addToast(result.message || result.error || 'The shared queue could not save this request. Check Firebase availability and try again.', 'warning');
+                    return;
+                  }
+                  addToast(`Request added to the shared queue: ${result.title || 'video'}`, 'success');
                   setReqUrl('');
                   setReqStartAt('');
                   setReqTitle('');
                   setReqNote('');
                   setShowRequestModal(false);
+                } catch (error) {
+                  console.warn('Public video request failed.', error);
+                  addToast('Could not reach the request service. Please try again.', 'warning');
+                } finally {
+                  setRequestSubmitting(false);
                 }
               }}
               className="space-y-4"
@@ -4725,9 +4812,10 @@ function YediHubAppContent() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30"
+                  disabled={requestSubmitting}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30 disabled:cursor-wait disabled:opacity-60"
                 >
-                  LET HIM COOK
+                  {requestSubmitting ? 'SUBMITTING…' : 'LET HIM COOK'}
                 </button>
               </div>
             </form>
