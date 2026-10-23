@@ -2224,6 +2224,23 @@ function YediHubAppContent() {
   // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
   // Its autoplay query is only an initial-load setting; deriving it on every render
   // changes src when pause intent changes and makes React reload the embed mid-video.
+  const youtubePlayerSrc = useMemo(() => {
+    if (currentVideo?.platform !== 'youtube' || !currentVideo?.videoId) return '';
+    const initialMute = getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted !== false;
+    const params = new URLSearchParams({
+      autoplay: '1',
+      mute: initialMute ? '1' : '0',
+      controls: '1',
+      playsinline: '1',
+      rel: '0',
+      modestbranding: '1',
+      enablejsapi: '1',
+      origin: window.location.origin,
+    });
+    if (Number(currentVideo.startSeconds) > 0) params.set('start', String(Math.floor(Number(currentVideo.startSeconds))));
+    return `https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?${params.toString()}`;
+  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, currentVideo?.startSeconds, channelRoom]);
+
   const tiktokPlayerSrc = useMemo(() => (
     currentVideo?.platform === 'tiktok'
       ? buildTikTokPlayerUrl(currentVideo.videoId, {
@@ -4332,7 +4349,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&mute=${getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted === false ? 0 : 1}&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}${Number(currentVideo.startSeconds) > 0 ? '&start=' + Math.floor(Number(currentVideo.startSeconds)) : ''}`}
+                      src={youtubePlayerSrc}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
