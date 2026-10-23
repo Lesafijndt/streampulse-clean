@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
+  Pause,
+  Volume2,
+  VolumeX,
   SkipForward,
   RotateCcw,
   Clock,
@@ -97,7 +100,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
@@ -531,11 +534,14 @@ function YediHubAppContent() {
   const [simProgress, setSimProgress] = useState(0);
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
+  const [playerControlState, setPlayerControlState] = useState({ videoId: '', paused: false, muted: false, volume: 100 });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const playerStageRef = useRef(null);
   const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
   const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
+  const youtubeVolumeRestoreRef = useRef({ videoId: '', volume: 100, until: 0 });
+  const youtubeMuteRestoreRef = useRef({ videoId: '', muted: null, until: 0 });
 
   useEffect(() => {
     const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
@@ -544,7 +550,13 @@ function YediHubAppContent() {
     return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
   }, []);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
-  const [twitchClipReadyId, setTwitchClipReadyId] = useState('');
+  const [tiktokNeedsGestureId, setTiktokNeedsGestureId] = useState('');
+  const [twitchClipPlayback, setTwitchClipPlayback] = useState({ requestId: '', status: 'idle', videoId: '', vodOffset: 0, durationSec: 0 });
+  const [twitchPlayerReadyId, setTwitchPlayerReadyId] = useState('');
+  const [twitchNeedsGestureId, setTwitchNeedsGestureId] = useState('');
+  const twitchPlayerMountRef = useRef(null);
+  const twitchPlayerRef = useRef(null);
+  const twitchObservedAudioRef = useRef({ requestId: '', muted: null, volume: null });
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
   const tiktokMutePreferenceRef = useRef({ requestId: '', preference: 'auto' });
   // Track observed player state separately from the viewer's deliberate preference.
@@ -556,7 +568,7 @@ function YediHubAppContent() {
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
   // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
   // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
-  const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
+  const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null, volume: 100 });
   const playbackPositionRef = useRef({ videoId: '', seconds: 0 });
   const playbackVisibilitySnapshotRef = useRef(null);
   const pendingPlaybackRestoreRef = useRef(null);
@@ -2197,14 +2209,17 @@ function YediHubAppContent() {
         savedTikTokAudio = audioRaw ? JSON.parse(audioRaw) : null;
       }
     } catch { /* A blocked session store should not break player controls. */ }
+    const sharedAudio = readStoredValue(roomStorageKey(channelRoom, 'player-audio-preferences-v1'), {});
+    const savedMute = isTikTok
+      ? (typeof savedTikTokAudio?.muted === 'boolean' ? savedTikTokAudio.muted : null)
+      : (typeof saved?.muted === 'boolean' ? saved.muted : null);
     return {
       videoId: id,
       storageKey,
       tiktokMuteStorageKey,
       paused: saved?.paused === true,
-      muted: isTikTok
-        ? (typeof savedTikTokAudio?.muted === 'boolean' ? savedTikTokAudio.muted : null)
-        : (typeof saved?.muted === 'boolean' ? saved.muted : null),
+      muted: typeof sharedAudio?.muted === 'boolean' ? sharedAudio.muted : savedMute,
+      volume: sharedAudio?.volume == null ? 100 : clampPlayerVolume(sharedAudio.volume),
     };
   };
 
@@ -2213,8 +2228,19 @@ function YediHubAppContent() {
     const isTikTok = Boolean(previous.tiktokMuteStorageKey);
     const next = { ...previous, ...updates, videoId: String(videoId || '') };
     playbackIntentRef.current = next;
+    setPlayerControlState((current) => {
+      const sameVideo = current.videoId === next.videoId;
+      return {
+        videoId: next.videoId,
+        paused: typeof updates?.paused === 'boolean' ? updates.paused : sameVideo ? current.paused : Boolean(next.paused),
+        muted: typeof updates?.muted === 'boolean' ? updates.muted : sameVideo ? current.muted : next.muted === true,
+        volume: typeof updates?.volume === 'number'
+          ? clampPlayerVolume(updates.volume)
+          : sameVideo ? current.volume : clampPlayerVolume(next.volume),
+      };
+    });
     try {
-      // Keep TikTok preference separate so legacy autoplay mute cannot override startup audio.
+      // Keep TikTok's per-video mute key isolated from legacy autoplay mute reports.
       window.sessionStorage.setItem(next.storageKey, JSON.stringify({
         paused: next.paused,
         muted: isTikTok ? null : next.muted,
@@ -2223,10 +2249,33 @@ function YediHubAppContent() {
         window.sessionStorage.setItem(next.tiktokMuteStorageKey, JSON.stringify({ muted: updates.muted }));
       }
     } catch { /* Playback state remains available in memory if storage is unavailable. */ }
+    if (typeof updates?.muted === 'boolean' || typeof updates?.volume === 'number') {
+      const key = roomStorageKey(channelRoom, 'player-audio-preferences-v1');
+      const previousAudio = readStoredValue(key, {});
+      writeStoredValue(key, {
+        ...previousAudio,
+        ...(typeof updates?.muted === 'boolean' ? { muted: updates.muted } : {}),
+        ...(typeof updates?.volume === 'number' ? { volume: clampPlayerVolume(updates.volume) } : {}),
+      });
+    }
     return next;
   };
 
   const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
+
+  useEffect(() => {
+    if (!currentVideo) {
+      setPlayerControlState({ videoId: '', paused: false, muted: false, volume: 100 });
+      return;
+    }
+    const intent = getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform);
+    setPlayerControlState({
+      videoId: String(currentVideo.id),
+      paused: Boolean(intent.paused),
+      muted: intent.muted === true,
+      volume: clampPlayerVolume(intent.volume),
+    });
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
 
   // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
   // Its autoplay query is only an initial-load setting; deriving it on every render
@@ -2255,6 +2304,56 @@ function YediHubAppContent() {
         })
       : ''
   ), [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
+
+  useEffect(() => {
+    const video = currentVideo;
+    if (!video || video.platform !== 'twitch' || !video.videoId) {
+      setTwitchClipPlayback({ requestId: '', status: 'idle', videoId: '', vodOffset: 0, durationSec: 0 });
+      setTwitchPlayerReadyId('');
+      setTwitchNeedsGestureId('');
+      return undefined;
+    }
+    const requestId = String(video.id);
+    const cachedPlayback = video.twitchClipPlayback;
+    const cachedVideoId = String(cachedPlayback?.videoId || '');
+    const cachedVodOffset = Number(cachedPlayback?.vodOffset);
+    const cachedDurationSec = Number(cachedPlayback?.durationSec);
+    if (/^\d+$/.test(cachedVideoId) && Number.isFinite(cachedVodOffset) && cachedVodOffset >= 0 &&
+        Number.isFinite(cachedDurationSec) && cachedDurationSec > 0) {
+      setTwitchClipPlayback({
+        requestId, status: 'vod', videoId: cachedVideoId,
+        vodOffset: cachedVodOffset, durationSec: cachedDurationSec,
+      });
+      return undefined;
+    }
+    let cancelled = false;
+    setTwitchClipPlayback({ requestId, status: 'loading', videoId: '', vodOffset: 0, durationSec: 0 });
+    setTwitchPlayerReadyId('');
+    setTwitchNeedsGestureId('');
+    fetch('/api/media-metadata?url=' + encodeURIComponent(String(video.url || '')), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(9000),
+    })
+      .then(async (response) => response.ok ? response.json().catch(() => null) : null)
+      .then((metadata) => {
+        if (cancelled || String(currentVideoRef.current?.id || '') !== requestId) return;
+        const playback = metadata?.twitchClipPlayback;
+        const vodOffset = Number(playback?.vodOffset);
+        const durationSec = Number(playback?.durationSec);
+        const sourceVideoId = String(playback?.videoId || '');
+        if (/^\d+$/.test(sourceVideoId) && Number.isFinite(vodOffset) && vodOffset >= 0 &&
+            Number.isFinite(durationSec) && durationSec > 0) {
+          setTwitchClipPlayback({ requestId, status: 'vod', videoId: sourceVideoId, vodOffset, durationSec });
+        } else {
+          setTwitchClipPlayback({ requestId, status: 'native', videoId: '', vodOffset: 0, durationSec: 0 });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTwitchClipPlayback({ requestId, status: 'native', videoId: '', vodOffset: 0, durationSec: 0 });
+      });
+    return () => { cancelled = true; };
+  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.url]);
 
   const recordPlaybackPosition = (videoId, seconds) => {
     const id = String(videoId || '');
@@ -2352,10 +2451,13 @@ function YediHubAppContent() {
       if (paused) updatePlaybackIntent(videoId, { paused: true });
       if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
 
-      const actions = getVisibilityRestoreActions(platform, { paused, muted, currentTime });
+      const actions = getVisibilityRestoreActions(platform, {
+        paused, muted, currentTime, volume: intent.volume,
+      });
       for (const action of actions) {
         if (platform === 'youtube') youtubePlayerRef.current?.[action.command]?.(...(action.args || []));
         else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, action.command, action.value ?? null);
+        else if (platform === 'twitch') twitchPlayerRef.current?.[action.command]?.(...(action.args || []));
       }
       playbackVisibilitySnapshotRef.current = null;
     };
@@ -2385,22 +2487,8 @@ function YediHubAppContent() {
     if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
   }, [videos]);
 
-  useEffect(() => {
-    const video = currentVideo;
-    if (!video || video.platform !== 'twitch' || !video.videoId || !streamSettings.autoPlayNext) return undefined;
-    if (twitchClipReadyId !== String(video.id)) return undefined;
-    const durationSeconds = Number(video.durationSec);
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return undefined;
-    const videoId = String(video.id);
-    // Twitch's Clip iframe doesn't expose a documented ended-event API. Start this
-    // duration fallback only after the iframe loads, with extra room for startup/rounding.
-    const timer = window.setTimeout(() => {
-      if (String(currentVideoRef.current?.id || '') === videoId) {
-        handleMediaEndedRef.current?.(videoId);
-      }
-    }, (durationSeconds + 4) * 1000);
-    return () => window.clearTimeout(timer);
-  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.durationSec, streamSettings.autoPlayNext, twitchClipReadyId]);
+  // Native Twitch Clip embeds do not expose an ended event. The interactive VOD
+  // fallback advances from its actual playback position at the Clip boundary.
 
   const counts = useMemo(() => ({
     ...getQueueMediaCounts(videos, getVideoMediaType),
@@ -2817,6 +2905,7 @@ function YediHubAppContent() {
     let resolvedTitle = String(title || '').trim();
     let resolvedThumbnail = parsed.thumbnail || '';
     let resolvedDurationSec = null;
+    let resolvedTwitchClipPlayback = null;
     const needsBasicMetadata = !resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co');
     const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(metadataLookupUrl || normalizedUrl)}`, {
       credentials: 'same-origin',
@@ -2832,6 +2921,7 @@ function YediHubAppContent() {
     if (needsBasicMetadata) {
       const metadata = await mediaMetadataPromise;
       if (metadata) {
+        resolvedTwitchClipPlayback = metadata.twitchClipPlayback || null;
         if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
         if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
           resolvedThumbnail = metadata.thumbnailUrl;
@@ -2884,6 +2974,7 @@ function YediHubAppContent() {
       duration: resolvedDurationSec ? formatMediaDuration(resolvedDurationSec) : '',
       durationSec: resolvedDurationSec || undefined,
       durationSource: resolvedDurationSec ? 'metadata' : 'unknown',
+      ...(resolvedTwitchClipPlayback ? { twitchClipPlayback: resolvedTwitchClipPlayback } : {}),
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: 'queue',
@@ -2930,6 +3021,24 @@ function YediHubAppContent() {
       const newVideoId = String(newVideo.id);
       const previousLookup = durationLookupOutcomes[newVideoId] || null;
       void deferredMetadataPromise.then((metadata) => {
+        const sourcePlayback = metadata?.twitchClipPlayback;
+        const sourceVideoId = String(sourcePlayback?.videoId || '');
+        const sourceVodOffset = Number(sourcePlayback?.vodOffset);
+        const sourceClipDuration = Number(sourcePlayback?.durationSec);
+        if (parsed.platform === 'twitch' && /^\d+$/.test(sourceVideoId) &&
+            Number.isFinite(sourceVodOffset) && sourceVodOffset >= 0 &&
+            Number.isFinite(sourceClipDuration) && sourceClipDuration > 0) {
+          const current = videosRef.current.find((video) => String(video.id) === newVideoId);
+          if (current && !current.twitchClipPlayback) {
+            void syncUpdateVideo(newVideoId, {
+              twitchClipPlayback: {
+                videoId: sourceVideoId,
+                vodOffset: sourceVodOffset,
+                durationSec: Math.round(sourceClipDuration),
+              }
+            });
+          }
+        }
         const candidateDuration = Number(metadata?.durationSec);
         if (!isValidMediaDuration(candidateDuration)) {
           setDurationLookupOutcomes((prev) => ({
@@ -3078,6 +3187,32 @@ function YediHubAppContent() {
     else addToast('Reached end of queue.', 'info');
   };
 
+  const setPlayerVolume = (rawVolume) => {
+    const video = currentVideoRef.current || currentVideo;
+    if (!video) return;
+    const volume = clampPlayerVolume(rawVolume);
+    if (video.platform === 'youtube') {
+      const player = youtubePlayerRef.current;
+      if (!player || typeof player.setVolume !== 'function') return;
+      const muted = typeof player.isMuted === 'function' ? player.isMuted() : getPlaybackIntentForVideo(video.id, 'youtube').muted === true;
+      youtubeVolumeRestoreRef.current = { videoId: '', volume, until: 0 };
+      youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
+      player.setVolume(volume);
+      if (volume === 0) player.mute?.();
+      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume, muted: volume === 0 || muted };
+      updatePlaybackIntent(video.id, { volume, muted: volume === 0 || muted }, 'youtube');
+      return;
+    }
+    if (video.platform === 'twitch' && twitchPlayerReadyId === String(video.id)) {
+      const player = twitchPlayerRef.current;
+      if (!player || typeof player.setVolume !== 'function') return;
+      const muted = Boolean(player.getMuted?.());
+      player.setVolume(volume / 100);
+      if (volume === 0) player.setMuted(true);
+      updatePlaybackIntent(video.id, { volume, muted: volume === 0 || muted }, 'twitch');
+    }
+  };
+
   // Moderator/broadcaster volume controls use each platform's supported embed API.
   const handleVolumeCommand = (volumeCommand, role) => {
     if (!isStaffRole(role) || !volumeCommand) return;
@@ -3094,22 +3229,58 @@ function YediHubAppContent() {
       else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
       else if (volumeCommand.action === 'set') next = volumeCommand.value;
       else if (volumeCommand.action === 'mute') {
+        youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
         player.mute();
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
+        updatePlaybackIntent(currentVideo.id, { muted: true }, 'youtube');
         addToast('YouTube player muted by staff command.', 'info');
         return;
       }
       else if (volumeCommand.action === 'unmute') {
+        youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
         player.unMute();
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
+        updatePlaybackIntent(currentVideo.id, { muted: false }, 'youtube');
         addToast('YouTube player unmuted by staff command.', 'info');
         return;
       }
+      youtubeVolumeRestoreRef.current = { videoId: '', volume: next, until: 0 };
+      youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
       player.setVolume(next);
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
       youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
+      updatePlaybackIntent(currentVideo.id, { muted: next === 0, volume: next }, 'youtube');
       addToast(`YouTube volume set to ${next}%.`, 'success');
+      return;
+    }
+
+    if (currentVideo?.platform === 'twitch') {
+      const player = twitchPlayerReadyId === String(currentVideo.id) ? twitchPlayerRef.current : null;
+      if (!player || typeof player.getVolume !== 'function' || typeof player.setVolume !== 'function') {
+        addToast('Twitch VOD player is not ready for volume commands yet.', 'warning');
+        return;
+      }
+      const current = clampPlayerVolume(Number(player.getVolume()) * 100);
+      let next = current;
+      if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
+      else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
+      else if (volumeCommand.action === 'set') next = clampPlayerVolume(volumeCommand.value);
+      else if (volumeCommand.action === 'mute') {
+        player.setMuted(true);
+        updatePlaybackIntent(currentVideo.id, { muted: true }, 'twitch');
+        addToast('Twitch player muted by staff command.', 'info');
+        return;
+      } else if (volumeCommand.action === 'unmute') {
+        player.setMuted(false);
+        updatePlaybackIntent(currentVideo.id, { muted: false }, 'twitch');
+        addToast('Twitch player unmuted by staff command.', 'info');
+        return;
+      }
+      player.setVolume(next / 100);
+      player.setMuted(next === 0);
+      updatePlaybackIntent(currentVideo.id, { muted: next === 0, volume: next }, 'twitch');
+      addToast(`Twitch volume set to ${next}%.`, 'success');
       return;
     }
 
@@ -3131,7 +3302,7 @@ function YediHubAppContent() {
     }
 
     if (currentVideo?.platform === 'twitch') {
-      addToast('Twitch Clip embeds do not expose remote volume controls. Adjust volume inside the Clip player.', 'info');
+      addToast('This Twitch Clip has no source VOD available for shared volume controls. Adjust volume inside the Clip player.', 'info');
       return;
     }
 
@@ -3192,7 +3363,9 @@ function YediHubAppContent() {
         return;
       }
       const state = Number(player.getPlayerState());
-      if (state === 1 || state === 3) {
+      const shouldPause = state === 1 || state === 3 ||
+        (state < 0 && !getPlaybackIntentForVideo(video.id, 'youtube').paused);
+      if (shouldPause) {
         updatePlaybackIntent(video.id, { paused: true });
         keyboardPausedRef.current = { videoId: String(video.id), paused: true };
         player.pauseVideo?.();
@@ -3201,6 +3374,22 @@ function YediHubAppContent() {
         updatePlaybackIntent(video.id, { paused: false });
         keyboardPausedRef.current = { videoId: String(video.id), paused: false };
         player.playVideo?.();
+      }
+      return;
+    }
+    if (video.platform === 'twitch') {
+      const player = twitchPlayerReadyId === String(video.id) ? twitchPlayerRef.current : null;
+      if (!player || typeof player.isPaused !== 'function') {
+        addToast('Twitch player is not ready for keyboard controls yet.', 'warning');
+        return;
+      }
+      const shouldPause = !getPlaybackIntentForVideo(video.id, 'twitch').paused;
+      keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
+      updatePlaybackIntent(video.id, { paused: shouldPause }, 'twitch');
+      if (shouldPause) player.pause?.();
+      else {
+        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
+        player.play?.();
       }
       return;
     }
@@ -3234,6 +3423,17 @@ function YediHubAppContent() {
         ? player.isMuted()
         : Boolean(youtubePlaybackInfoRef.current.muted);
       handleVolumeCommandRef.current?.({ action: isMuted ? 'unmute' : 'mute' }, 'streamer');
+      return;
+    }
+    if (video.platform === 'twitch') {
+      const player = twitchPlayerReadyId === String(video.id) ? twitchPlayerRef.current : null;
+      if (!player || typeof player.setMuted !== 'function') {
+        addToast('Twitch player is not ready for audio controls yet.', 'warning');
+        return;
+      }
+      const muted = Boolean(player.getMuted?.());
+      player.setMuted(!muted);
+      updatePlaybackIntent(video.id, { muted: !muted }, 'twitch');
       return;
     }
     if (video.platform === 'tiktok') {
@@ -3275,7 +3475,7 @@ function YediHubAppContent() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, topMenuOpen]);
+  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, twitchPlayerReadyId, topMenuOpen]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -3328,6 +3528,11 @@ function YediHubAppContent() {
       postCommand('getDuration');
       postCommand('getVolume');
       const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+      const desiredVolume = clampPlayerVolume(intent.volume);
+      const desiredMuted = intent.muted === true;
+      youtubeVolumeRestoreRef.current = { videoId: String(video.id), volume: desiredVolume, until: Date.now() + 3500 };
+      youtubeMuteRestoreRef.current = { videoId: String(video.id), muted: desiredMuted, until: Date.now() + 3500 };
+      postCommand('setVolume', [desiredVolume]);
       if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(video.id), pending: true };
       const pending = pendingPlaybackRestoreRef.current;
       const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
@@ -3358,7 +3563,18 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        if (Number.isFinite(Number(info.volume))) {
+          const volume = clampPlayerVolume(info.volume);
+          const restore = youtubeVolumeRestoreRef.current;
+          if (restore.videoId === String(video.id) && Date.now() < restore.until) {
+            if (Math.abs(volume - restore.volume) > 1) postCommand('setVolume', [restore.volume]);
+          } else {
+            updatePlaybackIntent(video.id, { volume }, 'youtube');
+          }
+        }
         if (typeof info.muted === 'boolean') {
+          const restore = youtubeMuteRestoreRef.current;
+          const restoringAudio = restore.videoId === String(video.id) && Date.now() < restore.until;
           const guard = playbackRestoreGuardRef.current;
           const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
           const intent = getPlaybackIntentForVideo(video.id, 'youtube');
@@ -3367,7 +3583,11 @@ function YediHubAppContent() {
           if (startupMute.videoId === String(video.id) && startupMute.pending && info.muted === false) {
             youtubeStartupMuteRef.current = { videoId: String(video.id), pending: false };
           }
-          if (!restoringMute && !ignoringInitialAutoplayMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted }, 'youtube');
+          if (restoringAudio) {
+            if (info.muted !== restore.muted) postCommand(restore.muted ? 'mute' : 'unMute');
+          } else if (!restoringMute && !ignoringInitialAutoplayMute && intent.muted !== info.muted) {
+            updatePlaybackIntent(video.id, { muted: info.muted }, 'youtube');
+          }
         }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
@@ -3431,6 +3651,197 @@ function YediHubAppContent() {
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
+  // Twitch Clip embeds are non-interactive. When Twitch still exposes the source VOD,
+  // play that segment in the interactive VOD player so host controls can keep one shared state.
+  useEffect(() => {
+    const video = currentVideo;
+    const playback = twitchClipPlayback;
+    const requestId = String(video?.id || '');
+    if (!video || video.platform !== 'twitch' || playback.requestId !== requestId || playback.status !== 'vod') {
+      twitchPlayerRef.current = null;
+      setTwitchPlayerReadyId('');
+      return undefined;
+    }
+    const mount = twitchPlayerMountRef.current;
+    if (!mount) return undefined;
+
+    let cancelled = false;
+    let player = null;
+    let pollTimer = 0;
+    let scriptTimer = 0;
+    let scriptAttempts = 0;
+    let endedHandled = false;
+    let audioRestoreUntil = 0;
+    const apiScriptUrl = 'https://player.twitch.tv/js/embed/v1.js';
+    const intent = getPlaybackIntentForVideo(requestId, 'twitch');
+    const knownTime = playbackPositionRef.current.videoId === requestId
+      ? Number(playbackPositionRef.current.seconds) || 0
+      : 0;
+    const startAt = knownTime > playback.vodOffset + 0.5 ? knownTime : playback.vodOffset;
+    const setNativeFallback = () => {
+      if (cancelled) return;
+      setTwitchClipPlayback((current) => current.requestId === requestId
+        ? { ...current, status: 'native' }
+        : current);
+    };
+    const syncAudioFromPlayer = () => {
+      if (!player || cancelled || String(currentVideoRef.current?.id || '') !== requestId) return;
+      const actualVolume = clampPlayerVolume(Number(player.getVolume?.()) * 100);
+      const actualMuted = Boolean(player.getMuted?.());
+      const observed = twitchObservedAudioRef.current;
+      if (Date.now() < audioRestoreUntil) {
+        const preferred = getPlaybackIntentForVideo(requestId, 'twitch');
+        if (Math.abs(actualVolume - preferred.volume) > 2) player.setVolume(preferred.volume / 100);
+        if (actualMuted !== (preferred.muted === true)) player.setMuted(preferred.muted === true);
+        twitchObservedAudioRef.current = { requestId, muted: preferred.muted === true, volume: preferred.volume };
+        return;
+      }
+      if (observed.requestId !== requestId || observed.muted !== actualMuted || Math.abs((Number(observed.volume) || 0) - actualVolume) >= 1) {
+        twitchObservedAudioRef.current = { requestId, muted: actualMuted, volume: actualVolume };
+        updatePlaybackIntent(requestId, { muted: actualMuted, volume: actualVolume }, 'twitch');
+      }
+    };
+    const onReady = () => {
+      if (cancelled || !player) return;
+      const currentIntent = getPlaybackIntentForVideo(requestId, 'twitch');
+      audioRestoreUntil = Date.now() + 2600;
+      player.setVolume(clampPlayerVolume(currentIntent.volume) / 100);
+      player.setMuted(currentIntent.muted === true);
+      const restoredTime = playbackPositionRef.current.videoId === requestId
+        ? Number(playbackPositionRef.current.seconds) || 0
+        : 0;
+      const desiredStart = restoredTime > playback.vodOffset + 0.5 ? restoredTime : playback.vodOffset;
+      player.seek(desiredStart);
+      twitchObservedAudioRef.current = {
+        requestId,
+        muted: currentIntent.muted === true,
+        volume: clampPlayerVolume(currentIntent.volume),
+      };
+      setTwitchPlayerReadyId(requestId);
+      if (currentIntent.paused || document.visibilityState === 'hidden') player.pause();
+      else player.play();
+      reportPlayerDuration(requestId, playback.durationSec);
+      pollTimer = window.setInterval(() => {
+        if (cancelled || !player || String(currentVideoRef.current?.id || '') !== requestId) return;
+        let currentTime = Number(player.getCurrentTime?.());
+        if (!Number.isFinite(currentTime) || currentTime < 0) return;
+        if (currentTime < playback.vodOffset - 0.5) {
+          player.seek(playback.vodOffset);
+          currentTime = playback.vodOffset;
+        }
+        recordPlaybackPosition(requestId, currentTime);
+        const elapsed = Math.max(0, currentTime - playback.vodOffset);
+        setSimProgress(Math.min(100, Math.max(0, (elapsed / playback.durationSec) * 100)));
+        syncAudioFromPlayer();
+        const clipEnd = playback.vodOffset + playback.durationSec;
+        if (!endedHandled && !player.isPaused?.() && currentTime >= clipEnd - 0.3) {
+          endedHandled = true;
+          player.pause();
+          handleMediaEndedRef.current?.(requestId);
+        }
+      }, 350);
+    };
+    const onPlay = () => {
+      if (cancelled) return;
+      setTwitchNeedsGestureId('');
+      const guard = playbackRestoreGuardRef.current;
+      const isUnexpectedResume = getPlaybackIntentForVideo(requestId, 'twitch').paused &&
+        guard.videoId === requestId && Date.now() < guard.until && guard.paused;
+      if (isUnexpectedResume) {
+        player?.pause();
+        playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+        return;
+      }
+      if (document.visibilityState !== 'hidden') {
+        updatePlaybackIntent(requestId, { paused: false }, 'twitch');
+        keyboardPausedRef.current = { videoId: requestId, paused: false };
+      }
+    };
+    const onPause = () => {
+      if (document.visibilityState !== 'hidden' && !endedHandled) {
+        updatePlaybackIntent(requestId, { paused: true }, 'twitch');
+        keyboardPausedRef.current = { videoId: requestId, paused: true };
+      }
+    };
+    const onBlocked = () => {
+      if (!cancelled && !getPlaybackIntentForVideo(requestId, 'twitch').paused) {
+        setTwitchNeedsGestureId(requestId);
+      }
+    };
+    const onEnded = () => {
+      if (!endedHandled && String(currentVideoRef.current?.id || '') === requestId) {
+        endedHandled = true;
+        handleMediaEndedRef.current?.(requestId);
+      }
+    };
+    const createPlayer = () => {
+      const TwitchPlayer = window.Twitch?.Player;
+      if (!TwitchPlayer || cancelled) return false;
+      try {
+        mount.id = 'twitch-player-' + requestId.replace(/[^a-zA-Z0-9_-]/g, '-');
+        player = new TwitchPlayer(mount.id, {
+          width: '100%',
+          height: '100%',
+          video: 'v' + playback.videoId,
+          time: formatTwitchPlayerTime(startAt),
+          parent: [window.location.hostname],
+          autoplay: !intent.paused,
+          muted: intent.muted === true,
+        });
+        twitchPlayerRef.current = player;
+        player.addEventListener(TwitchPlayer.READY, onReady);
+        player.addEventListener(TwitchPlayer.PLAY, onPlay);
+        player.addEventListener(TwitchPlayer.PAUSE, onPause);
+        player.addEventListener(TwitchPlayer.PLAYBACK_BLOCKED, onBlocked);
+        player.addEventListener(TwitchPlayer.ENDED, onEnded);
+        return true;
+      } catch (error) {
+        console.warn('Twitch interactive VOD player could not be created.', error);
+        setNativeFallback();
+        return true;
+      }
+    };
+    if (!window.Twitch?.Player) {
+      let script = document.querySelector('script[data-twitch-embed-api="true"]');
+      if (!script) {
+        script = document.createElement('script');
+        script.src = apiScriptUrl;
+        script.async = true;
+        script.dataset.twitchEmbedApi = 'true';
+        document.head.appendChild(script);
+      }
+    }
+    if (!createPlayer()) {
+      scriptTimer = window.setInterval(() => {
+        scriptAttempts += 1;
+        if (createPlayer()) {
+          window.clearInterval(scriptTimer);
+          scriptTimer = 0;
+        } else if (scriptAttempts >= 120) {
+          window.clearInterval(scriptTimer);
+          scriptTimer = 0;
+          setNativeFallback();
+        }
+      }, 100);
+    }
+    return () => {
+      cancelled = true;
+      if (scriptTimer) window.clearInterval(scriptTimer);
+      if (pollTimer) window.clearInterval(pollTimer);
+      if (player) {
+        try { player.pause?.(); } catch { /* The embed can be torn down while unavailable. */ }
+        try { player.removeEventListener?.(window.Twitch?.Player?.READY, onReady); } catch { /* Optional API method. */ }
+        try { player.removeEventListener?.(window.Twitch?.Player?.PLAY, onPlay); } catch { /* Optional API method. */ }
+        try { player.removeEventListener?.(window.Twitch?.Player?.PAUSE, onPause); } catch { /* Optional API method. */ }
+        try { player.removeEventListener?.(window.Twitch?.Player?.PLAYBACK_BLOCKED, onBlocked); } catch { /* Optional API method. */ }
+        try { player.removeEventListener?.(window.Twitch?.Player?.ENDED, onEnded); } catch { /* Optional API method. */ }
+        try { player.destroy?.(); } catch { /* Older embed builds have no destroy method. */ }
+      }
+      if (twitchPlayerRef.current === player) twitchPlayerRef.current = null;
+      if (mount.isConnected) mount.replaceChildren();
+    };
+  }, [currentVideo?.id, currentVideo?.platform, twitchClipPlayback.requestId, twitchClipPlayback.status, twitchClipPlayback.videoId, twitchClipPlayback.vodOffset, twitchClipPlayback.durationSec]);
+
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
   // window reference and listener. Its first muted report can be an autoplay/browser state,
   // not a user's preference, so do not persist it until startup unmute is acknowledged.
@@ -3444,6 +3855,7 @@ function YediHubAppContent() {
     const retryTimers = [];
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
     const initialIntent = getPlaybackIntentForVideo(video.id, 'tiktok');
+    setTiktokNeedsGestureId('');
     startupAudioConfirmed = initialIntent.muted === true;
     tiktokMutePreferenceRef.current = {
       requestId: video.id,
@@ -3526,6 +3938,8 @@ function YediHubAppContent() {
           requestId: video.id,
           preference: data.value ? 'muted' : 'unmuted',
         };
+      } else if (data.type === 'onVolumeChange' && Number.isFinite(Number(data.value))) {
+        updatePlaybackIntent(video.id, { volume: clampPlayerVolume(data.value) }, 'tiktok');
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -3553,6 +3967,7 @@ function YediHubAppContent() {
           playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           sendCommand('pause');
         } else if (state === 1) {
+          setTiktokNeedsGestureId('');
           updatePlaybackIntent(videoId, { paused: false }, 'tiktok');
           keyboardPausedRef.current = { videoId, paused: false };
         }
@@ -3563,6 +3978,7 @@ function YediHubAppContent() {
         if (state === 0) handleMediaEndedRef.current?.(video.id);
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
+        if (/autoplay|3002/i.test(String(errorType))) setTiktokNeedsGestureId(String(video.id));
         addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
       }
     };
@@ -3947,6 +4363,16 @@ function YediHubAppContent() {
   // MAIN APP INTERFACE
   // ==========================================
   const workspaceVisibleOrder = workspaceLayout.order.filter((panelId) => workspaceLayout.visible[panelId]);
+  const playerControlStateMatchesCurrentVideo = Boolean(currentVideo && playerControlState.videoId === String(currentVideo.id));
+  const playerIsPaused = currentVideo
+    ? (playerControlStateMatchesCurrentVideo ? playerControlState.paused : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).paused)
+    : false;
+  const playerIsMuted = currentVideo
+    ? (playerControlStateMatchesCurrentVideo ? playerControlState.muted : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).muted === true)
+    : false;
+  const playerVolume = currentVideo
+    ? clampPlayerVolume(playerControlStateMatchesCurrentVideo ? playerControlState.volume : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).volume)
+    : 100;
   const workspaceHasPlayer = workspaceVisibleOrder.includes('player');
   const workspaceGridColumns = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).map((panelId) => {
     if (workspaceVisibleOrder.length === 1 || !workspaceHasPlayer) return 'minmax(0, 1fr)';
@@ -4366,12 +4792,17 @@ function YediHubAppContent() {
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
+                        const intent = getPlaybackIntentForVideo(currentVideo.id, 'youtube');
+                                        const desiredVolume = clampPlayerVolume(intent.volume);
+                        const desiredMuted = intent.muted === true;
+                        youtubeVolumeRestoreRef.current = { videoId: String(currentVideo.id), volume: desiredVolume, until: Date.now() + 3500 };
+                        youtubeMuteRestoreRef.current = { videoId: String(currentVideo.id), muted: desiredMuted, until: Date.now() + 3500 };
+                        send('setVolume', [desiredVolume]);
                         const pending = pendingPlaybackRestoreRef.current;
                         const known = playbackPositionRef.current.videoId === String(currentVideo.id) ? playbackPositionRef.current.seconds : 0;
                         const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
                           ? pending.currentTime
                           : known;
-                        const intent = getPlaybackIntentForVideo(currentVideo.id, 'youtube');
                         if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(currentVideo.id), pending: true };
                         if (intent.paused) send('pauseVideo');
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
@@ -4404,6 +4835,23 @@ function YediHubAppContent() {
                           setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
                         }}
                       />
+                      {tiktokNeedsGestureId === String(currentVideo.id) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const intent = getPlaybackIntentForVideo(currentVideo.id, 'tiktok');
+                            if (!intent.paused) {
+                              postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, 'play');
+                              if (intent.muted !== true) postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, 'unMute');
+                            }
+                            setTiktokNeedsGestureId('');
+                          }}
+                          className="absolute z-30 flex items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                          aria-label="Start TikTok playback"
+                        >
+                          <Play className="h-4 w-4 fill-current" /> Click to start video
+                        </button>
+                      )}
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
                           <div className="text-base font-black text-white">TikTok player could not start</div>
@@ -4429,19 +4877,36 @@ function YediHubAppContent() {
                       
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
-                    <iframe
-                      key={`twitch-${currentVideo.videoId}`}
-                      className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
-                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false&preload=metadata`}
-                      title={currentVideo.title}
-                      allow="autoplay; fullscreen; picture-in-picture"
-                      allowFullScreen
-                      onLoad={() => {
-                        if (String(currentVideoRef.current?.id || '') === String(currentVideo.id)) {
-                          setTwitchClipReadyId(String(currentVideo.id));
-                        }
-                      }}
-                    />
+                    twitchClipPlayback.requestId === String(currentVideo.id) && twitchClipPlayback.status === 'vod' ? (
+                      <div className="absolute inset-1 overflow-hidden rounded-sm border border-[#5d277d] shadow-[0_0_24px_rgba(98,25,143,0.22)]">
+                        <div ref={twitchPlayerMountRef} className="h-full w-full" />
+                        {twitchNeedsGestureId === String(currentVideo.id) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const player = twitchPlayerRef.current;
+                              const intent = getPlaybackIntentForVideo(currentVideo.id, 'twitch');
+                              if (player && !intent.paused) player.play?.();
+                            }}
+                            className="absolute inset-0 z-30 m-auto flex h-fit max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                            aria-label="Start Twitch video playback"
+                          >
+                            <Play className="h-4 w-4 fill-current" /> Click to start video
+                          </button>
+                        )}
+                      </div>
+                    ) : twitchClipPlayback.requestId !== String(currentVideo.id) || twitchClipPlayback.status === 'loading' ? (
+                      <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">Checking Twitch clip playback…</div>
+                    ) : (
+                      <iframe
+                        key={`twitch-native-${currentVideo.id}-${currentVideo.videoId}`}
+                        className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
+                        src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=${!playerIsPaused}&muted=${playerIsMuted}&preload=metadata`}
+                        title={currentVideo.title}
+                        allow="autoplay; fullscreen; picture-in-picture"
+                        allowFullScreen
+                      />
+                    )
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
                       <img
@@ -4492,6 +4957,61 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
+                    {(['youtube', 'tiktok'].includes(currentVideo.platform) ||
+                      (currentVideo.platform === 'twitch' && twitchPlayerReadyId === String(currentVideo.id))) && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={togglePlaybackFromKeyboard}
+                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
+                          title={playerIsPaused ? 'Resume video playback' : 'Pause video playback'}
+                          aria-label={playerIsPaused ? 'Play video' : 'Pause video'}
+                        >
+                          {playerIsPaused ? <Play className="h-4 w-4 fill-current" /> : <Pause className="h-4 w-4" />}
+                          <span>{playerIsPaused ? 'Play' : 'Pause'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={toggleMuteFromKeyboard}
+                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
+                          title={playerIsMuted ? 'Unmute video audio' : 'Mute video audio'}
+                          aria-label={playerIsMuted ? 'Unmute video' : 'Mute video'}
+                        >
+                          {playerIsMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                          <span>{playerIsMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+                        {currentVideo.platform !== 'tiktok' && (
+                          <label className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-[10px] font-bold text-slate-300">
+                            <Volume2 className="h-3.5 w-3.5" />
+                            <span className="sr-only">Player volume</span>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              step="1"
+                              value={playerVolume}
+                              onChange={(event) => setPlayerVolume(Number(event.target.value))}
+                              aria-label="Player volume"
+                              className="w-20 accent-purple-500"
+                            />
+                            <span className="min-w-8 text-right tabular-nums">{playerVolume}%</span>
+                          </label>
+                        )}
+                      </>
+                    )}
+                    {currentVideo.platform === 'tiktok' && (
+                      <span className="self-center px-2 text-[10px] text-slate-500" title="TikTok reports the volume level, but its documented embed API does not let the host restore it.">
+                        Volume is controlled inside TikTok
+                      </span>
+                    )}
+                    {currentVideo.platform === 'twitch' &&
+                      twitchClipPlayback.requestId === String(currentVideo.id) &&
+                      twitchClipPlayback.status === 'native' && (
+                      <span className="self-center px-2 text-[10px] text-slate-500" title="This Twitch Clip has no source VOD available for shared player controls.">
+                        Twitch native controls
+                      </span>
+                    )}
+
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
                     {currentVideo.status !== 'playing' && (
                       <button

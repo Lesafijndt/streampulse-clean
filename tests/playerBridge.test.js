@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
+import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
   assert.equal(postTikTokPlayerCommand(target, 'pause'), true);
   assert.equal(postTikTokPlayerCommand(target, 'mute'), true);
   assert.equal(postTikTokPlayerCommand(target, 'unMute'), true);
+  assert.equal(postTikTokPlayerCommand(target, 'setVolume', 50), false);
   assert.equal(postTikTokPlayerCommand(target, 'executeArbitraryCode'), false);
   assert.equal(messages.length, 3); assert.equal(messages[0].origin, 'https://www.tiktok.com');
   assert.deepEqual(messages[0].data, { type: 'pause', value: null, 'x-tiktok-player': true });
@@ -140,4 +141,58 @@ test('TikTok mute intent is isolated from legacy autoplay mute reports and start
   assert.match(appSource, /shouldIgnoreTikTokStartupMute/);
   assert.match(appSource, /requestStartupUnmute/);
   assert.match(appSource, /tiktokAudioStateRef/);
+});
+
+test('player volume is clamped and Twitch offsets use the documented time format', () => {
+  assert.equal(clampPlayerVolume(-12), 0);
+  assert.equal(clampPlayerVolume(37.4), 37);
+  assert.equal(clampPlayerVolume(140), 100);
+  assert.equal(clampPlayerVolume('invalid'), 100);
+  assert.equal(formatTwitchPlayerTime(0), '0s');
+  assert.equal(formatTwitchPlayerTime(185), '3m5s');
+  assert.equal(formatTwitchPlayerTime(3723), '1h2m3s');
+});
+
+test('Twitch visibility restoration preserves pause, seek, volume, and mute state', () => {
+  assert.deepEqual(getVisibilityRestoreActions('twitch', {
+    paused: true, muted: true, currentTime: 185, volume: 42,
+  }), [
+    { command: 'pause' },
+    { command: 'seek', args: [185] },
+    { command: 'setVolume', args: [0.42] },
+    { command: 'setMuted', args: [true] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', {
+    paused: false, muted: false, currentTime: 0, volume: 100,
+  }), [
+    { command: 'play' },
+    { command: 'setVolume', args: [1] },
+    { command: 'setMuted', args: [false] },
+  ]);
+});
+
+test('Twitch visibility volume restoration clamps the percentage and converts to the API range', () => {
+  assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: true, volume: 42 }), [
+    { command: 'pauseVideo' },
+    { command: 'setVolume', args: [42] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', { paused: true, volume: 0 }), [
+    { command: 'pause' },
+    { command: 'setVolume', args: [0] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', { paused: true, volume: 140 }), [
+    { command: 'pause' },
+    { command: 'setVolume', args: [1] },
+  ]);
+});
+
+test('shared player preferences persist volume and route Twitch Clips through a controlled VOD when available', async () => {
+  const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(appSource, /player-audio-preferences-v1/);
+  assert.match(appSource, /onVolumeChange/);
+  assert.match(appSource, /new TwitchPlayer\(mount\.id/);
+  assert.match(appSource, /currentTime >= clipEnd - 0\.3/);
+  assert.match(appSource, /player\.isPaused\?\.\(\)/);
+  assert.match(appSource, /status: 'native'/);
+  assert.doesNotMatch(appSource, /durationSeconds \+ 4/);
 });

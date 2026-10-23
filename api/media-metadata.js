@@ -6,6 +6,77 @@ const ALLOWED_MEDIA_HOSTS = [
   'clips.twitch.tv', 'www.twitch.tv', 'twitch.tv',
   'kick.com', 'www.kick.com', 'clip.kick.com', 'clips.kick.com'
 ];
+
+let twitchAppAccessTokenCache = { token: '', expiresAt: 0 };
+
+export function extractTwitchClipSlug(value) {
+  try {
+    const source = value instanceof URL ? value : new URL(String(value));
+    const host = source.hostname.toLowerCase();
+    if (host === 'clips.twitch.tv') return source.pathname.split('/').filter(Boolean)[0] || '';
+    if (host !== 'twitch.tv' && host !== 'www.twitch.tv') return '';
+    const segments = source.pathname.split('/').filter(Boolean);
+    const clipIndex = segments.findIndex((segment) => segment.toLowerCase() === 'clip');
+    return clipIndex >= 0 ? segments[clipIndex + 1] || '' : '';
+  } catch { return ''; }
+}
+
+export function normalizeTwitchClipPlayback(clip) {
+  const videoId = String(clip?.video_id || '').trim();
+  const rawVodOffset = clip?.vod_offset;
+  const vodOffset = Number(rawVodOffset);
+  const durationSec = Number(clip?.duration);
+  if (!videoId || rawVodOffset == null || rawVodOffset === '' || !Number.isFinite(vodOffset) || vodOffset < 0 || !isValidMediaDuration(durationSec)) return null;
+  return {
+    videoId,
+    vodOffset: Math.floor(vodOffset),
+    durationSec: Math.round(durationSec),
+  };
+}
+
+async function getTwitchAppAccessToken() {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return '';
+  if (twitchAppAccessTokenCache.token && twitchAppAccessTokenCache.expiresAt > Date.now() + 30_000) {
+    return twitchAppAccessTokenCache.token;
+  }
+  try {
+    const response = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' }),
+      signal: AbortSignal.timeout(2200),
+    });
+    if (!response.ok) return '';
+    const payload = await response.json().catch(() => ({}));
+    const token = String(payload?.access_token || '');
+    const expiresIn = Number(payload?.expires_in);
+    if (!token || !Number.isFinite(expiresIn) || expiresIn <= 0) return '';
+    twitchAppAccessTokenCache = { token, expiresAt: Date.now() + expiresIn * 1000 };
+    return token;
+  } catch { return ''; }
+}
+
+async function fetchTwitchClipPlayback(source) {
+  const slug = extractTwitchClipSlug(source);
+  if (!slug) return null;
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const accessToken = await getTwitchAppAccessToken();
+  if (!clientId || !accessToken) return null;
+  try {
+    const endpoint = new URL('https://api.twitch.tv/helix/clips');
+    endpoint.searchParams.set('id', slug);
+    const response = await fetch(endpoint, {
+      headers: { 'Client-Id': clientId, Authorization: 'Bearer ' + accessToken, Accept: 'application/json' },
+      signal: AbortSignal.timeout(2200),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => ({}));
+    return normalizeTwitchClipPlayback(payload?.data?.[0]);
+  } catch { return null; }
+}
+
 function isAllowedHost(hostname) {
   const host = String(hostname || '').toLowerCase();
   return ALLOWED_MEDIA_HOSTS.includes(host) || host.endsWith('.tiktok.com') || host.endsWith('.youtube.com');
@@ -346,6 +417,8 @@ export default async function handler(req, res) {
   const tiktokItemPromise = host === 'tiktok.com' || host.endsWith('.tiktok.com')
     ? fetchTikTokItem(source)
     : Promise.resolve(null);
+  const isTwitchClip = host === 'clips.twitch.tv' || ((host === 'twitch.tv' || host === 'www.twitch.tv') && source.pathname.toLowerCase().includes('/clip/'));
+  const twitchClipPromise = isTwitchClip ? fetchTwitchClipPlayback(source) : Promise.resolve(null);
   const metadataPromise = endpoint
     ? fetch(endpoint, {
       headers: { Accept: 'application/json', 'User-Agent': 'WhaleCumMetadata/1.0' },
@@ -353,7 +426,7 @@ export default async function handler(req, res) {
     }).then(async (response) => response.ok ? response.json().catch(() => ({})) : {}).catch(() => ({}))
     : Promise.resolve({});
   const durationPromise = fetchMediaDuration(source, host, tiktokItemPromise);
-  const [oembed, durationResult, tiktokItem] = await Promise.all([metadataPromise, durationPromise, tiktokItemPromise]);
+  const [oembed, durationResult, tiktokItem, twitchClipPlayback] = await Promise.all([metadataPromise, durationPromise, tiktokItemPromise, twitchClipPromise]);
   const data = oembed && typeof oembed === 'object' ? oembed : {};
   const tiktokVideo = tiktokItem?.video && typeof tiktokItem.video === 'object' ? tiktokItem.video : {};
   const tiktokAuthor = tiktokItem?.author && typeof tiktokItem.author === 'object' ? tiktokItem.author : {};
@@ -374,6 +447,7 @@ export default async function handler(req, res) {
     durationSource: durationSec ? 'metadata' : 'unknown',
     durationProvider: String(durationResult?.provider || ''),
     durationReason: durationSec ? '' : String(durationResult?.reason || 'The provider did not return duration metadata.').slice(0, 360),
-    metadataAvailable: Boolean(title || thumbnailUrl || durationSec)
+    metadataAvailable: Boolean(title || thumbnailUrl || durationSec),
+    twitchClipPlayback: twitchClipPlayback || null
   });
 }

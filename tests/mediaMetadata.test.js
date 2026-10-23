@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDurationFromHtml, parseDurationFromPlayerResponse, parseIso8601Duration } from '../api/media-metadata.js';
+import { extractTwitchClipSlug, normalizeTwitchClipPlayback, parseDurationFromHtml, parseDurationFromPlayerResponse, parseIso8601Duration } from '../api/media-metadata.js';
 import { MAX_MEDIA_DURATION_SECONDS, isValidMediaDuration } from '../src/durationLookup.js';
 
 test('YouTube ISO-8601 duration values are parsed correctly', () => {
@@ -63,4 +63,22 @@ test('TikTok inline video JSON is parsed without crossing into unrelated page me
 
 test('long actual durations in provider HTML are not truncated at 24 hours', () => {
   assert.equal(parseDurationFromHtml('<meta property="og:video:duration" content="PT26H">'), 93600);
+});
+
+
+test('Twitch clip URLs resolve a clip slug from both supported URL formats', () => {
+  assert.equal(extractTwitchClipSlug('https://clips.twitch.tv/ClipSlug'), 'ClipSlug');
+  assert.equal(extractTwitchClipSlug('https://www.twitch.tv/streamer/clip/AnotherSlug'), 'AnotherSlug');
+  assert.equal(extractTwitchClipSlug('https://example.com/streamer/clip/Nope'), '');
+});
+
+test('Twitch clip metadata enables VOD playback only when its source VOD and offset are available', () => {
+  assert.deepEqual(normalizeTwitchClipPlayback({ video_id: '123456789', vod_offset: 42, duration: 27.2 }), {
+    videoId: '123456789',
+    vodOffset: 42,
+    durationSec: 27,
+  });
+  assert.equal(normalizeTwitchClipPlayback({ video_id: '', vod_offset: null, duration: 27 }), null);
+  assert.equal(normalizeTwitchClipPlayback({ video_id: '123456789', vod_offset: null, duration: 27 }), null);
+  assert.equal(normalizeTwitchClipPlayback({ video_id: '123456789', vod_offset: -1, duration: 27 }), null);
 });
