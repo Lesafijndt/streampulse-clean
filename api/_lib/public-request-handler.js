@@ -88,8 +88,8 @@ export default async function handler(req, res) {
     });
   }
 
-  const title = String(body.title || '').replace(/[\\u0000-\\u001f\\u007f]/g, ' ').trim().slice(0, 180);
-  const note = String(body.note || '').replace(/[\\u0000-\\u001f\\u007f]/g, ' ').trim().slice(0, 300);
+  const title = String(body.title || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 180);
+  const note = String(body.note || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 300);
   const category = ['Music', 'Gaming', 'Memes', 'Clips', 'IRL'].includes(body.category) ? body.category : 'Auto';
   const startValue = body.startSeconds;
   const startSeconds = startValue === null || startValue === undefined || startValue === ''
