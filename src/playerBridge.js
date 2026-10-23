@@ -99,7 +99,11 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
   }
   if ((platform === 'youtube' || platform === 'twitch') &&
       volume !== null && volume !== undefined && Number.isFinite(Number(volume))) {
-    actions.push({ command: 'setVolume', args: [clampPlayerVolume(volume)] });
+    // YouTube accepts a 0-100 percentage while Twitch's Player API takes 0-1.
+    const platformVolume = platform === 'twitch'
+      ? clampPlayerVolume(volume) / 100
+      : clampPlayerVolume(volume);
+    actions.push({ command: 'setVolume', args: [platformVolume] });
   }
   if (platform === 'twitch' && typeof muted === 'boolean') {
     actions.push({ command: 'setMuted', args: [muted] });

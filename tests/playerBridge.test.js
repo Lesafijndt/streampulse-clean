@@ -159,15 +159,30 @@ test('Twitch visibility restoration preserves pause, seek, volume, and mute stat
   }), [
     { command: 'pause' },
     { command: 'seek', args: [185] },
-    { command: 'setVolume', args: [42] },
+    { command: 'setVolume', args: [0.42] },
     { command: 'setMuted', args: [true] },
   ]);
   assert.deepEqual(getVisibilityRestoreActions('twitch', {
     paused: false, muted: false, currentTime: 0, volume: 100,
   }), [
     { command: 'play' },
-    { command: 'setVolume', args: [100] },
+    { command: 'setVolume', args: [1] },
     { command: 'setMuted', args: [false] },
+  ]);
+});
+
+test('Twitch visibility volume restoration clamps the percentage and converts to the API range', () => {
+  assert.deepEqual(getVisibilityRestoreActions('youtube', { paused: true, volume: 42 }), [
+    { command: 'pauseVideo' },
+    { command: 'setVolume', args: [42] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', { paused: true, volume: 0 }), [
+    { command: 'pause' },
+    { command: 'setVolume', args: [0] },
+  ]);
+  assert.deepEqual(getVisibilityRestoreActions('twitch', { paused: true, volume: 140 }), [
+    { command: 'pause' },
+    { command: 'setVolume', args: [1] },
   ]);
 });
 
