@@ -62,6 +62,7 @@ test('the dashboard exposes a request button, fullscreen, muted YouTube autoplay
   assert.match(app, /fetch\('\/api\/public-request'/);
   assert.match(app, /requestFullscreen\(\)/);
   assert.match(app, /fullscreenchange/);
-  assert.match(app, /&mute=\$\{getPlaybackIntentForVideo/);
+  assert.match(app, /const youtubePlayerSrc = useMemo/);
+  assert.match(app, /mute: initialMute \? '1' : '0'/);
   assert.match(app, /Click to start video/);
 });
