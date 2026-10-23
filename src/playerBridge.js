@@ -1,6 +1,6 @@
 const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 const YOUTUBE_ORIGIN = 'https://www.youtube.com';
-const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo', 'setVolume']);
+const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo']);
 
 /** Autoplay can report transient mute even when the viewer never chose mute. */
 export function shouldAutoUnmuteTikTok({ mutedIntent = null, mutePreference = 'auto' } = {}) {
@@ -29,6 +29,20 @@ export function buildTikTokPlayerUrl(videoId, { paused = false } = {}) {
   const autoplay = paused ? 0 : 1;
   return `https://www.tiktok.com/player/v1/${encodeURIComponent(id)}?autoplay=${autoplay}&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`;
 }
+export function clampPlayerVolume(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(Math.max(0, Math.min(100, numeric))) : 100;
+}
+
+export function formatTwitchPlayerTime(value) {
+  let seconds = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(seconds / 3600);
+  seconds %= 3600;
+  const minutes = Math.floor(seconds / 60);
+  seconds %= 60;
+  return (hours ? hours + 'h' : '') + (minutes ? minutes + 'm' : '') + seconds + 's';
+}
+
 const YOUTUBE_COMMANDS = new Set(['addEventListener','playVideo','pauseVideo','mute','unMute','setVolume','seekTo','getCurrentTime','getDuration','getVolume','getPlayerState','isMuted']);
 
 export function postTikTokPlayerCommand(target, type, value = null) {
@@ -71,16 +85,17 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
   // briefly start playback when the viewer explicitly left it paused.
   if (paused) {
     if (platform === 'youtube') actions.push({ command: 'pauseVideo' });
-    else if (platform === 'tiktok') actions.push({ command: 'pause' });
+    else if (platform === 'tiktok' || platform === 'twitch') actions.push({ command: 'pause' });
   }
   if (Number.isFinite(seconds) && seconds > 0.5) {
     if (platform === 'youtube') actions.push({ command: 'seekTo', args: [seconds, true] });
     else if (platform === 'tiktok') actions.push({ command: 'seekTo', value: seconds });
+    else if (platform === 'twitch') actions.push({ command: 'seek', args: [seconds] });
   }
   // Seek first, then resume videos that were active before the tab switch.
   if (!paused) {
     if (platform === 'youtube') actions.push({ command: 'playVideo' });
-    else if (platform === 'tiktok') actions.push({ command: 'play' });
+    else if (platform === 'tiktok' || platform === 'twitch') actions.push({ command: 'play' });
   }
   if (muted === true) actions.push({ command: 'mute' });
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
