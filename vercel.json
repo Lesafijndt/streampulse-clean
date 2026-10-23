@@ -4,7 +4,8 @@
     { "source": "/api/twitch/login", "destination": "/api/twitch/auth?action=login" },
     { "source": "/api/twitch/logout", "destination": "/api/twitch/auth?action=logout" },
     { "source": "/api/twitch/bot-login", "destination": "/api/twitch/auth?action=bot-login" },
-    { "source": "/api/twitch/bot-logout", "destination": "/api/twitch/auth?action=bot-logout" }
+    { "source": "/api/twitch/bot-logout", "destination": "/api/twitch/auth?action=bot-logout" },
+    { "source": "/api/public-request", "destination": "/api/twitch/auth?action=public-request" }
   ],
   "functions": {
     "api/twitch/eventsub.js": { "maxDuration": 60 },

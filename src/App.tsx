@@ -386,6 +386,7 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
   const [showLayoutCustomizer, setShowLayoutCustomizer] = useState(false);
   const [workspaceLayout, setWorkspaceLayout] = useState(() =>
     normalizeWorkspaceLayout(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, DEFAULT_WORKSPACE_LAYOUT))
@@ -531,6 +532,17 @@ function YediHubAppContent() {
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
+  const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
+  const playerStageRef = useRef(null);
+  const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
+  const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    updateFullscreenState();
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
   const [twitchClipReadyId, setTwitchClipReadyId] = useState('');
   // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
@@ -2142,6 +2154,21 @@ function YediHubAppContent() {
     return queued[0] || null;
   }, [videos]);
 
+  // Replace a black YouTube viewport with an explicit start control if autoplay is blocked.
+  useEffect(() => {
+    setYoutubeNeedsGesture('');
+    youtubeStartupMuteRef.current = { videoId: String(currentVideo?.id || ''), pending: false };
+    if (!currentVideo || currentVideo.platform !== 'youtube') return undefined;
+    const videoId = String(currentVideo.id);
+    const timer = window.setTimeout(() => {
+      if (String(currentVideoRef.current?.id || '') !== videoId) return;
+      const intent = getPlaybackIntentForVideo(videoId, 'youtube');
+      const state = Number(youtubePlaybackInfoRef.current.playerState);
+      if (!intent.paused && state !== 1 && state !== 3) setYoutubeNeedsGesture(videoId);
+    }, 4200);
+    return () => window.clearTimeout(timer);
+  }, [currentVideo?.id, currentVideo?.platform]);
+
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
     const id = String(videoId || '');
     const matchingVideo = videosRef.current.find((video) => String(video.id) === id);
@@ -2204,6 +2231,23 @@ function YediHubAppContent() {
   // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
   // Its autoplay query is only an initial-load setting; deriving it on every render
   // changes src when pause intent changes and makes React reload the embed mid-video.
+  const youtubePlayerSrc = useMemo(() => {
+    if (currentVideo?.platform !== 'youtube' || !currentVideo?.videoId) return '';
+    const initialMute = getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted !== false;
+    const params = new URLSearchParams({
+      autoplay: '1',
+      mute: initialMute ? '1' : '0',
+      controls: '1',
+      playsinline: '1',
+      rel: '0',
+      modestbranding: '1',
+      enablejsapi: '1',
+      origin: window.location.origin,
+    });
+    if (Number(currentVideo.startSeconds) > 0) params.set('start', String(Math.floor(Number(currentVideo.startSeconds))));
+    return `https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?${params.toString()}`;
+  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, currentVideo?.startSeconds, channelRoom]);
+
   const tiktokPlayerSrc = useMemo(() => (
     currentVideo?.platform === 'tiktok'
       ? buildTikTokPlayerUrl(currentVideo.videoId, {
@@ -3283,7 +3327,8 @@ function YediHubAppContent() {
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
-      const intent = getPlaybackIntentForVideo(video.id);
+      const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+      if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(video.id), pending: true };
       const pending = pendingPlaybackRestoreRef.current;
       const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
       const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
@@ -3293,9 +3338,10 @@ function YediHubAppContent() {
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
+      // Muted autoplay is widely permitted when autoplay with sound is blocked.
+      if (intent.muted !== false) postCommand('mute');
       postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-      if (intent.muted === true) postCommand('mute');
-      else if (intent.muted === false) postCommand('unMute');
+      if (intent.muted === false) postCommand('unMute');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -3315,8 +3361,13 @@ function YediHubAppContent() {
         if (typeof info.muted === 'boolean') {
           const guard = playbackRestoreGuardRef.current;
           const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
-          const intent = getPlaybackIntentForVideo(video.id);
-          if (!restoringMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted });
+          const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+          const startupMute = youtubeStartupMuteRef.current;
+          const ignoringInitialAutoplayMute = startupMute.videoId === String(video.id) && startupMute.pending && info.muted === true;
+          if (startupMute.videoId === String(video.id) && startupMute.pending && info.muted === false) {
+            youtubeStartupMuteRef.current = { videoId: String(video.id), pending: false };
+          }
+          if (!restoringMute && !ignoringInitialAutoplayMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted }, 'youtube');
         }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
@@ -3331,6 +3382,7 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        if (stateFromEvent === 1) setYoutubeNeedsGesture('');
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId);
         const restoreGuard = playbackRestoreGuardRef.current;
@@ -3925,6 +3977,37 @@ function YediHubAppContent() {
     });
   };
 
+  const togglePlayerFullscreen = async () => {
+    const stage = playerStageRef.current;
+    if (!stage) {
+      addToast('The player is not ready for fullscreen yet.', 'warning');
+      return;
+    }
+    try {
+      if (document.fullscreenElement === stage) {
+        await document.exitFullscreen();
+      } else if (typeof stage.requestFullscreen === 'function') {
+        await stage.requestFullscreen();
+      } else {
+        addToast('Fullscreen is not supported by this browser.', 'warning');
+      }
+    } catch (error) {
+      console.warn('Could not enter player fullscreen.', error);
+      addToast('The browser blocked fullscreen. Try the fullscreen button again.', 'warning');
+    }
+  };
+
+  const startYouTubeFromPrompt = () => {
+    const video = currentVideoRef.current || currentVideo;
+    const playerWindow = youtubeIframeRef.current?.contentWindow;
+    if (!video || video.platform !== 'youtube' || !playerWindow) return;
+    const intent = getPlaybackIntentForVideo(video.id, 'youtube');
+    if (intent.muted !== false) postYouTubePlayerCommand(playerWindow, 'mute');
+    postYouTubePlayerCommand(playerWindow, 'playVideo');
+    updatePlaybackIntent(video.id, { paused: false }, 'youtube');
+    youtubeIframeRef.current?.focus();
+  };
+
   return (
     <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
       {/* ==========================================
@@ -4200,11 +4283,29 @@ function YediHubAppContent() {
 
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
+                  onClick={() => setShowRequestModal(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-purple-500/35 bg-purple-600/20 px-2.5 py-1.5 text-[10px] font-black text-purple-100 transition hover:bg-purple-600/35 sm:text-xs"
+                  title="Request a video for the community queue"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Request Video
+                </button>
+                <button
                   onClick={() => setIsTheatreMode(!isTheatreMode)}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                   title="Toggle Player Height"
                 >
                   {isTheatreMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={togglePlayerFullscreen}
+                  disabled={!currentVideo}
+                  className="p-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  title={isPlayerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  aria-label={isPlayerFullscreen ? 'Exit player fullscreen' : 'Enter player fullscreen'}
+                >
+                  {isPlayerFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
@@ -4213,10 +4314,13 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
+                  ref={playerStageRef}
                   className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
-                    isTheatreMode
-                      ? 'h-[75vh] min-h-[580px] max-h-[960px]'
-                      : 'h-[62vh] min-h-[460px] max-h-[780px]'
+                    isPlayerFullscreen
+                      ? 'h-screen min-h-0 max-h-none w-screen'
+                      : isTheatreMode
+                        ? 'h-[75vh] min-h-[580px] max-h-[960px]'
+                        : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
                   {isVerticalMedia(currentVideo) && (
@@ -4227,6 +4331,16 @@ function YediHubAppContent() {
                       <div className="gachi-vertical-letterbox absolute inset-0" />
                     </div>
                   )}
+                  {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) && (
+                    <button
+                      type="button"
+                      onClick={startYouTubeFromPrompt}
+                      className="absolute z-30 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                      aria-label="Start YouTube playback"
+                    >
+                      <Play className="h-4 w-4 fill-current" /> Click to start video
+                    </button>
+                  )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div className={isVerticalMedia(currentVideo)
                       ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
@@ -4235,7 +4349,7 @@ function YediHubAppContent() {
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}${Number(currentVideo.startSeconds) > 0 ? '&start=' + Math.floor(Number(currentVideo.startSeconds)) : ''}`}
+                      src={youtubePlayerSrc}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -4256,14 +4370,15 @@ function YediHubAppContent() {
                         const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
                           ? pending.currentTime
                           : known;
-                        const intent = getPlaybackIntentForVideo(currentVideo.id);
+                        const intent = getPlaybackIntentForVideo(currentVideo.id, 'youtube');
+                        if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(currentVideo.id), pending: true };
                         if (intent.paused) send('pauseVideo');
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
+                        if (intent.muted !== false) send('mute');
                         send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-                        if (intent.muted === true) send('mute');
-                        else if (intent.muted === false) send('unMute');
+                        if (intent.muted === false) send('unMute');
                       }}
                     />
                     </div>
@@ -4578,22 +4693,39 @@ function YediHubAppContent() {
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!reqUrl.trim()) return;
-                const ok = await processAndQueueRequest({
-                  url: reqUrl,
-                  title: reqTitle,
-                  note: reqNote,
-                  requestedBy: reqUsername || twitchAuth.username,
-                  userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
-                  manualCategory: reqCategory,
-                  startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null
-                });
-                if (ok) {
+                if (!reqUrl.trim() || requestSubmitting) return;
+                setRequestSubmitting(true);
+                try {
+                  const response = await fetch('/api/public-request', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      url: reqUrl.trim(),
+                      title: reqTitle.trim(),
+                      note: reqNote.trim(),
+                      requestedBy: reqUsername || twitchAuth.username || '',
+                      category: reqCategory,
+                      startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null,
+                    }),
+                  });
+                  const result = await response.json().catch(() => ({}));
+                  if (!response.ok || !result.ok) {
+                    addToast(result.message || result.error || 'The shared queue could not save this request. Check Firebase availability and try again.', 'warning');
+                    return;
+                  }
+                  addToast(`Request added to the shared queue: ${result.title || 'video'}`, 'success');
                   setReqUrl('');
                   setReqStartAt('');
                   setReqTitle('');
                   setReqNote('');
                   setShowRequestModal(false);
+                } catch (error) {
+                  console.warn('Public video request failed.', error);
+                  addToast('Could not reach the request service. Please try again.', 'warning');
+                } finally {
+                  setRequestSubmitting(false);
                 }
               }}
               className="space-y-4"
@@ -4697,9 +4829,10 @@ function YediHubAppContent() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30"
+                  disabled={requestSubmitting}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30 disabled:cursor-wait disabled:opacity-60"
                 >
-                  LET HIM COOK
+                  {requestSubmitting ? 'SUBMITTING…' : 'LET HIM COOK'}
                 </button>
               </div>
             </form>

@@ -48,6 +48,7 @@ async function getReplyAppToken() {
 }
 
 async function sendEventSubChatReply(event, message) {
+  if (event?.source === 'website') return false;
   try {
     const clientId = process.env.TWITCH_CLIENT_ID;
     const accessToken = await getReplyAppToken();
@@ -582,7 +583,7 @@ async function processCloudChatCommand({ db, appId, event, messageId, requester,
   return { ignored: true, reason: 'unsupported_command' };
 }
 
-async function processChatMediaRequest({ db, appId, event, messageId, requester, rawText, extractedUrl }) {
+async function processChatMediaRequest({ db, appId, event, messageId, requester, rawText, extractedUrl, requestOptions = null }) {
   const isAssrCommand = /^!assr(?:\s|$)/i.test(rawText);
   const requestText = rawText.replace(/^!assr\s*/i, '').trim();
   const timestampRequest = stripMediaTimestampSuffix(requestText);
@@ -648,15 +649,19 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
   const candidateDuration = Number(metadata?.durationSec);
   const durationSec = Number.isFinite(candidateDuration) && candidateDuration > 0 && candidateDuration <= 86400
     ? Math.round(candidateDuration) : 0;
-  const cleanTitle = title || (
+  const cleanTitle = String(requestOptions?.title || title || (
     parsed.platform === 'youtube' ? 'YouTube Media (' + parsed.videoId + ')' :
     parsed.platform === 'twitch' ? 'Twitch Clip (' + parsed.videoId + ')' :
     parsed.platform === 'tiktok' ? 'TikTok Short Clip' :
     parsed.platform === 'kick' ? 'Kick Clip (' + parsed.videoId + ')' : 'Community Requested Media'
-  );
-  const note = 'Requested via Twitch chat';
-  const detectedCategory = detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
-  const mediaType = detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
+  )).trim().slice(0, 180);
+  const note = String(requestOptions?.note || (requestOptions?.source === 'website' ? 'Requested via website' : 'Requested via Twitch chat')).trim().slice(0, 300);
+  const requestedCategory = ['Music', 'Gaming', 'Memes', 'Clips', 'IRL'].includes(requestOptions?.category)
+    ? requestOptions.category : null;
+  const detectedCategory = requestedCategory || detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
+  const mediaType = requestedCategory
+    ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
+    : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
   const category = mediaType === 'Music' ? 'Music' : detectedCategory;
   const requestedAt = Date.now();
   const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
@@ -664,12 +669,15 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
   const itemRef = db.doc(queuePath(appId) + '/' + itemId);
   const eventId = eventDocumentId(messageId);
   const eventRef = db.doc(eventsPath(appId) + '/' + eventId);
+  const requestedStartSeconds = Number(requestOptions?.startSeconds);
   const startSeconds = parsed.platform === 'youtube'
-    ? (parseMediaStartSeconds(rawText) || parseMediaStartSeconds(normalizedUrl) || timestampRequest.startSeconds || 0) : 0;
+    ? (requestOptions?.startSeconds !== null && requestOptions?.startSeconds !== undefined && Number.isFinite(requestedStartSeconds)
+      ? Math.max(0, Math.min(86400, requestedStartSeconds))
+      : (parseMediaStartSeconds(rawText) || parseMediaStartSeconds(normalizedUrl) || timestampRequest.startSeconds || 0)) : 0;
   const item = {
     id: itemId, identityKey, channelRoom: PRIVATE_CHANNEL, title: cleanTitle, url: normalizedUrl,
     metadataUrl: metadataUrl || normalizedUrl, platform: parsed.platform, videoId: String(parsed.videoId || ''),
-    category, categoryManuallySet: false, mediaType,
+    category, categoryManuallySet: Boolean(requestedCategory), mediaType,
     duration: durationSec ? formatDuration(durationSec) : '',
     durationSource: durationSec ? 'metadata' : 'unknown',
     requestedBy: requester, userRole: 'viewer', status: 'queue', upvotes: 0, voters: [], pinned: false,
@@ -731,7 +739,7 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
   return { queued: outcome.result === 'queued', id: outcome.id, title: outcome.title, reason: outcome.result };
 }
 
-export async function processEventSubChatMessage({ event, messageId }) {
+export async function processEventSubChatMessage({ event, messageId, requestOptions = null }) {
   const broadcaster = normalizeLogin(event?.broadcaster_user_login);
   const requester = normalizeLogin(event?.chatter_user_login);
   const rawText = String(event?.message?.text || '').trim();
@@ -744,7 +752,7 @@ export async function processEventSubChatMessage({ event, messageId }) {
     return processChatMediaRequest({
       db: await getFirebaseAdminDb(),
       appId: getFirebaseNamespace(),
-      event, messageId, requester, rawText, extractedUrl,
+      event, messageId, requester, rawText, extractedUrl, requestOptions,
     });
   }
   return processCloudChatCommand({
