@@ -23,9 +23,10 @@ export function extractTwitchClipSlug(value) {
 
 export function normalizeTwitchClipPlayback(clip) {
   const videoId = String(clip?.video_id || '').trim();
-  const vodOffset = Number(clip?.vod_offset);
+  const rawVodOffset = clip?.vod_offset;
+  const vodOffset = Number(rawVodOffset);
   const durationSec = Number(clip?.duration);
-  if (!videoId || !Number.isFinite(vodOffset) || vodOffset < 0 || !isValidMediaDuration(durationSec)) return null;
+  if (!videoId || rawVodOffset == null || rawVodOffset === '' || !Number.isFinite(vodOffset) || vodOffset < 0 || !isValidMediaDuration(durationSec)) return null;
   return {
     videoId,
     vodOffset: Math.floor(vodOffset),

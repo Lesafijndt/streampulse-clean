@@ -79,5 +79,6 @@ test('Twitch clip metadata enables VOD playback only when its source VOD and off
     durationSec: 27,
   });
   assert.equal(normalizeTwitchClipPlayback({ video_id: '', vod_offset: null, duration: 27 }), null);
+  assert.equal(normalizeTwitchClipPlayback({ video_id: '123456789', vod_offset: null, duration: 27 }), null);
   assert.equal(normalizeTwitchClipPlayback({ video_id: '123456789', vod_offset: -1, duration: 27 }), null);
 });
