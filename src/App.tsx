@@ -374,6 +374,9 @@ function YediHubAppContent() {
 
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
+  // The moderator owns the local IRC fallback so the streamer can keep the dashboard focused on playback.
+  const isModerator = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
+  const isCommandBridgeOwner = isModerator;
   const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
   const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
   const authorizedLoginRef = useRef('');
@@ -2387,6 +2390,14 @@ function YediHubAppContent() {
     : syncIndicatorLabel === 'Cloud issue'
     ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
     : 'bg-amber-500/10 border-amber-500/30 text-amber-200';
+  const headerStatusClass = isModerator
+    ? syncIndicatorClass
+    : streamSettings.queueOpen
+    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+    : 'bg-rose-500/10 border-rose-500/30 text-rose-200';
+  const headerStatusDotClass = isModerator
+    ? (cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400')
+    : (streamSettings.queueOpen ? 'bg-emerald-400' : 'bg-rose-400');
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -2411,12 +2422,12 @@ function YediHubAppContent() {
   // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
   const connectTwitchIrc = (targetChan, options = {}) => {
-    // Only the broadcaster browser is authoritative for commands/playback. The server-side
-    // EventSub webhook is the durable path for request intake while the dashboard is closed.
-    if (normalizeTwitchLogin(twitchAuth.username) !== PRIVATE_CHANNEL) {
+    // The moderator browser provides the local fallback when cloud EventSub intake is inactive.
+    // The server-side EventSub webhook remains the durable path when it is healthy.
+    if (!isCommandBridgeOwner) {
       shouldReconnectIrcRef.current = false;
       setIrcConnected(false);
-      if (!options.silent) addToast('The local Twitch command bridge runs on the 2o3a player dashboard only.', 'warning');
+      if (!options.silent) addToast('The local Twitch command bridge is managed from the moderator dashboard.', 'warning');
       return;
     }
     const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
@@ -2559,9 +2570,9 @@ function YediHubAppContent() {
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    const isPlayerController = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL;
-    shouldReconnectIrcRef.current = Boolean(isPlayerController);
-    if (!isPlayerController) {
+    const isBridgeOwner = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
+    shouldReconnectIrcRef.current = Boolean(isBridgeOwner);
+    if (!isBridgeOwner) {
       disconnectTwitchIrc(false);
       return undefined;
     }
@@ -2570,7 +2581,7 @@ function YediHubAppContent() {
       window.clearTimeout(startTimer);
       disconnectTwitchIrc(false);
     };
-    // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
+    // The bridge always joins 2o3a and only runs in the moderator's authenticated browser.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [twitchAuth.authenticated, twitchAuth.username]);
 
@@ -2586,7 +2597,7 @@ function YediHubAppContent() {
       if (!online || (!wasOffline && !force)) return;
       setCloudReconnectTick((tick) => tick + 1);
       setActivityReconnectTick((tick) => tick + 1);
-      if (twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && shouldReconnectIrcRef.current) {
+      if (isCommandBridgeOwner && shouldReconnectIrcRef.current) {
         const socket = ircSocketRef.current;
         if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
           connectTwitchIrc(ircTargetRef.current || PRIVATE_CHANNEL, { silent: true });
@@ -3950,21 +3961,21 @@ function YediHubAppContent() {
           {/* Sync & Mode Badges */}
           <button
             type="button"
-            onClick={() => setConnectionDetailsExpanded((expanded) => !expanded)}
-            title="Show connection details"
-            aria-label={`Connection details: ${syncStatusText}`}
-            aria-expanded={connectionDetailsExpanded}
-            className={`gachi-topbar-sync flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
+            onClick={() => { if (isModerator) setConnectionDetailsExpanded((expanded) => !expanded); }}
+            title={isModerator ? 'Show connection details' : 'Request queue status'}
+            aria-label={isModerator ? `Connection details: ${syncStatusText}` : `Requests ${streamSettings.queueOpen ? 'open' : 'closed'}`}
+            aria-expanded={isModerator && connectionDetailsExpanded}
+            className={`gachi-topbar-sync flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${headerStatusClass} ${isModerator ? 'cursor-pointer' : 'cursor-default'}`}
           >
             <span className="flex shrink-0 items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400'}`} />
-              <span className="font-semibold whitespace-nowrap">{syncIndicatorLabel}</span>
+              <span className={`w-2 h-2 rounded-full ${headerStatusDotClass}`} />
+              <span className="font-semibold whitespace-nowrap">{isModerator ? syncIndicatorLabel : 'Requests'}</span>
             </span>
             <span className="text-slate-600">|</span>
             <span className="whitespace-nowrap text-slate-300">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
-            <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />
+            {isModerator && <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />}
           </button>
 
 
@@ -4005,14 +4016,16 @@ function YediHubAppContent() {
                   <Layers className="h-4 w-4 text-rose-300" />
                   <span className="flex-1">Customize layout <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Reorder or hide panels for this browser</span></span>
                 </button>
-                <div className="my-2 border-t border-white/10" />
-                <div className="rounded-xl px-3 py-2">
+                {isModerator && (
+                  <>
+                    <div className="my-2 border-t border-white/10" />
+                    <div className="rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
-                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'RECONNECTING' : 'STREAMER ONLY'}</span>
+                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : isCommandBridgeOwner ? 'RECONNECTING' : 'MODERATOR ONLY'}</span>
                   </div>
-                  <button type="button" disabled={normalizeTwitchLogin(twitchAuth.username) !== PRIVATE_CHANNEL} onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:cursor-not-allowed disabled:opacity-50">
-                    <RefreshCw className="h-3 w-3" /> {normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL ? 'Restart command bridge' : 'Streamer browser only'}
+                  <button type="button" disabled={!isCommandBridgeOwner} onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:cursor-not-allowed disabled:opacity-50">
+                    <RefreshCw className="h-3 w-3" /> {isCommandBridgeOwner ? 'Restart command bridge' : 'Moderator browser only'}
                   </button>
                 </div>
                 <div className="mt-1 rounded-xl px-3 py-2">
@@ -4033,7 +4046,9 @@ function YediHubAppContent() {
                     {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
                   </button>
                 </div>
-                <div className="my-2 border-t border-white/10" />
+                    <div className="my-2 border-t border-white/10" />
+                  </>
+                )}
                 <button type="button" onClick={() => {
                   setTopMenuOpen(false);
                   if (!normalizeRoomName(channelRoom)) { addToast('Set a Twitch channel before copying a room link.', 'warning'); return; }
@@ -4051,7 +4066,7 @@ function YediHubAppContent() {
           </div>
         </div>
 
-        {connectionDetailsExpanded && (
+        {isModerator && connectionDetailsExpanded && (
           <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-5">
             <div className="min-w-0">
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
