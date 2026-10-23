@@ -2233,7 +2233,7 @@ function YediHubAppContent() {
   // changes src when pause intent changes and makes React reload the embed mid-video.
   const youtubePlayerSrc = useMemo(() => {
     if (currentVideo?.platform !== 'youtube' || !currentVideo?.videoId) return '';
-    const initialMute = getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted !== false;
+    const initialMute = getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted === true;
     const params = new URLSearchParams({
       autoplay: '1',
       mute: initialMute ? '1' : '0',
@@ -3338,10 +3338,10 @@ function YediHubAppContent() {
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
-      // Muted autoplay is widely permitted when autoplay with sound is blocked.
-      if (intent.muted !== false) postCommand('mute');
+      // Sound is the default. Only preserve mute when the viewer explicitly chose it.
+      if (intent.muted === true) postCommand('mute');
       postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-      if (intent.muted === false) postCommand('unMute');
+      if (intent.muted !== true) postCommand('unMute');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -4002,7 +4002,8 @@ function YediHubAppContent() {
     const playerWindow = youtubeIframeRef.current?.contentWindow;
     if (!video || video.platform !== 'youtube' || !playerWindow) return;
     const intent = getPlaybackIntentForVideo(video.id, 'youtube');
-    if (intent.muted !== false) postYouTubePlayerCommand(playerWindow, 'mute');
+    if (intent.muted === true) postYouTubePlayerCommand(playerWindow, 'mute');
+    else postYouTubePlayerCommand(playerWindow, 'unMute');
     postYouTubePlayerCommand(playerWindow, 'playVideo');
     updatePlaybackIntent(video.id, { paused: false }, 'youtube');
     youtubeIframeRef.current?.focus();
@@ -4376,9 +4377,9 @@ function YediHubAppContent() {
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
-                        if (intent.muted !== false) send('mute');
+                        if (intent.muted === true) send('mute');
                         send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-                        if (intent.muted === false) send('unMute');
+                        if (intent.muted !== true) send('unMute');
                       }}
                     />
                     </div>
