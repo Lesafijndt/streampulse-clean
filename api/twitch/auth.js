@@ -81,6 +81,10 @@ const HANDLERS = Object.freeze({
   logout: staffLogout,
   'bot-login': botLogin,
   'bot-logout': botLogout,
+  'public-request': async (req, res) => {
+    const { default: publicRequestHandler } = await import('../_lib/public-request-handler.js');
+    return publicRequestHandler(req, res);
+  },
 });
 
 export const SUPPORTED_TWITCH_AUTH_ACTIONS = Object.freeze(Object.keys(HANDLERS));
