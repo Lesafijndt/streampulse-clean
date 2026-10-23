@@ -18,6 +18,7 @@ test('Firebase health diagnostics identify service account configuration failure
 test('Firebase health diagnostics distinguish Firestore permission, quota, and availability failures', () => {
   assert.equal(classifyFirebaseHealthError(new Error('PERMISSION_DENIED: permission denied')).code, 'firestore_permission_denied');
   assert.equal(classifyFirebaseHealthError(new Error('RESOURCE_EXHAUSTED: quota exceeded')).code, 'firestore_quota_exceeded');
+  assert.equal(classifyFirebaseHealthError(Object.assign(new Error('Request failed'), { code: 'resource-exhausted' })).code, 'firestore_quota_exceeded');
   assert.equal(classifyFirebaseHealthError(new Error('UNAVAILABLE: deadline exceeded')).code, 'firestore_unreachable');
 });
 

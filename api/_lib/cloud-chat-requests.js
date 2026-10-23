@@ -140,7 +140,7 @@ function isAlreadyExists(error) {
     /already exists|ALREADY_EXISTS/i.test(String(error?.message || ''));
 }
 
-async function resolveTiktokIfNeeded(url, parsed, origin, event, requester) {
+async function resolveTiktokIfNeeded(url, parsed, origin) {
   if (parsed.platform !== 'tiktok' || parsed.videoId) return { url, parsed, metadataUrl: url };
   const endpoint = new URL('/api/resolve-tiktok?url=' + encodeURIComponent(url), origin);
   let response;
@@ -155,7 +155,6 @@ async function resolveTiktokIfNeeded(url, parsed, origin, event, requester) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.videoId || !result.url) {
     if (response.status >= 500) throw new Error('TikTok short-link resolution is temporarily unavailable');
-    await sendEventSubChatReply(event, `@${requester} TikTok link failed; try the full /video/ URL.`);
     return null;
   }
   const normalizedUrl = String(result.url);
@@ -247,6 +246,9 @@ export function versionUpdate(settings, at, healthPatch = null) {
       ...oldHealth,
       lastWriteAt: at,
       lastWriteStatus: 'ok',
+      lastWriteSource: 'eventsub',
+      lastProcessingStatus: 'ok',
+      lastProcessingError: null,
       ...(healthPatch || {}),
     },
   };
@@ -279,28 +281,17 @@ export async function persistEventSubInbox({ event, messageId }) {
   const safeId = normalizeEventMessageId(messageId);
   if (!safeId) throw new Error('EventSub message ID is invalid');
   const inboxRef = db.doc(inboxPath(appId) + '/' + safeId);
-  const roomSettingsRef = db.doc(settingsPath(appId));
   const receivedAt = Date.now();
   await db.runTransaction(async (tx) => {
     const inboxSnapshot = await tx.get(inboxRef);
-    const settingsSnapshot = await tx.get(roomSettingsRef);
-    const settings = settingsSnapshot.exists ? settingsSnapshot.data() : {};
-    const health = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-      ? settings.chatIntakeHealth : {};
     if (!inboxSnapshot.exists) {
       tx.create(inboxRef, {
         id: safeId, messageId: String(messageId), event, status: 'pending',
         attempts: 0, receivedAt,
       });
     }
-    tx.set(roomSettingsRef, {
-      chatIntakeHealth: {
-        ...health, lastWebhookAt: receivedAt,
-        lastWebhookStatus: inboxSnapshot.exists ? 'duplicate' : 'persisted',
-      },
-    }, { merge: true });
   });
-  return { id: safeId };
+  return { id: safeId, receivedAt };
 }
 
 export function getInboxRetryState(attemptNumber, now = Date.now()) {
@@ -358,24 +349,9 @@ export async function processPendingEventSubChatMessages(limit = 5) {
           result: String(outcome?.reason || (outcome?.queued ? 'queued' : outcome?.ignored ? 'ignored' : 'handled')).slice(0, 80),
           lastError: null,
         });
-        // Update processing health without making a health-write error reprocess a completed command.
-        const settingsRef = db.doc(settingsPath(appId));
-        await db.runTransaction(async (tx) => {
-          const settingsSnapshot = await tx.get(settingsRef);
-          const settings = settingsSnapshot.exists ? settingsSnapshot.data() : {};
-          const health = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-            ? settings.chatIntakeHealth : {};
-          tx.set(settingsRef, {
-            chatIntakeHealth: {
-              ...health,
-              lastProcessedAt: processedAt,
-              lastProcessingStatus: 'ok',
-              lastProcessingError: null,
-            },
-          }, { merge: true });
-        }).catch((healthError) => {
-          console.warn('Could not update EventSub processing health:', String(healthError?.message || healthError).slice(0, 240));
-        });
+        // Processing state lives on the durable inbox document. Avoid an extra hot-room-settings
+        // write for every chat message; successful queue mutations update that document in their
+        // own transaction, and the status endpoint reads the latest inbox record for intake health.
         completed += 1;
       } catch (error) {
         const failure = String(error?.message || error).slice(0, 400);
@@ -389,19 +365,6 @@ export async function processPendingEventSubChatMessages(limit = 5) {
           lastFailedAt: Date.now(),
           failedAt: retryState.failedAt,
         }).catch(() => {});
-        const settingsRef = db.doc(settingsPath(appId));
-        const settingsSnapshot = await settingsRef.get().catch(() => null);
-        const settings = settingsSnapshot?.exists ? settingsSnapshot.data() : {};
-        const health = settings?.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-          ? settings.chatIntakeHealth : {};
-        await settingsRef.set({
-          chatIntakeHealth: {
-            ...health,
-            lastProcessingError: failure,
-            lastProcessingErrorAt: Date.now(),
-            lastProcessingStatus: retryState.status === 'failed' ? 'failed' : 'retrying',
-          },
-        }, { merge: true }).catch(() => {});
         console.error('EventSub inbox processing failed; retry status:', { status: nextStatus, attempts: attemptNumber, failure });
       }
     } finally {
@@ -596,7 +559,6 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
   const settings = settingsSnapshot.exists && settingsSnapshot.data()?.streamSettings &&
     typeof settingsSnapshot.data().streamSettings === 'object' ? settingsSnapshot.data().streamSettings : {};
   if (settings.queueOpen === false) {
-    await sendEventSubChatReply(event, '@' + requester + ' Requests are closed.');
     return { ignored: true, reason: 'queue_closed' };
   }
 
@@ -613,7 +575,6 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
     }
     const searchResult = await searchResponse.json().catch(() => ({}));
     if (!searchResponse.ok || !Array.isArray(searchResult.results) || !searchResult.results.length) {
-      await sendEventSubChatReply(event, '@' + requester + ' No YouTube match. Try a shorter title or direct URL.');
       return { ignored: true, reason: 'youtube_search_unavailable' };
     }
     normalizedUrl = String(searchResult.results[0].url || '');
@@ -623,7 +584,7 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
 
   let parsed = parseMediaUrl(normalizedUrl);
   if (!normalizedUrl.startsWith('https://') || !parsed.platform) throw new Error('Request URL is invalid');
-  const tiktok = await resolveTiktokIfNeeded(normalizedUrl, parsed, origin, event, requester);
+  const tiktok = await resolveTiktokIfNeeded(normalizedUrl, parsed, origin);
   if (!tiktok) return { ignored: true, reason: 'invalid_tiktok' };
   normalizedUrl = tiktok.url;
   parsed = tiktok.parsed;
@@ -637,7 +598,6 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
         ? settings.allowTwitch !== false
         : true;
   if (!allowedBySettings) {
-    await sendEventSubChatReply(event, '@' + requester + ' Requests for this platform are disabled by the streamer.');
     return { ignored: true, reason: 'platform_disabled' };
   }
 
@@ -724,16 +684,9 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
   });
 
   if (outcome.result === 'queue_closed') {
-    await sendEventSubChatReply(event, '@' + requester + ' Requests are closed.');
     return { ignored: true, reason: 'queue_closed' };
   }
   if (outcome.result === 'duplicate') {
-    if (outcome.remainingMs > 0) {
-      const hours = Math.max(1, Math.ceil(outcome.remainingMs / 3600000));
-      await sendEventSubChatReply(event, '@' + requester + ' That video is in History; try again in about ' + hours + 'h (16-hour cooldown).');
-    } else {
-      await sendEventSubChatReply(event, '@' + requester + ' That video is already queued or playing.');
-    }
     return { ignored: true, reason: 'duplicate' };
   }
   return { queued: outcome.result === 'queued', id: outcome.id, title: outcome.title, reason: outcome.result };
