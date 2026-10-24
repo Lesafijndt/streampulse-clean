@@ -582,6 +582,7 @@ function YediHubAppContent() {
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const playerStageRef = useRef(null);
   const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
+  const [youtubeHasRenderedFrameId, setYoutubeHasRenderedFrameId] = useState('');
   const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
   const youtubeVolumeRestoreRef = useRef({ videoId: '', volume: 100, until: 0 });
   const youtubeMuteRestoreRef = useRef({ videoId: '', muted: null, until: 0 });
@@ -1119,6 +1120,13 @@ function YediHubAppContent() {
               pendingQueueAddAttemptAtRef.current.delete(id);
             });
             persistPendingQueueAdds();
+            // Old locally cached write errors are historical if the backend has
+            // now confirmed every pending request. Don't keep showing a stale
+            // firestore_health_check_failed after a successful sync.
+            const lastDiagnostic = readStoredValue(localQueueWriteHealthKey, null);
+            if (!pendingQueueAddsRef.current.size && ['error', 'pending'].includes(lastDiagnostic?.status)) {
+              recordLocalQueueWriteHealth();
+            }
           }
           const pendingRoomAdds = [...pendingQueueAddsRef.current.values()].filter(
             (video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom)
@@ -1837,10 +1845,89 @@ function YediHubAppContent() {
         setCloudSynced(true);
         setSyncStatusText('Cloud Synced');
       } catch (error) {
+        // The backend can fail independently of a healthy authenticated Firestore
+        // listener. Restore the previous moderator-browser transaction as a
+        // controlled fallback, but only for the two approved Twitch staff sessions.
+        if (db && firebaseUser && ALLOWED_TWITCH_USERS.has(normalizeTwitchLogin(twitchAuth.username))) {
+          try {
+            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
+            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
+            const committedVersion = await runTransaction(db, async (transaction) => {
+              const [settingsSnapshot, itemSnapshot] = await Promise.all([
+                transaction.get(settingsRef),
+                transaction.get(itemRef),
+              ]);
+              const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
+              const existing = itemSnapshot.exists() ? itemSnapshot.data() || {} : null;
+              if (settings.streamSettings?.queueOpen === false) {
+                const failure = new Error('The request queue is closed.');
+                failure.publicCode = 'queue_closed';
+                throw failure;
+              }
+              if (existing && !isMediaHistoryCooldownExpired(existing, Date.now())) {
+                // An earlier server attempt may actually have succeeded before a
+                // network timeout. The stable media ID makes this a safe confirmation.
+                return Number(settings.queueVersion) || 0;
+              }
+              const at = Date.now();
+              const version = (Number(settings.queueVersion) || 0) + 1;
+              const lastHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
+                ? settings.chatIntakeHealth : {};
+              // Firestore Web SDK rejects undefined values (for example when
+              // duration metadata is not available yet).
+              const sanitizedItem = JSON.parse(JSON.stringify({ ...localItem, createdAt: at }));
+              transaction.set(itemRef, sanitizedItem);
+              transaction.set(settingsRef, {
+                queueVersion: version,
+                queueUpdatedAt: at,
+                chatIntakeHealth: {
+                  ...lastHealth,
+                  lastWriteAt: at,
+                  lastWriteStatus: 'ok',
+                  lastWriteSource: 'moderator-browser-backup',
+                  lastWrittenMediaId: itemId,
+                  lastProcessingError: null,
+                },
+              }, { merge: true });
+              return version;
+            });
+            queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
+            pendingQueueAddsRef.current.delete(itemId);
+            pendingQueueAddAttemptAtRef.current.delete(itemId);
+            persistPendingQueueAdds();
+            recordLocalQueueWriteHealth();
+            setCloudSynced(true);
+            setSyncStatusText('Cloud Synced · moderator backup');
+            console.info('Backend queue request failed, but Firestore moderator backup confirmed the request.', {
+              backendCode: String(error.publicCode || 'unknown'),
+            });
+            return;
+          } catch (backupError) {
+            // Preserve BOTH errors in the console; the diagnostic shows the
+            // actual Firestore failure if the browser fallback also fails.
+            console.warn('Moderator Firestore backup could not confirm queue request:', {
+              backendCode: String(error.publicCode || 'unknown'),
+              fallbackCode: String(backupError?.code || 'unknown'),
+              fallbackMessage: String(backupError?.message || 'unknown').slice(0, 220),
+            });
+            if (backupError?.publicCode === 'queue_closed') {
+              pendingQueueAddsRef.current.delete(itemId);
+              pendingQueueAddAttemptAtRef.current.delete(itemId);
+              persistPendingQueueAdds();
+              videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
+              setVideos((previous) => previous.filter((video) => String(video.id) !== itemId));
+              recordLocalQueueWriteHealth();
+              return;
+            }
+            // Use a genuine Firebase failure code when the browser failed too;
+            // server errors remain available in developer console.
+            error = backupError;
+          }
+        }
         recordLocalQueueWriteHealth(error);
-        console.warn('Server queue add failed; the request is retained locally until retry.', error);
+        console.warn('Both queue request routes failed; keeping it in the pending journal.', error);
         setCloudSynced(false);
-        setSyncStatusText('Cloud write failed — server retry pending');
+        setSyncStatusText('Cloud queue write failed — retry pending');
       }
     }
   };
@@ -2276,6 +2363,7 @@ function YediHubAppContent() {
   // Replace a black YouTube viewport with an explicit start control if autoplay is blocked.
   useEffect(() => {
     setYoutubeNeedsGesture('');
+    setYoutubeHasRenderedFrameId('');
     youtubeStartupMuteRef.current = { videoId: String(currentVideo?.id || ''), pending: false };
     if (!currentVideo || currentVideo.platform !== 'youtube') return undefined;
     const videoId = String(currentVideo.id);
@@ -2284,7 +2372,7 @@ function YediHubAppContent() {
       const intent = getPlaybackIntentForVideo(videoId, 'youtube');
       const state = Number(youtubePlaybackInfoRef.current.playerState);
       if (!intent.paused && state !== 1 && state !== 3) setYoutubeNeedsGesture(videoId);
-    }, 4200);
+    }, 2500);
     return () => window.clearTimeout(timer);
   }, [currentVideo?.id, currentVideo?.platform]);
 
@@ -3588,6 +3676,7 @@ function YediHubAppContent() {
       } catch { /* Player may still be initializing; the next retry will announce again. */ }
       postCommand('addEventListener', ['onStateChange']);
       postCommand('addEventListener', ['onError']);
+      postCommand('addEventListener', ['onAutoplayBlocked']);
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
@@ -3620,6 +3709,10 @@ function YediHubAppContent() {
         try { payload = JSON.parse(payload); } catch { return; }
       }
       if (!payload || typeof payload !== 'object') return;
+      if (payload.event === 'onAutoplayBlocked' && currentVideoRef.current?.id === video.id &&
+          !getPlaybackIntentForVideo(video.id, 'youtube').paused) {
+        setYoutubeNeedsGesture(String(video.id));
+      }
 
       const info = payload.event === 'infoDelivery' && payload.info && typeof payload.info === 'object'
         ? payload.info
@@ -3666,7 +3759,10 @@ function YediHubAppContent() {
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
-        if (stateFromEvent === 1) setYoutubeNeedsGesture('');
+        if (stateFromEvent === 1) {
+          setYoutubeNeedsGesture('');
+          setYoutubeHasRenderedFrameId(String(video.id));
+        }
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId);
         const restoreGuard = playbackRestoreGuardRef.current;
@@ -4842,15 +4938,25 @@ function YediHubAppContent() {
                       <div className="gachi-vertical-letterbox absolute inset-0" />
                     </div>
                   )}
-                  {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) && (
-                    <button
-                      type="button"
-                      onClick={startYouTubeFromPrompt}
-                      className="absolute z-30 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
-                      aria-label="Start YouTube playback"
-                    >
-                      <Play className="h-4 w-4 fill-current" /> Click to start video
-                    </button>
+                  {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) &&
+                    youtubeHasRenderedFrameId !== String(currentVideo.id) && (
+                    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 overflow-hidden bg-[#06040b]">
+                      {currentVideo.thumbnail && (
+                        <img src={currentVideo.thumbnail} alt="" aria-hidden="true"
+                          className="absolute inset-0 h-full w-full object-contain opacity-45"
+                        />
+                      )}
+                      <div className="absolute inset-0 bg-black/35 pointer-events-none" />
+                      <button
+                        type="button"
+                        onClick={startYouTubeFromPrompt}
+                        className="relative z-10 flex items-center gap-3 rounded-xl border border-purple-300/50 bg-[#180d25]/95 px-6 py-4 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                        aria-label="Start YouTube playback"
+                      >
+                        <Play className="h-5 w-5 fill-current" /> Click to start video
+                      </button>
+                      <span className="relative z-10 text-xs text-slate-200">Your browser blocked autoplay with sound. Click once to enable playback.</span>
+                    </div>
                   )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div className={isVerticalMedia(currentVideo)
@@ -4873,6 +4979,7 @@ function YediHubAppContent() {
                         const send = (func, args = []) => frame.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
                         send('addEventListener', ['onStateChange']);
                         send('addEventListener', ['onError']);
+                        send('addEventListener', ['onAutoplayBlocked']);
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
