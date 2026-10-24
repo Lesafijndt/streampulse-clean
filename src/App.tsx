@@ -398,10 +398,9 @@ function YediHubAppContent() {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
     return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
   });
-  const [activityEvents, setActivityEvents] = useState(() => {
-    const stored = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
-    return Array.isArray(stored) ? mergeActivityEvents(stored) : [];
-  });
+  // Analytics are private to the moderator. Never load a room-wide analytics
+  // cache from shared localStorage, including when users switch Twitch accounts.
+  const [activityEvents, setActivityEvents] = useState([]);
   const activityEventsRef = useRef(activityEvents);
   activityEventsRef.current = activityEvents;
   const activityCloudIdsRef = useRef(new Set());
@@ -1350,8 +1349,14 @@ function YediHubAppContent() {
     const merged = mergeActivityEvents(activityEventsRef.current, [event]);
     activityEventsRef.current = merged;
     setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-    if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
+    if (moderatorLogin) {
+      if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
+    } else if (twitchAuth.authenticated && db && firebaseUser) {
+      // The streamer may append validated playback events through Firebase
+      // create-only rules without reading any IT analytics or backend endpoint.
+      void setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_events', String(event.id)), event)
+        .catch(error => console.warn('Playback event cloud append failed:', error?.code || error));
+    }
     return event;
   };
 
@@ -1370,14 +1375,9 @@ function YediHubAppContent() {
 
   const handleRefreshStats = () => {
     if (!moderatorLogin) return;
-    const storedEvents = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
-    const merged = mergeActivityEvents(
-      activityEventsRef.current,
-      Array.isArray(storedEvents) ? storedEvents : []
-    );
+    const merged = mergeActivityEvents(activityEventsRef.current);
     activityEventsRef.current = merged;
     setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
     setStatsNow(Date.now());
 
     // Authenticated viewers can pull the latest lifetime activity from the server log too.
@@ -1441,7 +1441,7 @@ function YediHubAppContent() {
   };
 
   useEffect(() => {
-    if (!twitchAuth.authenticated) {
+    if (!moderatorLogin) {
       activityCloudReadyRef.current = false;
       activityCloudIdsRef.current = new Set();
       setActivityCloudReady(false);
@@ -1472,8 +1472,7 @@ function YediHubAppContent() {
         const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
         activityEventsRef.current = merged;
         setActivityEvents(merged);
-        writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-        merged.forEach((event) => {
+            merged.forEach((event) => {
           if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
         });
       } catch (error) {
@@ -1493,7 +1492,7 @@ function YediHubAppContent() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [twitchAuth.authenticated, appId, channelRoom, activityReconnectTick]);
+  }, [twitchAuth.authenticated, moderatorLogin, appId, channelRoom, activityReconnectTick]);
 
   // Import records for existing saved items which pre-date the event stream.
   // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
@@ -1526,7 +1525,6 @@ function YediHubAppContent() {
     const merged = mergeActivityEvents(activityEventsRef.current, legacyEvents);
     activityEventsRef.current = merged;
     setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
     if (activityCloudReadyRef.current) legacyEvents.forEach((event) => void syncActivityEventToCloud(event));
   }, [db, firebaseUser, cloudSynced, activityCloudReady, videos, activityEvents, channelRoom]);
 
