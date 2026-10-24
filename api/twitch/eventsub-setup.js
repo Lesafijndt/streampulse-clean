@@ -7,6 +7,7 @@ import { shouldScheduleEventSubDrain, EVENTSUB_STATUS_DRAIN_INTERVAL_MS } from '
 
 const STREAMER_LOGIN = '2o3a';
 const BOT_LOGIN = 'gachibot69';
+const MODERATOR_LOGIN = 'paim_beach_pete';
 const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
@@ -193,7 +194,7 @@ function statusResult(subscription) {
   }
   if (status) {
     const code = 'subscription_' + status.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    return { active: false, status: 'error', code, message: `Twitch reports the cloud chat subscription is ${status}. Reload the streamer dashboard to retry setup after checking its authorizations.` };
+    return { active: false, status: 'error', code, message: `Twitch reports the cloud chat subscription is ${status}. Reload the moderator dashboard to retry setup after checking bot authorization.` };
   }
   return { active: false, status: 'inactive', code: 'not_configured', message: 'Cloud chat listener is not configured yet.' };
 }
@@ -223,6 +224,10 @@ export default async function handler(req, res) {
   const bot = await loadUserSession(req, res, 'bot');
 
   if (req.method === 'POST') {
+    // The streamer only uses the player. The moderator owns EventSub setup.
+    if (staff.login !== MODERATOR_LOGIN) {
+      return res.status(403).json({ active: false, status: 'error', code: 'moderator_required', message: 'Only paim_beach_pete can configure cloud Twitch chat intake.' });
+    }
     let origin;
     try {
       origin = getOrigin(req);
@@ -234,7 +239,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ active: false, status: 'error', code: 'origin_not_configured', message: 'Set TWITCH_APP_URL in Vercel to the production HTTPS site.' });
     }
 
-    // Either approved dashboard account may run setup. Twitch validates whether
+    // Only the approved moderator may run setup. Twitch validates whether
     // @gachibot69 is a channel moderator or the broadcaster granted channel:bot.
     // If an active subscription already exists, don't demand new scopes or create a duplicate.
     try {

@@ -893,7 +893,7 @@ function YediHubAppContent() {
 
     let cancelled = false;
     let inFlight = false;
-    const canConfigureCloudChat = ALLOWED_TWITCH_USERS.has(normalizeTwitchLogin(twitchAuth.username));
+    const canConfigureCloudChat = isModerator;
 
     const refreshCloudChatListener = async (setup = false) => {
       if (inFlight || cancelled) return;
@@ -4749,20 +4749,20 @@ function YediHubAppContent() {
                     <span className="shrink-0 rounded-md border border-purple-400/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-black uppercase text-purple-200">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</span>
                   </div>
                 </div>
-                {isStaff && (
+                {isModerator && (
                   <button type="button" onClick={() => { setTopMenuOpen(false); setShowSettingsModal(true); }} className="mt-2 flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
                     <Settings className="h-4 w-4 text-cyan-300" />
-                    <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Queue access and playback preferences</span></span>
+                    <span className="flex-1">Moderator controls <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Request queue, automatic playback, and backups</span></span>
                   </button>
                 )}
                 <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
                   <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
                 </button>
-                <button type="button" onClick={() => { setTopMenuOpen(false); setShowLayoutCustomizer(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-rose-500/25 hover:bg-rose-500/10">
+                {isModerator && <button type="button" onClick={() => { setTopMenuOpen(false); setShowLayoutCustomizer(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-rose-500/25 hover:bg-rose-500/10">
                   <Layers className="h-4 w-4 text-rose-300" />
                   <span className="flex-1">Customize layout <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Reorder or hide panels for this browser</span></span>
-                </button>
+                </button>}
                 {isModerator && (
                   <>
                     <div className="my-2 border-t border-white/10" />
@@ -4824,10 +4824,10 @@ function YediHubAppContent() {
               <div className={cloudChatListener.active ? 'text-emerald-300' : cloudChatListener.status === 'error' || cloudChatListener.status === 'unavailable' ? 'text-rose-200' : 'text-amber-200'}>
                 {cloudChatListener.message}
               </div>
-              {!cloudChatListener.active && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && ['staff_scope_missing', 'staff_reauth_required'].includes(cloudChatListener.code) ? (
-                <a href="/api/twitch/login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Authorize 2o3a for cloud chat</a>
+              {!cloudChatListener.active && isModerator && ['staff_scope_missing', 'staff_reauth_required'].includes(cloudChatListener.code) ? (
+                <a href="/api/twitch/login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Reconnect moderator for cloud chat</a>
               ) : null}
-              {!cloudChatListener.active && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL && ['bot_scope_missing', 'bot_reauth_required'].includes(cloudChatListener.code) ? (
+              {!cloudChatListener.active && isModerator && ['bot_scope_missing', 'bot_reauth_required'].includes(cloudChatListener.code) ? (
                 <a href="/api/twitch/bot-login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Reconnect @gachibot69</a>
               ) : null}
             </div>
@@ -4849,7 +4849,7 @@ function YediHubAppContent() {
               )}
               {isModerator && chatBridgeHealth.lastMessageAt > 0 && !chatBridgeHealth.lastRequestAt && (
                 <div className="mt-1 text-[9px] text-amber-200">
-                  If normal viewers' links never arrive, check Twitch Creator Dashboard → Moderation → Block Hyperlinks. Held links are not delivered as normal chat requests.
+                  Moderator action: open Twitch Mod View → Channel Actions → Manage Moderation Settings → Permitted Terms and add the supported video domains. Blocked viewer links never reach the request queue until Twitch permits them.
                 </div>
               )}
               {!chatBotSession.connected && <a href="/api/twitch/bot-login" className="mt-1 inline-block text-[10px] font-bold text-cyan-200 underline underline-offset-2">Connect @gachibot69 to receive chat requests</a>}
@@ -5321,14 +5321,14 @@ function YediHubAppContent() {
                     )}
 
                     {/* Watch Later Quick Stash */}
-                    <button
+                    {isModerator && <button
                       onClick={() => handleMoveToWatchLater(currentVideo)}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-semibold transition-colors"
                       title="Stash to Watch Later list without interrupting stream"
                     >
                       <Bookmark className="w-3.5 h-3.5" />
                       <span>Watch Later</span>
-                    </button>
+                    </button>}
 
                     <TransportNavigation isStaff={isStaff} onPrevious={handlePreviousTrack} onNext={handleSkipNext} />
                   </div>
@@ -5388,7 +5388,7 @@ function YediHubAppContent() {
                     activeTab={activeTab}
                     currentVideo={currentVideo}
                     queueRankById={queueRankById}
-                    isStaff={isStaff}
+                    isStaff={isModerator}
                     draggedQueueId={draggedQueueId}
                     setDraggedQueueId={setDraggedQueueId}
                     dragOverQueueId={dragOverQueueId}
@@ -5416,7 +5416,7 @@ function YediHubAppContent() {
         {/* Twitch IRC runs invisibly as a command bridge; incoming chat is not rendered. */}
       </div>
 
-      {showLayoutCustomizer && (
+      {isModerator && showLayoutCustomizer && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowLayoutCustomizer(false); }}>
           <div role="dialog" aria-modal="true" aria-labelledby="workspace-layout-title" className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-rose-500/35 bg-[#0d0a12] p-4 shadow-2xl shadow-black/70 sm:p-6">
             <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
@@ -5702,13 +5702,13 @@ function YediHubAppContent() {
       {/* ==========================================
           MODAL 3: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
-      {showSettingsModal && (
+      {isModerator && showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
           <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Streamer Safety & Queue Rules</h3>
+                <h3 className="text-base font-bold text-white">Moderator Queue Rules & Recovery</h3>
               </div>
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -5794,7 +5794,7 @@ function YediHubAppContent() {
               <button
                 onClick={() => {
                   setShowSettingsModal(false);
-                  addToast('Streamer Queue Rules updated!', 'success');
+                  addToast('Moderator queue settings updated!', 'success');
                 }}
                 className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
               >
