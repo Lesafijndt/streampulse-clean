@@ -55,6 +55,9 @@ export default async function handleTwitchWebhook(req, res, dependencies = {}) {
     console.warn('twitch_webhook_signature_rejected', {
       messageType: String(req.headers['twitch-eventsub-message-type'] || 'unknown').slice(0, 64),
       hasMessageId: Boolean(id), payloadBytes: raw.length,
+      timestampAgeSeconds: Number.isFinite(Date.parse(timestamp)) ? Math.round((Date.now() - Date.parse(timestamp)) / 1000) : null,
+      signatureShapeValid: /^sha256=[0-9a-f]{64}$/.test(signature),
+      messageIdShapeValid: /^[\w-]{10,180}$/.test(id),
     });
     return res.status(403).json({ code: 'invalid_signature' });
   }

@@ -68,6 +68,12 @@ try {
 } catch (error) { console.log(JSON.stringify({ check: 'twitch', ok: false, status: error.status, code: error.code })); }
 try {
   const key = decodeServiceAccount();
+  const [{ cert, getApps, initializeApp }, { getAuth }] = await Promise.all([
+    import('firebase-admin/app'), import('firebase-admin/auth'),
+  ]);
+  const app = getApps().find(x => x.name === 'token-diagnostic') || initializeApp({ credential: cert(key) }, 'token-diagnostic');
+  await getAuth(app).createCustomToken('diagnostic-token-not-delivered');
+  console.log(JSON.stringify({ check: 'firebase_custom_token_signing', ok: true }));
   const now = Math.floor(Date.now() / 1000);
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const unsigned = encode({ alg: 'RS256', typ: 'JWT' }) + '.' + encode({ iss: key.client_email,
