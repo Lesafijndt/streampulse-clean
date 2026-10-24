@@ -132,7 +132,12 @@ export async function persistChatEvent(db, { event, messageId, subscriptionId })
   const base = db.collection('artifacts').doc(namespace).collection('public').doc('data');
   const receiptRef = base.collection('twitch_eventsub_receipts').doc(eventKey);
   const pending = await makeQueueItems(event);
-  // A normal non-command chat message still counts as a verified delivery.
+  // Do not spend the Firestore free-tier quota writing a receipt for every
+  // ordinary Twitch chat message. Request-shaped messages get durable receipts,
+  // including rejected/duplicate cases needed by moderator diagnostics.
+  if (['not_a_request', 'ignored_sender', 'wrong_broadcaster'].includes(pending.reason)) {
+    return { status: pending.reason, queued: 0 };
+  }
   const result = await db.runTransaction(async tx => {
     const roomRef = base.collection('room_settings').doc('2o3a');
     const itemRefs = pending.items.map(item => base.collection('queue_videos').doc(item.id));
