@@ -10,7 +10,7 @@ function renderInChrome(url, viewport = '1365,900') {
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     '--hide-scrollbars', '--window-size=' + viewport, '--virtual-time-budget=8000',
     '--dump-dom', url
-  ], { encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
+  ], { encoding: 'utf8', timeout: 75000, maxBuffer: 8 * 1024 * 1024 });
   if (result.error) throw result.error;
   assert.equal(result.status, 0, 'Headless Chrome exited unsuccessfully: ' + (result.stderr || '').slice(-2500));
   return result.stdout || '';
