@@ -2363,3 +2363,37 @@ body { background: #03070b; }
     grid-template-areas: var(--workspace-mobile-areas, "queue" "player" "stats") !important;
   }
 }
+
+
+/* Portrait TikTok embeds must be centered and fully contained in the 16:9
+   stage. The provider iframe itself cannot use auto width: that allowed
+   intrinsic sizing to overflow and clip against the right-hand side. */
+.gachi-theme .gachi-player-stage > .gachi-portrait-shell {
+  position: relative;
+  display: block;
+  flex: 0 1 auto;
+  align-self: center;
+  height: 100%;
+  width: auto;
+  aspect-ratio: 9 / 16;
+  max-width: 100%;
+  min-width: 0;
+  margin-inline: auto;
+  overflow: hidden;
+  background: #030207;
+}
+
+.gachi-theme .gachi-player-stage .gachi-portrait-shell > .gachi-tiktok-player {
+  display: block !important;
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  aspect-ratio: auto !important;
+  flex: none !important;
+  margin: 0 !important;
+  transform: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+}

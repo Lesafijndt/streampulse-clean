@@ -433,6 +433,7 @@ function YediHubAppContent() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
+  const [viewerRequestHealth, setViewerRequestHealth] = useState(null);
   const [showLayoutCustomizer, setShowLayoutCustomizer] = useState(false);
   const [workspaceLayout, setWorkspaceLayout] = useState(() =>
     normalizeWorkspaceLayout(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, DEFAULT_WORKSPACE_LAYOUT))
@@ -2857,8 +2858,12 @@ function YediHubAppContent() {
       updateChatBridgeHealth({ lastMessageAt: Date.now() });
       const login = normalizeTwitchLogin(event.chatter_user_login);
       const text = String(event.message?.text || '').trim();
+      // Webhook state can look healthy even when it has stopped receiving new
+      // events. Always accept authenticated WebSocket chat deliveries as a backup;
+      // the stable media ID and Firestore transaction prevent active duplicates.
+      // Ordinary chatters are treated as viewers, not rejected by role.
       if (normalizeTwitchLogin(event.broadcaster_user_login) !== PRIVATE_CHANNEL ||
-          !login || KNOWN_CHAT_BOTS.has(login) || !text || cloudChatListenerReadyRef.current) return;
+          !login || KNOWN_CHAT_BOTS.has(login) || !text) return;
       if (/^!assr(?:\s|$)/i.test(text) || isSupportedMediaUrlMessage(text)) {
         updateChatBridgeHealth({ lastRequestAt: Date.now(), lastRequestResult: 'received_from_twitch' });
         const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
@@ -5075,25 +5080,26 @@ function YediHubAppContent() {
                     </div>
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
-                      <iframe
-                        key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
-                        ref={tiktokIframeRef}
-                        className="gachi-tiktok-player border-0"
-                        style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={tiktokPlayerSrc}
-                        title={currentVideo.title}
-                        allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                        loading="eager"
-                        referrerPolicy="strict-origin-when-cross-origin"
-                        onLoad={() => {
-                          if (currentVideoRef.current?.id !== currentVideo.id) return;
-                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
-                        }}
-                        onError={() => {
-                          if (currentVideoRef.current?.id !== currentVideo.id) return;
-                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
-                        }}
-                      />
+                      <div className="gachi-portrait-shell">
+                        <iframe
+                          key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                          ref={tiktokIframeRef}
+                          className="gachi-tiktok-player border-0"
+                          src={tiktokPlayerSrc}
+                          title={currentVideo.title}
+                          allow="autoplay; encrypted-media; picture-in-picture; web-share"
+                          loading="eager"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          onLoad={() => {
+                            if (currentVideoRef.current?.id !== currentVideo.id) return;
+                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
+                          }}
+                          onError={() => {
+                            if (currentVideoRef.current?.id !== currentVideo.id) return;
+                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
+                          }}
+                        />
+                      </div>
                       {tiktokNeedsGestureId === String(currentVideo.id) && (
                         <button
                           type="button"
@@ -5475,6 +5481,7 @@ function YediHubAppContent() {
                 e.preventDefault();
                 if (!reqUrl.trim() || requestSubmitting) return;
                 setRequestSubmitting(true);
+                setViewerRequestHealth({ status: 'submitting', at: Date.now(), code: '', message: 'Submitting to the shared queue…' });
                 try {
                   const response = await fetch('/api/public-request', {
                     method: 'POST',
@@ -5492,9 +5499,13 @@ function YediHubAppContent() {
                   });
                   const result = await response.json().catch(() => ({}));
                   if (!response.ok || !result.ok) {
-                    addToast(result.message || result.error || 'The shared queue could not save this request. Check Firebase availability and try again.', 'warning');
+                    const code = String(result.code || 'http_' + response.status);
+                    const message = String(result.message || result.error || 'The server did not confirm this viewer request.');
+                    setViewerRequestHealth({ status: 'error', at: Date.now(), code, message });
+                    addToast('Request failed (' + code + '): ' + message, 'warning');
                     return;
                   }
+                  setViewerRequestHealth({ status: 'confirmed', at: Date.now(), code: 'queue_write_confirmed', message: 'Saved in the shared queue.' });
                   addToast(`Request added to the shared queue: ${result.title || 'video'}`, 'success');
                   setReqUrl('');
                   setReqStartAt('');
@@ -5503,6 +5514,7 @@ function YediHubAppContent() {
                   setShowRequestModal(false);
                 } catch (error) {
                   console.warn('Public video request failed.', error);
+                  setViewerRequestHealth({ status: 'error', at: Date.now(), code: 'network_error', message: 'Could not reach the request service.' });
                   addToast('Could not reach the request service. Please try again.', 'warning');
                 } finally {
                   setRequestSubmitting(false);
@@ -5510,6 +5522,18 @@ function YediHubAppContent() {
               }}
               className="space-y-4"
             >
+              {viewerRequestHealth && (
+                <div role="status" aria-live="polite" className={`rounded-lg border px-3 py-2 text-xs ${viewerRequestHealth.status === 'error'
+                  ? 'border-rose-500/50 bg-rose-500/10 text-rose-100'
+                  : 'border-cyan-500/35 bg-cyan-500/10 text-cyan-100'}`}>
+                  <span className="font-bold">Request {viewerRequestHealth.status}</span>
+                  {viewerRequestHealth.code ? <span> · {viewerRequestHealth.code}</span> : null}
+                  <p className="mt-1 break-words">{viewerRequestHealth.message}</p>
+                </div>
+              )}
+              {!twitchAuth.authenticated && (
+                <p className="text-[10px] text-slate-400">Guest requests are limited to three attempts per minute and are credited to web_viewer. To request with your Twitch name, post the link in 2o3a's chat.</p>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   Video or Clip URL *

@@ -5,6 +5,7 @@ import { processEventSubChatMessage } from './cloud-chat-requests.js';
 
 const requestWindowMs = 60_000;
 const maxRequestsPerWindow = 120;
+const maxGuestRequestsPerWindow = 3;
 const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const requestAttempts = new Map();
@@ -108,7 +109,7 @@ function isSameOriginRequest(req) {
   }
 }
 
-function checkRateLimit(key, now = Date.now()) {
+function checkRateLimit(key, now = Date.now(), maxAttempts = maxRequestsPerWindow) {
   const current = requestAttempts.get(key);
   if (!current || now - current.startedAt >= requestWindowMs) {
     requestAttempts.set(key, { startedAt: now, count: 1 });
@@ -119,7 +120,7 @@ function checkRateLimit(key, now = Date.now()) {
     }
     return true;
   }
-  if (current.count >= maxRequestsPerWindow) return false;
+  if (current.count >= maxAttempts) return false;
   current.count += 1;
   return true;
 }
@@ -147,7 +148,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const requester = getRequester(body.requestedBy);
+  const suppliedRequester = getRequester(body.requestedBy);
 
   const title = String(body.title || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 180);
   const note = String(body.note || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 300);
@@ -170,22 +171,33 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Could not validate queue writer session:', String(error?.message || error).slice(0, 240));
   }
-  if (!staff) {
-    return sendJson(res, 401, {
-      ok: false,
-      code: 'staff_session_required',
-      message: 'The moderator or streamer session expired. Sign in again before adding requests.',
+  // The dashboard is staff-only, but its request form is visible to viewers.
+  // A visitor can add a video only through this narrow server-side endpoint:
+  // never accept their claimed identity, elevated source or any Firebase credentials.
+  // Unlike authenticated Twitch chat, a website guest is not verified by Twitch.
+  if (!staff && (!req.headers.origin || !isSameOriginRequest(req))) {
+    return sendJson(res, 403, {
+      ok: false, code: 'guest_origin_required',
+      message: 'Open the official dashboard URL to submit a viewer request.',
     });
   }
-  if (!checkRateLimit('staff:' + staff.login)) {
+  const guest = !staff;
+  const requester = staff ? suppliedRequester : 'web_viewer';
+  const rateKey = guest ? 'guest:' + getClientKey(req) : 'staff:' + staff.login;
+  if (!checkRateLimit(rateKey, Date.now(), guest ? maxGuestRequestsPerWindow : maxRequestsPerWindow)) {
+    res.setHeader('Retry-After', '60');
     return sendJson(res, 429, {
       ok: false,
       code: 'rate_limited',
-      message: 'The request bridge is receiving too many additions at once. Wait a moment and try again.',
+      message: guest
+        ? 'Viewer requests are limited to three attempts per minute. Try again shortly.'
+        : 'The request bridge is receiving too many additions at once. Wait a moment and try again.',
     });
   }
 
-  const source = String(body.source || '') === 'twitch-chat-bridge' ? 'twitch-chat-bridge' : 'dashboard';
+  // Only the already authenticated moderator can relay a Twitch request.
+  // Website submissions never acquire a bot/moderator identity or trigger chat replies.
+  const source = staff && String(body.source || '') === 'twitch-chat-bridge' ? 'twitch-chat-bridge' : 'website';
 
   try {
     const result = await processEventSubChatMessage({
@@ -205,12 +217,13 @@ export default async function handler(req, res) {
         id: result.id,
         title: result.title || title || 'Video request',
         requestedBy: requester,
+        source,
       });
     }
 
     const reasons = {
       queue_closed: 'Requests are currently closed by the streamer.',
-      duplicate: 'That video is already queued or playing, or is still in its history cooldown.',
+      duplicate: 'That video is already queued or playing.',
       platform_disabled: 'The streamer has disabled requests from this platform.',
       invalid_tiktok: 'Could not resolve that TikTok link. Try the full video URL.',
       youtube_search_unavailable: 'No YouTube match was found. Try a direct video URL.',

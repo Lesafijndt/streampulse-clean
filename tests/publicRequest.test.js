@@ -69,15 +69,15 @@ test('the dashboard exposes a request button, fullscreen, muted YouTube autoplay
 });
 
 
-test('valid queue additions require an approved dashboard session before Firebase is touched', async () => {
+test('guest viewer submissions require a browser same-origin request before accessing Firebase', async () => {
   const res = makeResponse();
   await handler({
     method: 'POST',
-    headers: { origin: 'https://streampulse-clean.vercel.app', host: 'streampulse-clean.vercel.app', 'x-forwarded-proto': 'https' },
-    body: { url: 'https://youtu.be/dQw4w9WgXcQ', requestedBy: 'viewer' },
+    headers: { host: 'streampulse-clean.vercel.app', 'x-forwarded-proto': 'https' },
+    body: { url: 'https://youtu.be/dQw4w9WgXcQ', requestedBy: 'impersonated_staff' },
   }, res);
-  assert.equal(res.code, 401);
-  assert.equal(res.body.code, 'staff_session_required');
+  assert.equal(res.code, 403);
+  assert.equal(res.body.code, 'guest_origin_required');
 });
 
 test('queue additions use the server path and cloud chat setup is moderator-operable', async () => {
@@ -88,4 +88,28 @@ test('queue additions use the server path and cloud chat setup is moderator-oper
   assert.match(app, /refreshCloudChatListener\(canConfigureCloudChat\)/);
   assert.doesNotMatch(setup, /streamer_required/);
   assert.match(setup, /moderator status for the chatting bot/);
+});
+
+
+test('the restricted viewer request path uses a rate limit and cannot impersonate Twitch roles', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const handler = await readFile(new URL('../api/_lib/public-request-handler.js', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(handler, /maxGuestRequestsPerWindow = 3/);
+  assert.match(handler, /requester = staff \? suppliedRequester : 'web_viewer'/);
+  assert.match(handler, /source = staff && String\(body\.source/);
+  assert.match(handler, /req\.headers\.origin/);
+  assert.match(app, /viewerRequestHealth/);
+  assert.match(app, /Request failed \('/);
+});
+
+test('portrait video is centered in a dedicated 9:16 shell without iframe auto width', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../src/index.css', import.meta.url), 'utf8');
+  assert.match(app, /className="gachi-portrait-shell"/);
+  assert.doesNotMatch(app, /style=\{\{ width: 'auto', height: '100%'/);
+  assert.match(css, /\.gachi-portrait-shell/);
+  assert.match(css, /aspect-ratio: 9 \/ 16/);
+  assert.match(css, /\.gachi-portrait-shell > \.gachi-tiktok-player/);
 });

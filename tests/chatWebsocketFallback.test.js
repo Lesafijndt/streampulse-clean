@@ -52,3 +52,11 @@ test('chat bridge exposes failed subscription stages and last received request',
   assert.match(app, /lastRequestResult: 'confirmed_in_shared_queue'/);
   assert.match(app, /lastRequestResult: 'confirmed_by_moderator_backup'/);
 });
+
+
+test('normal Twitch chatters can request media even when the cloud webhook health flag is stale', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /event\.chatter_is_moderator \? 'moderator' : 'viewer'/);
+  assert.match(app, /handleIncomingChatCommandRef\.current\?\.\(login, role, text\)/);
+  assert.doesNotMatch(app, /!text \|\| cloudChatListenerReadyRef\.current/);
+});
