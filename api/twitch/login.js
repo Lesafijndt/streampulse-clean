@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { obtainSession } from '../../server/chat-subscribe.js';
 
 function isHttpsRequest(req) {
   const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
@@ -11,7 +12,12 @@ function setStateCookie(res, req, value, maxAge = 600) {
   // OAuth state is created immediately before leaving for Twitch. None+Secure avoids
   // Chromium dropping this short-lived cookie in cross-site 302 redirect chains.
   const sameSite = secure ? 'None; Secure' : 'Lax';
-  res.setHeader('Set-Cookie', `yedi_twitch_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}`);
+  const cookie = `yedi_twitch_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}`;
+  // Preserve access/refresh cookies if obtainSession renewed an expired token
+  // earlier in this request. Never overwrite Set-Cookie when writing OAuth state.
+  const previous = typeof res.getHeader === 'function' ? res.getHeader('Set-Cookie') : undefined;
+  res.setHeader('Set-Cookie', previous
+    ? [...(Array.isArray(previous) ? previous : [previous]), cookie] : cookie);
 }
 
 export default async function handler(req, res) {
@@ -25,22 +31,15 @@ export default async function handler(req, res) {
   // verified moderator. The streamer signs in with ordinary profile scopes.
   const chatSetup = String(req.query?.chat_setup || '') === '1';
   if (chatSetup) {
-    const cookies = Object.fromEntries(String(req.headers.cookie || '').split(';').map(item => {
-      const index = item.indexOf('=');
-      return index > 0 ? [item.slice(0, index).trim(), item.slice(index + 1).trim()] : ['', ''];
-    }).filter(item => item[0]));
-    const token = cookies.yedi_twitch_access || '';
-    if (!token) return res.status(403).send('Sign in as paim_beach_pete before authorizing Twitch chat intake.');
-    try {
-      const verify = await fetch('https://id.twitch.tv/oauth2/validate', {
-        headers: { Authorization: 'OAuth ' + decodeURIComponent(token) },
-        signal: AbortSignal.timeout(6000), cache: 'no-store',
-      });
-      const data = verify.ok ? await verify.json() : null;
-      if (data?.client_id !== clientId || String(data?.login || '').toLowerCase() !== 'paim_beach_pete') {
-        return res.status(403).send('Twitch chat intake can only be authorized by paim_beach_pete.');
-      }
-    } catch { return res.status(503).send('Could not verify moderator authorization.'); }
+    // Access tokens often expire while the moderator stays signed in via
+    // their long-lived refresh cookie. Refresh and verify the real account
+    // instead of throwing an unhelpful 403 on an expired access cookie.
+    let moderator;
+    try { moderator = await obtainSession(req, res, 'staff'); }
+    catch { return res.status(503).send('Twitch account verification unavailable. Try again shortly.'); }
+    if (!moderator || moderator.login !== 'paim_beach_pete') {
+      return res.status(403).send('Sign in as paim_beach_pete before authorizing Twitch chat intake.');
+    }
   }
   const state = randomBytes(32).toString('hex');
   setStateCookie(res, req, state, 600);
