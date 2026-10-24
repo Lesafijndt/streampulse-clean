@@ -17,6 +17,36 @@ service cloud.firestore {
       allow read, create, update: if isApprovedYediUser() && channelRoom == '2o3a';
       allow delete: if false;
     }
+    // Durable stats use a separate append-only event stream. The client cannot edit or erase history.
+    match /artifacts/{appId}/public/data/queue_events/{eventId} {
+      allow read: if isApprovedYediUser();
+      allow create: if isApprovedYediUser()
+        && request.resource.data.keys().hasOnly([
+          'id', 'type', 'room', 'at', 'sessionId', 'mediaId', 'title',
+          'requester', 'actor', 'platform', 'category', 'source'
+        ])
+        && request.resource.data.keys().hasAll([
+          'id', 'type', 'room', 'at', 'sessionId', 'mediaId', 'title',
+          'requester', 'actor', 'platform', 'category', 'source'
+        ])
+        && request.resource.data.id == eventId
+        && request.resource.data.room == '2o3a'
+        && request.resource.data.type in [
+          'request_added', 'play_started', 'playback_completed',
+          'track_skipped', 'track_replayed', 'vote_cast', 'request_removed'
+        ]
+        && request.resource.data.at is int
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 180
+        && request.resource.data.requester is string
+        && request.resource.data.requester.size() <= 64
+        && request.resource.data.actor is string
+        && request.resource.data.actor.size() <= 64
+        && request.resource.data.platform is string
+        && request.resource.data.category is string
+        && request.resource.data.source is string;
+      allow update, delete: if false;
+    }
     // No other collections are accessible from web clients.
     match /{document=**} {
       allow read, write: if false;

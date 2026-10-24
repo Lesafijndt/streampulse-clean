@@ -25,7 +25,6 @@ import {
   Shield,
   Users,
   ThumbsUp,
-  Flame,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -41,7 +40,16 @@ import {
   Layers,
   HelpCircle,
   Copy,
-  FolderSync
+  FolderSync,
+  Download,
+  Upload,
+  History,
+  Activity,
+  BarChart3,
+  Timer,
+  TrendingUp,
+  ChevronDown,
+  Keyboard
 } from 'lucide-react';
 
 // Firebase imports
@@ -63,8 +71,37 @@ import {
   arrayUnion,
   writeBatch,
   deleteDoc,
+  getDocs,
   onSnapshot
 } from 'firebase/firestore';
+import {
+  buildCategoryCounts,
+  buildNextTrackTransition,
+  buildPreviousTrackTransition,
+  buildQueueSyncWrites,
+  filterVideosForView,
+  formatMediaDuration,
+  getQueueMediaCounts,
+  getDurationEstimate,
+  getThumbnailDurationLabel,
+  getDurationCacheKey,
+  applyCachedVideoDurations,
+  buildQueueStatistics,
+  formatRuntimeHoursMinutes,
+  mergeVideoDurationData,
+  createQueueBackup,
+  validateQueueBackup
+} from './queueLogic.js';
+import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
+import StatsBoard from './components/StatsBoard';
+import TransportNavigation from './components/TransportNavigation';
+import KeyboardShortcutHint from './components/KeyboardShortcutHint';
+import QueueToolbar from './components/QueueToolbar';
+import QueueVideoCard from './components/QueueVideoCard';
+import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
+import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
+import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 
 
 
@@ -144,6 +181,25 @@ function normalizeLegacyVideoVotes(video) {
   const voters = hasVoters
     ? raw.voters.map((item) => typeof item === 'string' || typeof item === 'number' ? String(item) : '').filter(Boolean)
     : [];
+  const rawCategory = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : 'General';
+  const categoryManuallySet = raw.categoryManuallySet === true;
+  const normalizedBase = {
+    ...raw,
+    url: typeof raw.url === 'string' ? raw.url : '',
+    title,
+    note: typeof raw.note === 'string' ? raw.note : '',
+    category: rawCategory,
+    categoryManuallySet,
+  };
+  const normalizedCategory = getVideoCategory(normalizedBase);
+  const mediaType = getVideoMediaType({ ...normalizedBase, category: normalizedCategory });
+  const normalizedPlatform = validPlatforms.has(raw.platform) ? raw.platform : 'external';
+  const hasTrustedDuration = ['metadata', 'player'].includes(String(raw.durationSource || ''));
+  const legacyEstimatedDuration = !hasTrustedDuration && (
+    (Number(raw.durationSec) === 45 && String(raw.duration || '') === '00:45' &&
+      ['tiktok', 'twitch', 'kick'].includes(normalizedPlatform)) ||
+    (Number(raw.durationSec) === 225 && ['03:45', '3:45'].includes(String(raw.duration || '')))
+  );
 
   return {
     ...raw,
@@ -152,12 +208,15 @@ function normalizeLegacyVideoVotes(video) {
     url: typeof raw.url === 'string' ? raw.url : '',
     platform: validPlatforms.has(raw.platform) ? raw.platform : 'external',
     videoId: raw.videoId === undefined || raw.videoId === null ? '' : String(raw.videoId),
-    category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : 'General',
-    mediaType: typeof raw.mediaType === 'string' ? raw.mediaType : '',
+    category: normalizedCategory,
+    categoryManuallySet,
+    // One resolved media type drives counters, filters, and the labels shown in the queue.
+    mediaType,
     requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
     status: validStatuses.has(raw.status) ? raw.status : 'queue',
-    duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
-    durationSec: Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
+    duration: legacyEstimatedDuration ? '' : (typeof raw.duration === 'string' ? raw.duration : ''),
+    durationSec: !legacyEstimatedDuration && Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
+    durationSource: legacyEstimatedDuration ? 'unknown' : (raw.durationSource || 'unknown'),
     addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
     watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
     note: typeof raw.note === 'string' ? raw.note : '',
@@ -168,17 +227,6 @@ function normalizeLegacyVideoVotes(video) {
     upvotes: Math.max(0, hasVoters ? (Number(raw.upvotes) || 0) : ((Number(raw.upvotes) || 0) - 1)),
     voters,
   };
-}
-
-function estimateVideoDurationSeconds(video) {
-  const storedDuration = Number(video?.durationSec);
-  if (video?.platform === 'tiktok' || video?.platform === 'twitch') {
-    return storedDuration > 0 && storedDuration <= 90 ? storedDuration : 45;
-  }
-  if (Number.isFinite(storedDuration) && storedDuration > 0) return storedDuration;
-  const match = String(video?.duration || '').match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
-  if (match) return (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
-  return 225;
 }
 
 function formatQueueWait(seconds) {
@@ -228,6 +276,13 @@ const KNOWN_CHAT_BOTS = new Set([
   'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
+// Treat a message consisting of a supported video URL as a request even without !assr.
+function isSupportedMediaUrlMessage(rawText = '') {
+  const candidate = String(rawText || '').trim();
+  if (!candidate || /\s/.test(candidate)) return false;
+  return /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|m\.youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\/\S+$/i.test(candidate);
+}
+
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
 function parseModVolumeCommand(rawText) {
   const command = String(rawText || '').trim().toLowerCase();
@@ -247,222 +302,6 @@ function isStaffRole(role) {
 }
 
 
-const CATEGORY_META = {
-  Music: {
-    label: 'Music',
-    icon: Music,
-    badgeBg: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
-    colorHex: '#f43f5e',
-    keywords: [
-      'official music video', 'official video', 'official audio', 'lyrics',
-      'lyric video', 'feat.', 'ft.', 'prod.', 'prod by', 'remix', 'soundtrack',
-      'ost', 'bgm', 'instrumental', 'bass boosted', 'live performance', 'album',
-      'lofi', 'synthwave', 'beat', 'trap', 'rap', 'hip hop', 'guitar', 'piano cover',
-      'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'visualizer', 'ep', 'single'
-    ]
-  },
-  Gaming: {
-    label: 'Gaming',
-    icon: Gamepad2,
-    badgeBg: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-    colorHex: '#10b981',
-    keywords: [
-      'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
-      'clutch', 'valorant', 'cs2', 'counter-strike', 'fortnite', 'league of legends',
-      'overwatch', 'apex legends', 'gta', 'minecraft', 'elden ring', 'boss fight',
-      'esports', 'smash bros', 'roblox', 'highlight', 'ranked', 'ace', 'headshot'
-    ]
-  },
-  Memes: {
-    label: 'Memes / Comedy',
-    icon: Laugh,
-    badgeBg: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-    colorHex: '#f59e0b',
-    keywords: [
-      'meme', 'funny', 'try not to laugh', 'ylyl', 'shitpost', 'hilarious',
-      'joke', 'parody', 'fails', 'vines', 'trolling', 'comedy', 'prank',
-      'skit', 'lol', 'kekw', 'cursed', 'brainrot'
-    ]
-  },
-  Clips: {
-    label: 'Twitch Clips',
-    icon: Scissors,
-    badgeBg: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
-    colorHex: '#8b5cf6',
-    keywords: ['twitch clip', 'stream highlight', 'twitch.tv', 'clip', 'streamer react']
-  },
-  IRL: {
-    label: 'IRL / Talk',
-    icon: Radio,
-    badgeBg: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-    colorHex: '#06b6d4',
-    keywords: [
-      'podcast', 'interview', 'reaction', 'reacts', 'reacting', 'documentary',
-      'debate', 'discussion', 'drama', 'vlog', 'commentary', 'unboxing', 'review',
-      'asmr', 'cooking', 'travel', 'live stream'
-    ]
-  },
-  General: {
-    label: 'General Video',
-    icon: Sparkles,
-    badgeBg: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
-    colorHex: '#94a3b8',
-    keywords: []
-  }
-};
-
-/**
- * Multi-layered detection engine:
- * 1. Checks URL domains (music.youtube.com, clips.twitch.tv, tiktok.com, spotify, etc.)
- * 2. Checks hashtags in request command (e.g. #music, #gaming)
- * 3. Checks keyword heuristic weights across title & note
- * 4. Respects broadcaster mode (e.g. Music-Only streams)
- */
-function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all') {
-  const cleanUrl = (url || '').toLowerCase();
-  const textBlob = `${cleanUrl} ${(title || '')} ${(note || '')}`.toLowerCase();
-
-  // 1. Explicit hashtags
-  if (textBlob.includes('#music') || textBlob.includes('#song')) return 'Music';
-  if (textBlob.includes('#game') || textBlob.includes('#gaming')) return 'Gaming';
-  if (textBlob.includes('#meme') || textBlob.includes('#funny')) return 'Memes';
-  if (textBlob.includes('#clip')) return 'Clips';
-  if (textBlob.includes('#irl') || textBlob.includes('#podcast')) return 'IRL';
-
-  // 2. Strong URL Domain signals
-  if (cleanUrl.includes('music.youtube.com') || cleanUrl.includes('spotify.com') || cleanUrl.includes('soundcloud.com')) {
-    return 'Music';
-  }
-  if (cleanUrl.includes('clips.twitch.tv') || cleanUrl.includes('/clip/')) {
-    return 'Clips';
-  }
-  if (cleanUrl.includes('tiktok.com')) {
-    // If stream is Music mode, default to music unless strictly funny
-    return textBlob.includes('music') || textBlob.includes('song') || textBlob.includes('sound') ? 'Music' : 'Memes';
-  }
-
-  // 3. Keyword Scoring Heuristics
-  let bestCategory = streamMode === 'music_only' ? 'Music' : 'General';
-  let highestScore = 0;
-
-  for (const [catKey, catData] of Object.entries(CATEGORY_META)) {
-    if (catKey === 'General') continue;
-    let score = 0;
-    for (const kw of catData.keywords) {
-      if (textBlob.includes(kw)) {
-        // High-confidence keywords grant higher weight
-        if (kw === 'official music video' || kw === 'official audio' || kw === 'ost' || kw === 'lyric video') {
-          score += 4;
-        } else if (kw === 'valorant' || kw === 'cs2' || kw === 'speedrun' || kw === 'gameplay') {
-          score += 3;
-        } else if (kw === 'try not to laugh' || kw === 'shitpost') {
-          score += 3;
-        } else {
-          score += 1;
-        }
-      }
-    }
-    if (score > highestScore) {
-      highestScore = score;
-      bestCategory = catKey;
-    }
-  }
-
-  return bestCategory;
-}
-
-// Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
-// The request pipeline enriches URL-only submissions with public oEmbed titles when available.
-function detectMusicType(url = '', title = '', note = '') {
-  const parsed = (() => { try { return new URL(String(url || '')); } catch { return null; } })();
-  const host = (parsed?.hostname || '').toLowerCase();
-  const blob = `${String(url || '')} ${String(title || '')} ${String(note || '')}`.toLowerCase();
-  if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') || host.endsWith('.soundcloud.com')) return 'Music';
-  if (/(?:^|[\s#])(?:#music|#song|#songrequest)(?:\b|$)/i.test(blob)) return 'Music';
-  const musicSignals = [
-    'official music video', 'official audio', 'music video', 'lyric video', 'lyrics',
-    'soundtrack', 'original soundtrack', 'ost', 'instrumental', 'music', 'song', 'songs',
-    'remix', 'album', 'single', 'lofi', 'synthwave', 'hip hop', 'hip-hop', 'rap', 'beat',
-    'bass boosted', 'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'piano cover',
-    'guitar cover', 'visualizer', 'edm', 'techno', 'house music', 'metal song', 'jazz',
-    'classical music', 'bgm', 'karaoke', 'live performance', 'music mix', 'dj set'
-  ];
-  const nonMusicSignals = [
-    'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
-    'tutorial', 'how to', 'review', 'podcast', 'interview', 'documentary', 'vlog',
-    'reaction', 'reacts', 'try not to laugh', 'meme', 'shitpost', 'comedy', 'prank',
-    'fails', 'highlights', 'twitch clip', 'stream highlight', 'news', 'explained'
-  ];
-  const musicScore = musicSignals.reduce((n, word) => n + (blob.includes(word) ? (['official audio', 'official music video', 'music video', 'soundtrack', 'lyric video'].includes(word) ? 3 : 1) : 0), 0);
-  const nonMusicScore = nonMusicSignals.reduce((n, word) => n + (blob.includes(word) ? 1 : 0), 0);
-  return musicScore > 0 && musicScore >= nonMusicScore ? 'Music' : 'Non-Music';
-}
-
-/**
- * Standardize media platform parsing
- */
-function parseMediaUrl(rawUrl = '') {
-  const url = (rawUrl || '').trim();
-  if (!url) return { platform: 'web', videoId: null, thumbnail: null };
-
-  // YouTube / YouTube Music
-  const ytMatch = url.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/i);
-  if (ytMatch && ytMatch[1]) {
-    return {
-      platform: 'youtube',
-      videoId: ytMatch[1],
-      thumbnail: `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`,
-      isYouTubeMusic: url.includes('music.youtube.com')
-    };
-  }
-
-  let parsedUrl = null;
-  try { parsedUrl = new URL(url); } catch { /* Invalid URLs are treated as external links below. */ }
-  const hostname = parsedUrl?.hostname?.toLowerCase() || '';
-
-  // Twitch Clips
-  if ((hostname === 'twitch.tv' || hostname.endsWith('.twitch.tv')) && (url.includes('/clip/') || hostname === 'clips.twitch.tv')) {
-    const parts = parsedUrl.pathname.split('/').filter(Boolean);
-    const clipIndex = parts.indexOf('clip');
-    const clipSlug = (clipIndex >= 0 ? parts[clipIndex + 1] : parts[0]) || 'TwitchClip';
-    return {
-      platform: 'twitch',
-      videoId: clipSlug,
-      thumbnail: `https://placehold.co/640x360/581c87/f3e8ff?text=Twitch+Clip+%E2%80%A2+${encodeURIComponent(clipSlug.slice(0, 10))}`
-    };
-  }
-
-  // Kick Clips are queued as external media and open through the official Kick clip page.
-  if (hostname === 'kick.com' || hostname.endsWith('.kick.com')) {
-    const parts = (parsedUrl?.pathname || '').split('/').filter(Boolean);
-    const clipIndex = parts.findIndex((part) => part.toLowerCase() === 'clips' || part.toLowerCase() === 'clip');
-    const clipSlug = clipIndex >= 0 ? parts[clipIndex + 1] : (hostname === 'clip.kick.com' ? parts[0] : null);
-    if (clipSlug) {
-      return { platform: 'kick', videoId: clipSlug, thumbnail: 'https://placehold.co/640x360/18181b/53fc18?text=Kick+Clip' };
-    }
-  }
-
-  // TikTok's official embedded player needs the numeric post ID. Short share URLs
-  // are resolved by /api/resolve-tiktok on Vercel before the request is saved.
-  const isTikTokHost = hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com');
-  if (isTikTokHost) {
-    const idMatch = url.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/i)
-      || url.match(/[?&](?:item_id|video_id)=(\d{10,25})/i);
-    const vid = idMatch?.[1] || null;
-    return {
-      platform: 'tiktok',
-      videoId: vid,
-      thumbnail: 'https://placehold.co/640x360/09090b/ff315f?text=TikTok+Video'
-    };
-  }
-
-  return {
-    platform: 'web',
-    videoId: 'ext-' + Math.random().toString(36).substring(2, 8),
-    thumbnail: 'https://placehold.co/640x360/18181b/a1a1aa?text=Web+Media+Link'
-  };
-}
-
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
@@ -474,6 +313,10 @@ function YediHubAppContent() {
   const [auth, setAuth] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
+  const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
+  const networkOnlineRef = useRef(networkOnline);
+  const [cloudReconnectTick, setCloudReconnectTick] = useState(0);
+  const [activityReconnectTick, setActivityReconnectTick] = useState(0);
   const [syncStatusText, setSyncStatusText] = useState('Initializing cloud sync...');
   const [roomConfigLoadedFor, setRoomConfigLoadedFor] = useState('');
 
@@ -497,7 +340,6 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
-  const [showObsOverlay, setShowObsOverlay] = useState(false);
 
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
@@ -520,29 +362,111 @@ function YediHubAppContent() {
   const [videos, setVideos] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
     if (Array.isArray(saved)) {
-      return saved
+      const realSavedVideos = saved
         .filter((video) => video && typeof video === 'object' && !String(video.id || '').startsWith('demo-'))
         .map(normalizeLegacyVideoVotes);
+      const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
+      return dedupeMediaVideos(applyCachedVideoDurations(realSavedVideos, durationCache)).videos;
     }
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
+  });
+  const videosRef = useRef(videos);
+  // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
+  videosRef.current = videos;
+  const pendingMediaRequestKeysRef = useRef(new Set());
+  const durationEnrichmentInFlightRef = useRef(new Set());
+  const [durationRefreshCount, setDurationRefreshCount] = useState(0);
+  const durationRefreshProcessedRef = useRef(0);
+  const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
+    const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  });
+  const [activityEvents, setActivityEvents] = useState(() => {
+    const stored = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
+    return Array.isArray(stored) ? mergeActivityEvents(stored) : [];
+  });
+  const activityEventsRef = useRef(activityEvents);
+  activityEventsRef.current = activityEvents;
+  const activityCloudIdsRef = useRef(new Set());
+  const activityCloudReadyRef = useRef(false);
+  const activitySyncInFlightRef = useRef(new Set());
+  const [activityCloudReady, setActivityCloudReady] = useState(false);
+  const [activitySyncError, setActivitySyncError] = useState(false);
+  const activitySessionIdRef = useRef('');
+  if (!activitySessionIdRef.current) {
+    const sessionKey = roomStorageKey(channelRoom, 'activity-session');
+    let sessionId = '';
+    try { sessionId = window.sessionStorage.getItem(sessionKey) || ''; } catch { /* Storage can be blocked. */ }
+    if (!sessionId) {
+      sessionId = 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      try { window.sessionStorage.setItem(sessionKey, sessionId); } catch { /* Session tracking remains in memory. */ }
+    }
+    activitySessionIdRef.current = sessionId;
+  }
+  const [statsNow, setStatsNow] = useState(() => Date.now());
+  const [statsExpanded, setStatsExpanded] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+  );
+  const [connectionDetailsExpanded, setConnectionDetailsExpanded] = useState(false);
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
+  const topMenuRef = useRef(null);
+  useEffect(() => {
+    if (!topMenuOpen) return undefined;
+    const closeOnPointerDown = (event) => {
+      if (!topMenuRef.current?.contains(event.target)) setTopMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setTopMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [topMenuOpen]);
+  const restoringBackupRef = useRef(false);
+  const backupFileInputRef = useRef(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
+  const [safetySnapshot, setSafetySnapshot] = useState(() => {
+    const saved = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
+    const validated = validateQueueBackup(saved);
+    return validated.valid ? validated.backup : null;
   });
 
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
+  const [draggedQueueId, setDraggedQueueId] = useState('');
+  const [dragOverQueueId, setDragOverQueueId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
   // Player State
   const [simProgress, setSimProgress] = useState(0);
+  const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
+  const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
+  // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
+  const tiktokMutePreferenceRef = useRef({ requestId: '', preference: 'auto' });
+  // Track observed player state separately from the viewer's deliberate preference.
+  const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
+  // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
+  // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
+  const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
+  const playbackPositionRef = useRef({ videoId: '', seconds: 0 });
+  const playbackVisibilitySnapshotRef = useRef(null);
+  const pendingPlaybackRestoreRef = useRef(null);
+  const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null, currentTime: 0 });
   const tiktokIframeRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
@@ -597,6 +521,30 @@ function YediHubAppContent() {
     if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'videos'), videos);
   }, [videos, channelRoom]);
+
+  // Keep a local last-known-good snapshot while the queue has waiting items.
+  // If the queue is accidentally emptied, retain the prior snapshot for recovery.
+  useEffect(() => {
+    const room = normalizeRoomName(channelRoom);
+    if (!room) return;
+    const snapshotKey = roomStorageKey(room, 'safety-snapshot');
+    const previous = validateQueueBackup(readStoredValue(snapshotKey, null));
+    const waitingCount = videos.filter((video) => video.status === 'queue').length;
+    const snapshotVideos = waitingCount > 0
+      ? videos
+      : previous.valid
+      ? previous.backup.videos
+      : videos;
+    if (!snapshotVideos.length) return;
+    const snapshot = createQueueBackup({
+      channelRoom: room,
+      videos: snapshotVideos,
+      streamSettings,
+      votedIds,
+      savedAt: Date.now()
+    });
+    if (writeStoredValue(snapshotKey, snapshot)) setSafetySnapshot(snapshot);
+  }, [videos, streamSettings, votedIds, channelRoom]);
 
   useEffect(() => {
     if (!normalizeRoomName(channelRoom)) return;
@@ -675,19 +623,32 @@ function YediHubAppContent() {
   // The chat bot has a separate server-side Twitch session. It does not grant dashboard access.
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/twitch/bot-session', { credentials: 'same-origin', cache: 'no-store' })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
-      .then((session) => {
-        if (cancelled) return;
-        setChatBotSession({
-          loading: false,
-          connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
-          username: session.connected ? String(session.user?.login || 'gachibot69') : ''
-        });
+    let requestInFlight = false;
+    const refreshBotSession = () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      fetch('/api/twitch/bot-session', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000)
       })
-      .catch(() => {
-        if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
-      });
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
+        .then((session) => {
+          if (cancelled) return;
+          setChatBotSession({
+            loading: false,
+            connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
+            username: session.connected ? String(session.user?.login || 'gachibot69') : ''
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
+        })
+        .finally(() => { requestInFlight = false; });
+    };
+    refreshBotSession();
+    const botStatusTimer = window.setInterval(refreshBotSession, 30000);
+    window.addEventListener('focus', refreshBotSession);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('bot_connected') === '1') {
@@ -708,7 +669,11 @@ function YediHubAppContent() {
       const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', nextUrl);
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearInterval(botStatusTimer);
+      window.removeEventListener('focus', refreshBotSession);
+    };
   }, []);
 
   // Firebase is initialized without anonymous sign-in. Only the server-issued custom token
@@ -819,10 +784,16 @@ function YediHubAppContent() {
       const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos');
       const unsubscribe = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
-          if (!active) return;
-          setCloudSynced(true);
-          setSyncStatusText('Cloud Synced');
+          if (!active || restoringBackupRef.current) return;
+          const cloudConfirmed = !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites;
+          setCloudSynced(cloudConfirmed);
+          setSyncStatusText(snapshot.metadata.fromCache
+            ? (networkOnlineRef.current ? 'Checking cloud connection…' : 'Offline cache — local save active')
+            : snapshot.metadata.hasPendingWrites
+            ? 'Syncing queue changes…'
+            : 'Cloud Synced');
 
           // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
           // requests' displayed vote counts honest and makes voter identity persistence consistent.
@@ -832,7 +803,6 @@ function YediHubAppContent() {
             const normalized = {
               ...normalizeLegacyVideoVotes(data),
               id: d.id,
-              mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note),
             };
             if (!Array.isArray(data.voters) && !legacyVoteMigrationRef.current.has(d.id)) {
               legacyVoteMigrationRef.current.add(d.id);
@@ -843,9 +813,24 @@ function YediHubAppContent() {
             }
             return normalized;
           });
-          const roomList = list.filter(
+          const rawRoomList = list.filter(
             (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
+          const dedupedRoomList = dedupeMediaVideos(rawRoomList);
+          // Hydrate confirmed lengths from the browser cache first; older Firestore snapshots
+          // must not erase them when a metadata write is briefly behind.
+          const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
+          const cachedRoomList = applyCachedVideoDurations(dedupedRoomList.videos, durationCache);
+          const roomList = mergeVideoDurationData(cachedRoomList, videosRef.current);
+
+          // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
+          // so a future refresh or deletion cannot make a duplicate reappear.
+          if (dedupedRoomList.duplicateIds.length > 0) {
+            void Promise.all(dedupedRoomList.duplicateIds.map((duplicateId) =>
+              deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', duplicateId))
+                .catch((error) => console.warn('Could not delete a duplicate queue document.', error))
+            ));
+          }
 
           if (roomList.length > 0) {
             initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
@@ -905,7 +890,7 @@ function YediHubAppContent() {
       setCloudSynced(false);
       setSyncStatusText('Cloud unavailable — local save is active');
     }
-  }, [db, firebaseUser, channelRoom, appId]);
+  }, [db, firebaseUser, channelRoom, appId, cloudReconnectTick]);
 
   // Persist the channel's moderation settings in Firestore so they follow the broadcaster
   // across browsers/devices. The room name itself is also carried in the ?channel= URL.
@@ -977,6 +962,7 @@ function YediHubAppContent() {
 
   // Sync Video Changes Helper (updates Firestore if online, updates state locally)
   const syncUpdateVideo = async (videoId, updates) => {
+    videosRef.current = videosRef.current.map((v) => (v.id === videoId ? { ...v, ...updates } : v));
     setVideos((prev) =>
       prev.map((v) => (v.id === videoId ? { ...v, ...updates } : v))
     );
@@ -1001,6 +987,198 @@ function YediHubAppContent() {
       }
     }
   };
+
+  const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
+    const seconds = Math.round(Number(rawDurationSeconds));
+    const key = getDurationCacheKey(video);
+    if (!key || !isValidMediaDuration(seconds) || !['metadata', 'player'].includes(source)) return;
+    const cacheKey = roomStorageKey(channelRoom, 'duration-cache');
+    const stored = readStoredValue(cacheKey, {});
+    const cache = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
+    const existing = cache[key];
+    if (existing?.source === 'player' && source !== 'player' && Number(existing.seconds) > 0) return;
+    cache[key] = { seconds, source, updatedAt: Date.now() };
+    const limited = Object.fromEntries(Object.entries(cache)
+      .sort((left, right) => (Number(right[1]?.updatedAt) || 0) - (Number(left[1]?.updatedAt) || 0))
+      .slice(0, 500));
+    writeStoredValue(cacheKey, limited);
+  };
+
+  useEffect(() => {
+    writeStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), durationLookupOutcomes);
+  }, [durationLookupOutcomes, channelRoom]);
+
+  const reportPlayerDuration = (videoId, rawDurationSeconds) => {
+    const seconds = Math.round(Number(rawDurationSeconds));
+    if (!isValidMediaDuration(seconds)) return;
+    const target = videosRef.current.find((video) => String(video.id) === String(videoId));
+    if (!target) return;
+    const id = String(target.id);
+    const platform = String(target.platform || 'external').toLowerCase();
+    const label = formatMediaDuration(seconds);
+    const storedSeconds = Number(target.durationSec) || 0;
+    const durationAlreadyAccurate = Math.abs(storedSeconds - seconds) <= 1 &&
+      String(target.duration || '') === label &&
+      ['metadata', 'player'].includes(String(target.durationSource || ''));
+
+    // A real provider player report is stronger than an earlier failed server lookup.
+    // Clear the stale error even when the value was already saved from metadata.
+    const markPlayerDurationFound = () => setDurationLookupOutcomes((prev) => ({
+      ...prev,
+      [id]: createDurationLookupOutcome({
+        status: 'found',
+        platform,
+        previous: prev[id] || null,
+        provider: platform + '-player',
+        at: Date.now(),
+      })
+    }));
+    if (durationAlreadyAccurate) {
+      markPlayerDurationFound();
+      return;
+    }
+    const source = target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
+      ? 'metadata'
+      : 'player';
+    cacheVideoDuration(target, seconds, source);
+    void syncUpdateVideo(id, {
+      duration: label,
+      durationSec: seconds,
+      durationSource: source,
+      durationProvider: platform + '-player'
+    });
+    markPlayerDurationFound();
+  };
+
+  // Backfill queue/history items. Failed lookups get bounded automatic retries instead of
+  // becoming permanently stuck; in-flight IDs are locked before state updates to prevent races.
+  const durationScanKey = videos.map((video) =>
+    String(video.id) + ':' + String(video.platform || '') + ':' + String(video.url || '') + ':' +
+    String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
+  ).join('|');
+  useEffect(() => {
+    const forceRetry = durationRefreshProcessedRef.current !== durationRefreshCount;
+    durationRefreshProcessedRef.current = durationRefreshCount;
+    const candidates = videosRef.current.filter((video) => {
+      const id = String(video?.id || '');
+      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsDurationLookup(video)) return false;
+      return shouldRetryDurationLookup(durationLookupOutcomes[id], Date.now(), forceRetry);
+    }).slice(0, 160);
+    if (!candidates.length) return undefined;
+
+    const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[String(video.id)] || null]));
+    const startedAt = Date.now();
+    candidates.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
+    setDurationLookupOutcomes((prev) => ({
+      ...prev,
+      ...Object.fromEntries(candidates.map((video) => {
+        const id = String(video.id);
+        return [id, createDurationLookupOutcome({
+          status: 'pending', platform: video.platform, previous: previousOutcomes.get(id), at: startedAt,
+        })];
+      }))
+    }));
+
+    const enrich = async () => {
+      for (let offset = 0; offset < candidates.length; offset += 3) {
+        const batch = candidates.slice(offset, offset + 3);
+        await Promise.all(batch.map(async (video) => {
+          const id = String(video.id);
+          const platform = String(video.platform || 'external').toLowerCase();
+          try {
+            const response = await fetch('/api/media-metadata?url=' + encodeURIComponent(video.url), {
+              credentials: 'same-origin',
+              cache: 'no-store',
+              signal: AbortSignal.timeout(9000)
+            });
+            const metadata = await response.json().catch(() => null);
+            if (!response.ok) {
+              setDurationLookupOutcomes((prev) => ({
+                ...prev,
+                [id]: createDurationLookupOutcome({
+                  status: 'error', platform, previous: previousOutcomes.get(id),
+                  reason: metadata?.error || ('Metadata endpoint returned HTTP ' + response.status + '.'),
+                  at: Date.now(),
+                })
+              }));
+              return;
+            }
+            const seconds = Number(metadata?.durationSec);
+            if (!isValidMediaDuration(seconds)) {
+              setDurationLookupOutcomes((prev) => ({
+                ...prev,
+                [id]: createDurationLookupOutcome({
+                  status: 'unavailable', platform, previous: previousOutcomes.get(id),
+                  reason: metadata?.durationReason || 'The provider did not return a valid duration.',
+                  provider: metadata?.durationProvider || '',
+                  at: Date.now(),
+                })
+              }));
+              return;
+            }
+
+            const current = videosRef.current.find((item) => String(item.id) === id);
+            if (!current) return;
+            cacheVideoDuration(current, seconds, 'metadata');
+            if (!['metadata', 'player'].includes(String(current.durationSource || ''))) {
+              void syncUpdateVideo(id, {
+                duration: formatMediaDuration(seconds),
+                durationSec: seconds,
+                durationSource: 'metadata',
+                durationProvider: String(metadata?.durationProvider || ''),
+              });
+            }
+            setDurationLookupOutcomes((prev) => ({
+              ...prev,
+              [id]: createDurationLookupOutcome({
+                status: 'found', platform, previous: previousOutcomes.get(id),
+                provider: metadata?.durationProvider || '', at: Date.now(),
+              })
+            }));
+          } catch (error) {
+            const reason = error?.name === 'TimeoutError'
+              ? 'Duration lookup timed out while contacting the metadata endpoint.'
+              : String(error?.message || 'Network error during duration lookup.');
+            setDurationLookupOutcomes((prev) => ({
+              ...prev,
+              [id]: createDurationLookupOutcome({
+                status: 'error', platform, previous: previousOutcomes.get(id), reason, at: Date.now(),
+              })
+            }));
+          } finally {
+            durationEnrichmentInFlightRef.current.delete(id);
+          }
+        }));
+      }
+    };
+    void enrich();
+    return undefined;
+  }, [durationScanKey, channelRoom, durationRefreshCount, durationLookupOutcomes]);
+
+  // Retry failed duration lookups even when the dashboard stays open. Persisted retry times
+  // let a reload resume a bounded backoff schedule rather than leaving failed entries stuck.
+  useEffect(() => {
+    const currentIds = new Set(videos.map((video) => String(video.id)));
+    const retryTimes = Object.entries(durationLookupOutcomes)
+      .filter(([id, outcome]) => currentIds.has(String(id)) &&
+        ['unavailable', 'error'].includes(typeof outcome === 'string' ? outcome : outcome?.status))
+      .filter(([id]) => {
+        const video = videosRef.current.find((item) => String(item.id) === String(id));
+        return videoNeedsDurationLookup(video) && !durationEnrichmentInFlightRef.current.has(String(id));
+      })
+      .map(([, outcome]) => Number(typeof outcome === 'object' ? outcome?.nextRetryAt : 0) || 0)
+      .filter((time) => time > Date.now())
+      .sort((a, b) => a - b);
+    if (!retryTimes.length) return undefined;
+    const delay = Math.max(1000, Math.min(2_147_000_000, retryTimes[0] - Date.now()));
+    const timer = window.setTimeout(() => setDurationRefreshCount((count) => count + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [durationLookupOutcomes, durationScanKey]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setStatsNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const syncIncrementUpvote = async (videoId, voterLogin) => {
     setVideos((prev) => prev.map((video) => {
@@ -1037,9 +1215,91 @@ function YediHubAppContent() {
     }
   };
 
+  const syncActivityEventToCloud = async (event) => {
+    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !event?.id ||
+        activityCloudIdsRef.current.has(String(event.id)) ||
+        activitySyncInFlightRef.current.has(String(event.id)) || !networkOnline) return false;
+    const eventId = String(event.id);
+    activitySyncInFlightRef.current.add(eventId);
+    try {
+      const response = await fetch('/api/activity-log', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, event })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Activity event could not be saved');
+      activityCloudIdsRef.current.add(eventId);
+      setActivitySyncError(false);
+      return true;
+    } catch (error) {
+      console.warn('Activity event remains saved locally; cloud retry is pending.', error);
+      setActivitySyncError(true);
+      return false;
+    } finally {
+      activitySyncInFlightRef.current.delete(eventId);
+    }
+  };
+
+  const recordActivity = (type, video = {}, options = {}) => {
+    const source = options.source || (String(video?.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard');
+    const event = createActivityEvent({
+      id: options.id,
+      type,
+      room: normalizeRoomName(channelRoom) || PRIVATE_CHANNEL,
+      at: options.at || Date.now(),
+      sessionId: activitySessionIdRef.current,
+      video,
+      actor: options.actor || video?.requestedBy || twitchAuth.username || '',
+      source
+    });
+    if (!event) return null;
+    const merged = mergeActivityEvents(activityEventsRef.current, [event]);
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
+    return event;
+  };
+
+  const flushPendingActivityEvents = () => {
+    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !networkOnline) return;
+    activityEventsRef.current.forEach((event) => {
+      if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
+    });
+  };
+
+  const handleRetryActivitySync = () => {
+    setActivityReconnectTick((tick) => tick + 1);
+    setCloudReconnectTick((tick) => tick + 1);
+    flushPendingActivityEvents();
+  };
+
+  const handleRefreshStats = () => {
+    const storedEvents = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
+    const merged = mergeActivityEvents(
+      activityEventsRef.current,
+      Array.isArray(storedEvents) ? storedEvents : []
+    );
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    setStatsNow(Date.now());
+
+    // Authenticated viewers can pull the latest lifetime activity from the server log too.
+    if (twitchAuth.authenticated && networkOnline) {
+      setActivityReconnectTick((tick) => tick + 1);
+    }
+  };
+
   const syncAddVideo = async (videoObj) => {
     const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
+    // Update the ref synchronously so back-to-back chat messages see the new item immediately.
+    videosRef.current = [localItem, ...videosRef.current];
     setVideos((prev) => [localItem, ...prev]);
+    recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
 
     if (db && firebaseUser) {
       try {
@@ -1053,7 +1313,13 @@ function YediHubAppContent() {
     }
   };
 
-  const syncDeleteVideo = async (videoId) => {
+  const syncDeleteVideo = async (videoId, options = {}) => {
+    const removedItem = videosRef.current.find((video) => String(video.id) === String(videoId));
+    if (removedItem) recordActivity('request_removed', removedItem, {
+      actor: options.actor || twitchAuth.username || removedItem.requestedBy,
+      source: options.source || 'dashboard'
+    });
+    videosRef.current = videosRef.current.filter((v) => v.id !== videoId);
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
 
     if (db && firebaseUser) {
@@ -1066,6 +1332,255 @@ function YediHubAppContent() {
         setSyncStatusText('Cloud delete failed — local save is active');
       }
     }
+  };
+
+  useEffect(() => {
+    if (!twitchAuth.authenticated) {
+      activityCloudReadyRef.current = false;
+      activityCloudIdsRef.current = new Set();
+      setActivityCloudReady(false);
+      return undefined;
+    }
+
+    let active = true;
+    let loading = false;
+    activityCloudReadyRef.current = false;
+    setActivityCloudReady(false);
+    const loadActivityEvents = async () => {
+      if (!active || loading || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      loading = true;
+      try {
+        const response = await fetch('/api/activity-log?appId=' + encodeURIComponent(appId), {
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !Array.isArray(result.events)) {
+          throw new Error(result.error || 'Activity log sync is unavailable');
+        }
+        const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
+        activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
+        activityCloudReadyRef.current = true;
+        setActivityCloudReady(true);
+        setActivitySyncError(false);
+        const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
+        activityEventsRef.current = merged;
+        setActivityEvents(merged);
+        writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+        merged.forEach((event) => {
+          if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
+        });
+      } catch (error) {
+        if (active) {
+          console.warn('Activity log sync will retry automatically:', error);
+          setActivityCloudReady(false);
+          activityCloudReadyRef.current = false;
+          setActivitySyncError(true);
+        }
+      } finally {
+        loading = false;
+      }
+    };
+    void loadActivityEvents();
+    const interval = window.setInterval(loadActivityEvents, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [twitchAuth.authenticated, appId, channelRoom, activityReconnectTick]);
+
+  // Import records for existing saved items which pre-date the event stream.
+  // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
+  useEffect(() => {
+    const normalizedRoom = normalizeRoomName(channelRoom);
+    const localOnlyReady = !db || !firebaseUser;
+    const cloudReady = Boolean(db && firebaseUser && cloudSynced && initializedCloudRoomsRef.current.has(normalizedRoom));
+    if (!localOnlyReady && !cloudReady) return;
+    const existingIds = new Set(activityEventsRef.current
+      .filter((event) => event.type === 'request_added' && event.mediaId)
+      .map((event) => String(event.mediaId)));
+    const missing = videosRef.current.filter((video) =>
+      video && typeof video === 'object' && !String(video.id || '').startsWith('demo-') &&
+      !existingIds.has(String(video.id)));
+    if (!missing.length) return;
+    const legacyEvents = missing.map((video) => {
+      const safeId = String(video.id || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 90);
+      return createActivityEvent({
+        id: 'legacy-request-' + safeId,
+        type: 'request_added',
+        at: Number(video.timestamp) > 0 ? Number(video.timestamp) : Date.now(),
+        room: normalizedRoom || PRIVATE_CHANNEL,
+        sessionId: 'legacy-import',
+        video,
+        actor: video.requestedBy || 'unknown',
+        source: 'legacy_import'
+      });
+    }).filter(Boolean);
+    if (!legacyEvents.length) return;
+    const merged = mergeActivityEvents(activityEventsRef.current, legacyEvents);
+    activityEventsRef.current = merged;
+    setActivityEvents(merged);
+    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
+    if (activityCloudReadyRef.current) legacyEvents.forEach((event) => void syncActivityEventToCloud(event));
+  }, [db, firebaseUser, cloudSynced, activityCloudReady, videos, activityEvents, channelRoom]);
+
+  const getSafeBackupSettings = (rawSettings = {}) => {
+    const safe = { ...DEFAULT_STREAM_SETTINGS };
+    Object.entries(DEFAULT_STREAM_SETTINGS).forEach(([key, defaultValue]) => {
+      const value = rawSettings?.[key];
+      if (typeof defaultValue === 'boolean' && typeof value === 'boolean') {
+        safe[key] = value;
+      } else if (typeof defaultValue === 'number' && Number.isFinite(Number(value))) {
+        safe[key] = Math.max(1, Math.min(180, Number(value)));
+      } else if (typeof defaultValue === 'string' && typeof value === 'string') {
+        safe[key] = value.slice(0, 40);
+      }
+    });
+    return safe;
+  };
+
+  const handleDownloadBackup = () => {
+    const backup = createQueueBackup({
+      channelRoom: normalizeRoomName(channelRoom),
+      videos,
+      streamSettings,
+      votedIds,
+      savedAt: Date.now()
+    });
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = 'whale-cum-' + normalizeRoomName(channelRoom) + '-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    setBackupMessage('Backup downloaded: ' + videos.length + ' queue/history items. Twitch login credentials are not included.');
+  };
+
+  const performQueueBackupRestore = async (candidate, sourceLabel = 'backup file') => {
+    const validation = validateQueueBackup(candidate);
+    if (!validation.valid) {
+      setBackupMessage(validation.error);
+      return false;
+    }
+    const backup = validation.backup;
+    const targetRoom = normalizeRoomName(channelRoom);
+    if (normalizeRoomName(backup.channelRoom) !== targetRoom) {
+      setBackupMessage('This backup belongs to #' + backup.channelRoom + ', not #' + targetRoom + '.');
+      return false;
+    }
+    const snapshotDate = backup.savedAt ? new Date(backup.savedAt).toLocaleString() : 'an unknown date';
+    const confirmed = window.confirm(
+      'Restore ' + backup.videos.length + ' queue/history items and settings from ' + sourceLabel +
+      ' (' + snapshotDate + ')? This replaces the current queue and history for #' + targetRoom + '.'
+    );
+    if (!confirmed) return false;
+
+    setBackupBusy(true);
+    setBackupMessage('Restoring queue and settings…');
+    restoringBackupRef.current = true;
+    const restoredSettings = getSafeBackupSettings(backup.streamSettings);
+    const restoredVideos = dedupeMediaVideos(backup.videos.map((video) =>
+      normalizeLegacyVideoVotes({ ...video, channelRoom: targetRoom })
+    )).videos;
+    const restoredVoteIds = Object.fromEntries(
+      Object.entries(backup.votedIds || {})
+        .filter(([key, value]) => typeof key === 'string' && key.length <= 300 && value === true)
+        .slice(0, 20000)
+    );
+    queueOpenRef.current = Boolean(restoredSettings.queueOpen);
+    queueOpenCloudOverrideRef.current = { value: queueOpenRef.current, changedAt: Date.now() };
+    setStreamSettings(restoredSettings);
+    setVotedIds(restoredVoteIds);
+    videosRef.current = restoredVideos;
+    setVideos(restoredVideos);
+
+    try {
+      if (db && firebaseUser) {
+        setSyncStatusText('Restoring backup to cloud…');
+        const cloudSnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
+        const cloudRoomRows = cloudSnapshot.docs
+          .map((entry) => ({ id: entry.id, ...entry.data() }))
+          .filter((video) => normalizeRoomName(video.channelRoom) === targetRoom);
+        const restoredIds = new Set(restoredVideos.map((video) => String(video.id)));
+        const operations = [
+          ...cloudRoomRows.filter((video) => !restoredIds.has(String(video.id)))
+            .map((video) => ({ type: 'delete', id: String(video.id) })),
+          ...restoredVideos.map((video) => ({ type: 'set', id: String(video.id), video }))
+        ];
+        // Firestore caps a batch at 500 writes; keep each restore batch comfortably below that.
+        for (let offset = 0; offset < operations.length; offset += 400) {
+          const batch = writeBatch(db);
+          operations.slice(offset, offset + 400).forEach((operation) => {
+            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', operation.id);
+            if (operation.type === 'delete') batch.delete(itemRef);
+            else batch.set(itemRef, { ...operation.video, channelRoom: targetRoom });
+          });
+          await batch.commit();
+        }
+        await setDoc(
+          doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', targetRoom),
+          { channelRoom: targetRoom, streamSettings: restoredSettings, bridgeAutoConnect: true, updatedAt: Date.now() },
+          { merge: true }
+        );
+        setCloudSynced(true);
+        setSyncStatusText('Backup restored to cloud');
+        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings to cloud sync.');
+      } else {
+        setCloudSynced(false);
+        setSyncStatusText('Backup restored locally — cloud sync unavailable');
+        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings locally. Cloud sync is unavailable.');
+      }
+    } catch (error) {
+      console.error('Queue backup restore could not fully sync to Firestore.', error);
+      setCloudSynced(false);
+      setSyncStatusText('Backup restored locally — cloud restore failed');
+      setBackupMessage('Restored locally, but the cloud update failed. Check the sync status before using another device.');
+      addToast('Backup restored locally; cloud sync failed.', 'warning');
+    } finally {
+      restoringBackupRef.current = false;
+      videosRef.current = restoredVideos;
+      setVideos(restoredVideos);
+      writeStoredValue(roomStorageKey(targetRoom, 'videos'), restoredVideos);
+      writeStoredValue(roomStorageKey(targetRoom, 'settings'), restoredSettings);
+      writeStoredValue(roomStorageKey(targetRoom, 'votes'), restoredVoteIds);
+      setBackupBusy(false);
+    }
+    return true;
+  };
+
+  const handleImportBackupFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setBackupMessage('Backup is too large (10 MB maximum).');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      const validation = validateQueueBackup(parsed);
+      if (!validation.valid) {
+        setBackupMessage(validation.error);
+        return;
+      }
+      await performQueueBackupRestore(validation.backup, 'backup file');
+    } catch (error) {
+      console.warn('Could not read queue backup.', error);
+      setBackupMessage('Could not read that JSON backup file.');
+    }
+  };
+
+  const handleRecoverSafetySnapshot = () => {
+    const stored = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
+    const validation = validateQueueBackup(stored);
+    if (!validation.valid || !validation.backup.videos.length) {
+      setBackupMessage('No recoverable queue snapshot is saved in this browser yet.');
+      return;
+    }
+    void performQueueBackupRestore(validation.backup, 'the last local safety snapshot');
   };
 
   // ==========================================
@@ -1137,6 +1652,191 @@ function YediHubAppContent() {
     const queued = videos.filter((v) => v.status === 'queue').sort(compareQueueOrder);
     return queued[0] || null;
   }, [videos]);
+
+  const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
+    const id = String(videoId || '');
+    const matchingVideo = videosRef.current.find((video) => String(video.id) === id);
+    const platform = platformOverride ||
+      matchingVideo?.platform ||
+      (String(currentVideoRef.current?.id || '') === id ? currentVideoRef.current?.platform : '');
+    const isTikTok = platform === 'tiktok';
+    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v2-' + id);
+    // Older builds accidentally saved autoplay mute as a deliberate preference.
+    // Keep the old pause intent, but read TikTok audio preference from a clean separate key.
+    const tiktokMuteStorageKey = isTikTok
+      ? roomStorageKey(channelRoom, 'player-tiktok-mute-intent-v1-' + id)
+      : '';
+    const current = playbackIntentRef.current;
+    if (current.videoId === id && current.storageKey === storageKey &&
+        (!isTikTok || current.tiktokMuteStorageKey === tiktokMuteStorageKey) &&
+        (isTikTok || !current.tiktokMuteStorageKey)) return current;
+
+    let saved = null;
+    let savedTikTokAudio = null;
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      saved = raw ? JSON.parse(raw) : null;
+      if (isTikTok) {
+        const audioRaw = window.sessionStorage.getItem(tiktokMuteStorageKey);
+        savedTikTokAudio = audioRaw ? JSON.parse(audioRaw) : null;
+      }
+    } catch { /* A blocked session store should not break player controls. */ }
+    return {
+      videoId: id,
+      storageKey,
+      tiktokMuteStorageKey,
+      paused: saved?.paused === true,
+      muted: isTikTok
+        ? (typeof savedTikTokAudio?.muted === 'boolean' ? savedTikTokAudio.muted : null)
+        : (typeof saved?.muted === 'boolean' ? saved.muted : null),
+    };
+  };
+
+  const updatePlaybackIntent = (videoId, updates, platformOverride = '') => {
+    const previous = getPlaybackIntentForVideo(videoId, platformOverride);
+    const isTikTok = Boolean(previous.tiktokMuteStorageKey);
+    const next = { ...previous, ...updates, videoId: String(videoId || '') };
+    playbackIntentRef.current = next;
+    try {
+      // Keep TikTok preference separate so legacy autoplay mute cannot override startup audio.
+      window.sessionStorage.setItem(next.storageKey, JSON.stringify({
+        paused: next.paused,
+        muted: isTikTok ? null : next.muted,
+      }));
+      if (isTikTok && typeof updates?.muted === 'boolean') {
+        window.sessionStorage.setItem(next.tiktokMuteStorageKey, JSON.stringify({ muted: updates.muted }));
+      }
+    } catch { /* Playback state remains available in memory if storage is unavailable. */ }
+    return next;
+  };
+
+  const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
+
+  // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
+  // Its autoplay query is only an initial-load setting; deriving it on every render
+  // changes src when pause intent changes and makes React reload the embed mid-video.
+  const tiktokPlayerSrc = useMemo(() => (
+    currentVideo?.platform === 'tiktok'
+      ? buildTikTokPlayerUrl(currentVideo.videoId, {
+          paused: getPlaybackIntentForVideo(currentVideo.id, 'tiktok').paused,
+        })
+      : ''
+  ), [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
+
+  const recordPlaybackPosition = (videoId, seconds) => {
+    const id = String(videoId || '');
+    const value = Number(seconds);
+    if (!id || !Number.isFinite(value) || value < 0) return;
+    const pending = pendingPlaybackRestoreRef.current;
+    if (pending?.videoId === id && Date.now() < pending.expiresAt && pending.currentTime > 0.5) {
+      // A recreated iframe may report 0 before its seek completes; do not overwrite
+      // the timestamp we are actively trying to restore.
+      if (value < pending.currentTime - 2) return;
+      if (Math.abs(value - pending.currentTime) <= 2) pendingPlaybackRestoreRef.current = null;
+    }
+    playbackPositionRef.current = { videoId: id, seconds: value };
+  };
+
+  // On a new queue item, restore only this tab's previous intent for that exact video.
+  useEffect(() => {
+    if (!currentVideo) {
+      playbackIntentRef.current = { videoId: '', storageKey: '', paused: false, muted: null };
+      playbackVisibilitySnapshotRef.current = null;
+      pendingPlaybackRestoreRef.current = null;
+      playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null, currentTime: 0 };
+      return;
+    }
+    const videoId = String(currentVideo.id);
+    if (playbackPositionRef.current.videoId !== videoId) {
+      playbackPositionRef.current = { videoId, seconds: 0 };
+      pendingPlaybackRestoreRef.current = null;
+    }
+    const intent = getPlaybackIntentForVideo(videoId, currentVideo.platform);
+    playbackIntentRef.current = intent;
+    playbackVisibilitySnapshotRef.current = null;
+    playbackRestoreGuardRef.current = intent.paused
+      ? { videoId, until: Date.now() + 2500, paused: true, muted: intent.muted }
+      : { videoId: '', until: 0, paused: false, muted: null };
+    keyboardPausedRef.current = { videoId, paused: intent.paused };
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+
+  // A hidden tab may suspend/recreate provider iframes. Preserve deliberate pauses,
+  // but resume media that was playing before the tab was hidden.
+  useEffect(() => {
+    if (!currentVideo) return undefined;
+    const videoId = String(currentVideo.id);
+    const platform = currentVideo.platform;
+    const restoreOnReturn = () => {
+      if (document.visibilityState === 'hidden') {
+        const intent = getPlaybackIntentForVideo(videoId, platform);
+        const tiktokPreference = tiktokMutePreferenceRef.current.requestId === videoId
+          ? tiktokMutePreferenceRef.current.preference
+          : 'auto';
+        const muted = platform === 'youtube'
+          ? (typeof youtubePlaybackInfoRef.current.muted === 'boolean' ? youtubePlaybackInfoRef.current.muted : intent.muted)
+          : platform === 'tiktok'
+            ? (tiktokPreference === 'muted' ? true : intent.muted === true ? true : false)
+            : intent.muted;
+        const knownPosition = playbackPositionRef.current.videoId === videoId
+          ? Number(playbackPositionRef.current.seconds) || 0
+          : 0;
+        const reportedPosition = platform === 'youtube'
+          ? Number(youtubePlaybackInfoRef.current.currentTime)
+          : knownPosition;
+        // Keep the last useful timestamp if the browser/provider has already reset an
+        // iframe while backgrounding the tab.
+        const currentTime = Number.isFinite(reportedPosition) && reportedPosition > 0.5
+          ? reportedPosition
+          : knownPosition;
+        recordPlaybackPosition(videoId, currentTime);
+        const paused = intent.paused ||
+          (platform === 'tiktok' && keyboardPausedRef.current.videoId === videoId && keyboardPausedRef.current.paused);
+        playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted, currentTime };
+        if (paused) updatePlaybackIntent(videoId, { paused: true });
+        return;
+      }
+
+      const snapshot = playbackVisibilitySnapshotRef.current;
+      if (!snapshot || snapshot.videoId !== videoId || snapshot.platform !== platform) return;
+      const intent = getPlaybackIntentForVideo(videoId, platform);
+      const paused = snapshot.paused || intent.paused;
+      const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
+      const currentTime = Math.max(0, Number(snapshot.currentTime) || 0);
+      // Only guard the iframe's immediate restoration blip; a multi-second guard blocks real user clicks.
+      const expiresAt = Date.now() + 350;
+      playbackRestoreGuardRef.current = {
+        videoId,
+        until: expiresAt,
+        paused,
+        muted: typeof muted === 'boolean' ? muted : null,
+        currentTime,
+      };
+      if (currentTime > 0.5) {
+        pendingPlaybackRestoreRef.current = { videoId, platform, currentTime, paused, muted, expiresAt };
+        // Do not mark restoration complete before the player has actually sought there.
+        playbackPositionRef.current = { videoId, seconds: currentTime };
+      }
+      if (paused) updatePlaybackIntent(videoId, { paused: true });
+      if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
+
+      const actions = getVisibilityRestoreActions(platform, { paused, muted, currentTime });
+      for (const action of actions) {
+        if (platform === 'youtube') youtubePlayerRef.current?.[action.command]?.(...(action.args || []));
+        else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, action.command, action.value ?? null);
+      }
+      playbackVisibilitySnapshotRef.current = null;
+    };
+
+    document.addEventListener('visibilitychange', restoreOnReturn);
+    window.addEventListener('pageshow', restoreOnReturn);
+    window.addEventListener('focus', restoreOnReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', restoreOnReturn);
+      window.removeEventListener('pageshow', restoreOnReturn);
+      window.removeEventListener('focus', restoreOnReturn);
+    };
+  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
   // Older saved queues may have no explicit "playing" status even though their top item is visible.
@@ -1149,17 +1849,54 @@ function YediHubAppContent() {
     }
     if (activeItems.length === 1) return;
     const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0];
-    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false });
+    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
   }, [videos]);
 
-  const counts = useMemo(() => {
-    return {
-      queue: videos.filter((v) => v.status === 'queue').length,
-      watch_later: videos.filter((v) => v.status === 'watch_later').length,
-      watched: videos.filter((v) => v.status === 'watched').length,
+  const counts = useMemo(() => ({
+    ...getQueueMediaCounts(videos, getVideoMediaType),
+    watch_later: videos.filter((video) => video.status === 'watch_later').length,
+    watched: videos.filter((video) => video.status === 'watched').length,
+  }), [videos]);
 
-    };
-  }, [videos]);
+  const queueStats = useMemo(
+    () => buildQueueStatistics(videos, statsNow),
+    [videos, statsNow]
+  );
+  const activitySyncStatus = !networkOnline
+    ? 'Offline · local save'
+    : activitySyncError
+    ? 'Retry needed'
+    : twitchAuth.authenticated
+    ? activityCloudReady ? 'Cloud synced' : 'Connecting'
+    : 'Local-only';
+  const activitySyncTone = !networkOnline || activitySyncError
+    ? 'warning'
+    : twitchAuth.authenticated && activityCloudReady
+    ? 'success'
+    : 'neutral';
+  const nextQueuedVideo = useMemo(
+    () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
+    [videos]
+  );
+
+  const categoryCounts = useMemo(
+    () => buildCategoryCounts(videos, activeTab, mediaTypeFilter, getVideoCategory, getVideoMediaType),
+    [videos, activeTab, mediaTypeFilter]
+  );
+  const syncIndicatorLabel = cloudSynced
+    ? 'Cloud synced'
+    : !networkOnline
+    ? 'Local save'
+    : /failed|unavailable|error/i.test(syncStatusText)
+    ? 'Cloud issue'
+    : /not configured|saved in this browser|local save/i.test(syncStatusText)
+    ? 'Local save'
+    : 'Syncing';
+  const syncIndicatorClass = cloudSynced
+    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+    : syncIndicatorLabel === 'Cloud issue'
+    ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+    : 'bg-amber-500/10 border-amber-500/30 text-amber-200';
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -1170,26 +1907,12 @@ function YediHubAppContent() {
     return new Map(orderedQueue.map((video, index): [string, number] => [String(video.id), index + 1]));
   }, [videos]);
 
-  const filteredVideos = useMemo(() => {
-    return videos
-      .filter((v) => v.status === activeTab)
-      .filter((v) => (selectedCategory === 'All' ? true : v.category === selectedCategory))
-      .filter((v) => {
-        if (!searchQuery.trim()) return true;
-        const q = searchQuery.toLowerCase();
-        return String(v.title || '').toLowerCase().includes(q) ||
-          String(v.requestedBy || '').toLowerCase().includes(q) ||
-          String(v.category || '').toLowerCase().includes(q) ||
-          String(v.note || '').toLowerCase().includes(q);
-      })
-      .sort((a, b) => {
-        // Active Queue always shows actual playback order. Other tabs may use their selected sort.
-        if (activeTab === 'queue') return compareQueueOrder(a, b);
-        if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
-        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
-        return compareQueueOrder(a, b);
-      });
-  }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
+  const filteredVideos = useMemo(
+    () => filterVideosForView(videos, {
+      activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy
+    }, { getVideoCategory, getVideoMediaType, compareQueueOrder }),
+    [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]
+  );
 
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
@@ -1268,9 +1991,10 @@ function YediHubAppContent() {
           ? 'subscriber'
           : 'viewer';
         const lowerText = text.toLowerCase();
-        const isRequestCommand = lowerText.startsWith('!assr ');
+        const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
+        const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
         const volumeCommand = parseModVolumeCommand(lowerText);
-        if (isRequestCommand) {
+        if (isRequestCommand || isDirectVideoUrl) {
           handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
         } else if (lowerText === '!remove' || lowerText === '!unrequest') {
           handleRemoveOwnRequestRef.current?.(voterLogin || username);
@@ -1279,9 +2003,8 @@ function YediHubAppContent() {
         } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
-          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
-          sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
-          sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
+          sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
+          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && isStaffRole(role)) {
@@ -1345,6 +2068,46 @@ function YediHubAppContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [twitchAuth.authenticated]);
 
+  useEffect(() => {
+    // Only rebuild Firestore/activity listeners when connectivity actually returns.
+    // Reconnecting on every tab focus causes a cache-only snapshot, a false "Cloud issue"
+    // flash, extra activity fetches, and needless work when switching back to the dashboard.
+    const reconnectWhenAvailable = (force = false) => {
+      const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+      const wasOffline = !networkOnlineRef.current;
+      networkOnlineRef.current = online;
+      setNetworkOnline(online);
+      if (!online || (!wasOffline && !force)) return;
+      setCloudReconnectTick((tick) => tick + 1);
+      setActivityReconnectTick((tick) => tick + 1);
+      if (twitchAuth.authenticated && shouldReconnectIrcRef.current) {
+        const socket = ircSocketRef.current;
+        if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+          connectTwitchIrc(ircTargetRef.current || PRIVATE_CHANNEL, { silent: true });
+        }
+      }
+    };
+    const onOnline = () => reconnectWhenAvailable(true);
+    const onOffline = () => {
+      networkOnlineRef.current = false;
+      setNetworkOnline(false);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' &&
+          (!networkOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine))) {
+        reconnectWhenAvailable();
+      }
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [twitchAuth.authenticated]);
+
     // ==========================================
   // REQUEST CREATION & DISPATCH
   // ==========================================
@@ -1352,11 +2115,11 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
     if (!requestText) {
-      sendTwitchChatReply(`@${requester} use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
+      sendTwitchChatReply(`@${requester} Use !assr <URL or title>.`);
       return;
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} requests are currently closed. Try again when the streamer reopens the queue.`);
+      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
 
@@ -1368,26 +2131,27 @@ function YediHubAppContent() {
         const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
-          sendTwitchChatReply(`@${requester} couldn't find "${requestText.slice(0, 45)}". Try a more specific title or paste a URL.`);
+          sendTwitchChatReply(`@${requester} No YouTube match. Try a shorter title or URL.`);
           return;
         }
         url = result.results[0].url;
         title = result.results[0].title || '';
       } catch (error) {
         console.warn('Chat title search failed:', error);
-        sendTwitchChatReply(`@${requester} title search is temporarily unavailable. Please try a direct video URL.`);
+        sendTwitchChatReply(`@${requester} Search unavailable; try a direct URL.`);
         return;
       }
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} requests are currently closed. Your video was not added; try again when the streamer reopens the queue.`);
+      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
-    const ok = await processAndQueueRequest({
+    // Keep successful requests quiet in Twitch chat. Failure responses (closed queue,
+    // invalid TikTok links, failed title search, duplicates) are still sent by the request flow.
+    await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
-      note: 'Requested via Twitch chat', manualCategory: null
+      note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
     });
-    if (ok) sendTwitchChatReply(`@${requester} added "${String(title || requestText).slice(0, 75)}". Use !position to check its spot, or !remove to remove your latest waiting request.`);
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
@@ -1401,10 +2165,12 @@ function YediHubAppContent() {
     note = '',
     requestedBy,
     userRole = 'viewer',
-    manualCategory = null
+    manualCategory = null,
+    fromChat = false
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Room is not set.');
       return false;
     }
     // A closed queue blocks every new request, including requests sent by staff. Staff can
@@ -1412,6 +2178,7 @@ function YediHubAppContent() {
     // latest setting, not the value captured by an older render.
     if (!queueOpenRef.current) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -1428,6 +2195,7 @@ function YediHubAppContent() {
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.videoId || !result.url) {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
+          if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
           return false;
         }
         normalizedUrl = result.url;
@@ -1436,28 +2204,64 @@ function YediHubAppContent() {
       } catch (error) {
         console.warn('TikTok short-link resolution failed.', error);
         addToast('Could not resolve this TikTok share link here. Try copying the full TikTok URL with /video/ followed by its ID.', 'warning');
+        if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
         return false;
       }
     }
 
-    // Fetch public oEmbed titles for URL-only submissions so Music/Non-Music classification
-    // has real title text rather than only a video ID. Failure is non-fatal.
+    // Only allow each media identity once in the room's queue/history, so it can't be
+    // re-requested after playing either. Remove the old entry if it should become requestable again.
+    const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
+    const alreadyExists = videosRef.current.some((video) =>
+      getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
+    );
+    const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
+    if (alreadyExists || requestAlreadyPending) {
+      addToast('That video already has an entry in the queue or history. Duplicate request ignored.', 'warning');
+      if (fromChat) {
+        const requester = normalizeTwitchLogin(requestedBy);
+        sendTwitchChatReply(`@${requester || 'viewer'} Already requested (queue/history).`);
+      }
+      return false;
+    }
+    // The lock closes the race where the same URL arrives in two chat messages at once,
+    // while metadata/TikTok resolution is still running.
+    pendingMediaRequestKeysRef.current.add(identityKey);
+
+    // Fetch title/thumbnail and duration metadata. If title and thumbnail are already known,
+    // duration enrichment continues in the background so chat requests don't wait for scraping.
     let resolvedTitle = String(title || '').trim();
-    if (!resolvedTitle) {
-      try {
-        const metadataResponse = await fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`);
-        if (metadataResponse.ok) {
-          const metadata = await metadataResponse.json().catch(() => ({}));
-          if (typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+    let resolvedThumbnail = parsed.thumbnail || '';
+    let resolvedDurationSec = null;
+    const needsBasicMetadata = !resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co');
+    const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`, {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(async (response) => {
+      if (!response.ok) return null;
+      return response.json().catch(() => null);
+    }).catch((error) => {
+      console.warn('Media metadata lookup failed; using URL-based category detection.', error);
+      return null;
+    });
+    let deferredMetadataPromise = mediaMetadataPromise;
+    if (needsBasicMetadata) {
+      const metadata = await mediaMetadataPromise;
+      if (metadata) {
+        if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
+        if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
+          resolvedThumbnail = metadata.thumbnailUrl;
         }
-      } catch (error) {
-        console.warn('Media metadata lookup failed; using URL-based category detection.', error);
+        const candidateDuration = Number(metadata.durationSec);
+        if (Number.isFinite(candidateDuration) && candidateDuration > 0) resolvedDurationSec = candidateDuration;
       }
     }
 
     // Re-check after async URL/title resolution in case the streamer closed the queue mid-request.
     if (!queueOpenRef.current) {
+      pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
+      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -1471,37 +2275,113 @@ function YediHubAppContent() {
         : parsed.platform === 'kick'
           ? `Kick Clip (${parsed.videoId})`
         : 'Community Requested Media');
-    const finalCategory =
-      manualCategory && manualCategory !== 'Auto'
-        ? manualCategory
-        : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
-    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
+    const categoryManuallySet = Boolean(manualCategory && manualCategory !== 'Auto');
+    const detectedCategory = categoryManuallySet
+      ? manualCategory
+      : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
+    const mediaType = categoryManuallySet
+      ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
+      : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
+    const finalCategory = !categoryManuallySet && mediaType === 'Music' ? 'Music' : detectedCategory;
+    const requestedAt = Date.now();
 
     const newVideo = {
-      id: 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
       channelRoom,
       title: cleanTitle,
       url: normalizedUrl,
       platform: parsed.platform,
       videoId: parsed.videoId,
       category: finalCategory,
+      categoryManuallySet,
       mediaType,
-      duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? '00:45' : '03:45',
-      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? 45 : 225,
+      duration: resolvedDurationSec ? formatMediaDuration(resolvedDurationSec) : '',
+      durationSec: resolvedDurationSec || undefined,
+      durationSource: resolvedDurationSec ? 'metadata' : 'unknown',
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: 'queue',
       upvotes: 0,
       voters: [],
       pinned: false,
-      addedAt: 'Just now',
+      addedAt: new Date(requestedAt).toISOString(),
       queueOrder: getNextQueueOrder(),
-      timestamp: Date.now(),
+      timestamp: requestedAt,
       note: note || `Added to ${channelRoom} deck`,
-      thumbnail: parsed.thumbnail
+      thumbnail: resolvedThumbnail || parsed.thumbnail,
+      isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };
 
-    syncAddVideo(newVideo);
+    if (resolvedDurationSec) {
+      cacheVideoDuration(newVideo, resolvedDurationSec, 'metadata');
+      setDurationLookupOutcomes((prev) => ({
+        ...prev,
+        [String(newVideo.id)]: createDurationLookupOutcome({
+          status: 'found', platform: parsed.platform, previous: prev[String(newVideo.id)] || null,
+          provider: 'metadata', at: Date.now(),
+        })
+      }));
+    } else if (deferredMetadataPromise) {
+      const pendingId = String(newVideo.id);
+      const previousLookup = durationLookupOutcomes[pendingId] || null;
+      durationEnrichmentInFlightRef.current.add(pendingId);
+      setDurationLookupOutcomes((prev) => ({
+        ...prev,
+        [pendingId]: createDurationLookupOutcome({
+          status: 'pending', platform: parsed.platform, previous: prev[pendingId] || previousLookup, at: Date.now(),
+        })
+      }));
+    }
+    void syncAddVideo(newVideo);
+    pendingMediaRequestKeysRef.current.delete(identityKey);
+
+    if (deferredMetadataPromise && !resolvedDurationSec) {
+      const newVideoId = String(newVideo.id);
+      const previousLookup = durationLookupOutcomes[newVideoId] || null;
+      void deferredMetadataPromise.then((metadata) => {
+        const candidateDuration = Number(metadata?.durationSec);
+        if (!isValidMediaDuration(candidateDuration)) {
+          setDurationLookupOutcomes((prev) => ({
+            ...prev,
+            [newVideoId]: createDurationLookupOutcome({
+              status: metadata ? 'unavailable' : 'error',
+              platform: parsed.platform,
+              previous: previousLookup,
+              reason: metadata?.durationReason || 'The provider did not return a valid duration.',
+              provider: metadata?.durationProvider || '',
+              at: Date.now(),
+            })
+          }));
+          return;
+        }
+        const current = videosRef.current.find((video) => String(video.id) === newVideoId);
+        if (!current) return;
+        cacheVideoDuration(current, candidateDuration, 'metadata');
+        void syncUpdateVideo(newVideoId, {
+          duration: formatMediaDuration(candidateDuration),
+          durationSec: candidateDuration,
+          durationSource: 'metadata',
+          durationProvider: String(metadata?.durationProvider || ''),
+        });
+        setDurationLookupOutcomes((prev) => ({
+          ...prev,
+          [newVideoId]: createDurationLookupOutcome({
+            status: 'found', platform: parsed.platform,
+            previous: previousLookup, provider: metadata?.durationProvider || '', at: Date.now(),
+          })
+        }));
+      }).catch((error) => {
+        setDurationLookupOutcomes((prev) => ({
+          ...prev,
+          [newVideoId]: createDurationLookupOutcome({
+            status: 'error', platform: parsed.platform, previous: previousLookup,
+            reason: String(error?.message || 'Network error during duration lookup.'), at: Date.now(),
+          })
+        }));
+      }).finally(() => {
+        durationEnrichmentInFlightRef.current.delete(newVideoId);
+      });
+    }
 
     addToast(`Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] straight to the queue!`, 'success');
     return true;
@@ -1528,73 +2408,96 @@ function YediHubAppContent() {
     }
   };
   const handlePlayNow = (video) => {
+    const previousPlaying = (videosRef.current || videos).find((item) => item.status === 'playing' && String(item.id) !== String(video.id));
+    if (previousPlaying) recordActivity('track_skipped', previousPlaying, { actor: twitchAuth.username, source: 'play-now' });
+    const alreadyPlaying = (videosRef.current || videos).some((item) => item.status === 'playing' && String(item.id) === String(video.id));
+    if (!alreadyPlaying) recordActivity('play_started', video, { actor: twitchAuth.username, source: 'dashboard' });
     exitTikTokFullscreenBeforeTrackChange();
-    // Set current active playing to watched, set selected to playing
-    videos.forEach((v) => {
-      if (v.status === 'playing') {
-        syncUpdateVideo(v.id, { status: 'watched', watchedAt: 'Just now' });
+    const latestVideos = videosRef.current || videos;
+    const now = Date.now();
+    const updatesById = new Map();
+
+    latestVideos.forEach((item) => {
+      if (item.status === 'playing' && String(item.id) !== String(video.id)) {
+        updatesById.set(String(item.id), {
+          status: 'watched',
+          watchedAt: new Date(now).toISOString(),
+          playedAt: now,
+          nextTrackOverrideId: null,
+        });
       }
     });
-
-    syncUpdateVideo(video.id, { status: 'playing', pinned: false });
-    setSimProgress(0);
-    addToast(`Now Playing: ${video.title.slice(0, 32)}...`, 'info');
-  };
-
-  const handleSkipNext = () => {
-    exitTikTokFullscreenBeforeTrackChange();
-    const outgoing = currentVideo;
-    if (!outgoing) return;
-
-    // Pick the next item first, then change every local status in a single state update.
-    // Updating the current and next Firestore documents separately caused transient snapshots
-    // with zero/two active players; TikTok iframes could then be torn down mid-navigation.
-    const nextOne = videos
-      .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
-      .sort(compareQueueOrder)[0] || null;
-    const updatesById = new Map();
-    videos.filter((video) => video.status === 'playing').forEach((video) => {
-      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now' });
+    updatesById.set(String(video.id), {
+      status: 'playing',
+      pinned: false,
+      playedAt: now + 1,
+      nextTrackOverrideId: null,
     });
-    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now' });
-    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false });
 
-    setVideos((previous) => previous.map((video) => {
-      const updates = updatesById.get(video.id);
-      return updates ? { ...video, ...updates } : video;
-    }));
+    const nextVideos = latestVideos.map((item) => {
+      const updates = updatesById.get(String(item.id));
+      return updates ? { ...item, ...updates } : item;
+    });
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextVideos.find((item) => String(item.id) === String(video.id)) || null;
     setSimProgress(0);
 
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updatesById.forEach((updates, videoId) => {
-        batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId), updates);
+      updatesById.forEach((updates, id) => {
+        const item = latestVideos.find((entry) => String(entry.id) === id) || { id };
+        batch.set(
+          doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id),
+          { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
+          { merge: true }
+        );
       });
-      batch.commit().catch(async (error) => {
-        // In case a locally-created document is missing in Firestore, fall back to merge writes.
-        console.warn('Atomic queue advance failed; retrying as merge writes.', error);
-        try {
-          await Promise.all(Array.from(updatesById.entries()).map(([videoId, updates]) => {
-            const item = videos.find((video) => video.id === videoId) || { id: videoId };
-            return setDoc(
-              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId),
-              { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
-              { merge: true }
-            );
-          }));
-        } catch (fallbackError) {
-          console.warn('Queue advance could not sync to Firestore; the local transition remains active.', fallbackError);
-          setCloudSynced(false);
-          setSyncStatusText('Queue advance saved locally — cloud sync failed');
-        }
+      batch.commit().catch((error) => {
+        console.warn('Play-now transition could not sync to Firestore.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Playback changed locally — cloud sync failed');
+      });
+    }
+    addToast(`Now Playing: ${String(video.title || 'video').slice(0, 32)}...`, 'info');
+  };
+
+  const handleSkipNext = (reason = 'skipped') => {
+    exitTikTokFullscreenBeforeTrackChange();
+    const latestVideos = videosRef.current || videos;
+    const outgoing = currentVideoRef.current ||
+      latestVideos.find((video) => video.status === 'playing') ||
+      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
+      null;
+    if (!outgoing) return;
+
+    if (reason === 'completed') recordActivity('playback_completed', outgoing, { source: 'player-ended' });
+    else recordActivity('track_skipped', outgoing, { actor: twitchAuth.username, source: 'dashboard' });
+
+    const transition = buildNextTrackTransition(latestVideos, outgoing, compareQueueOrder);
+    const { updatesById, nextVideos, nextOne } = transition;
+    if (nextOne) recordActivity('play_started', nextOne, { actor: twitchAuth.username, source: reason === 'completed' ? 'auto-next' : 'next-track' });
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextOne
+      ? nextVideos.find((video) => String(video.id) === String(nextOne.id)) || null
+      : null;
+    setSimProgress(0);
+
+    if (db && firebaseUser) {
+      const batch = writeBatch(db);
+      buildQueueSyncWrites(updatesById, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
+        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
+      });
+      batch.commit().catch((error) => {
+        console.warn('Next-track transition could not sync to Firestore.', error);
+        setCloudSynced(false);
+        setSyncStatusText('Next video changed locally — cloud sync failed');
       });
     }
 
-    if (nextOne) {
-      addToast(`Skipped! Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
-    } else {
-      addToast('Reached end of queue.', 'info');
-    }
+    if (nextOne) addToast(`Now playing: ${String(nextOne.title || 'video').slice(0, 32)}...`, 'info');
+    else addToast('Reached end of queue.', 'info');
   };
 
   // Moderator/broadcaster volume controls use each platform's supported embed API.
@@ -1612,11 +2515,22 @@ function YediHubAppContent() {
       if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
       else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
       else if (volumeCommand.action === 'set') next = volumeCommand.value;
-      else if (volumeCommand.action === 'mute') { player.mute(); addToast('YouTube player muted by staff command.', 'info'); return; }
-      else if (volumeCommand.action === 'unmute') { player.unMute(); addToast('YouTube player unmuted by staff command.', 'info'); return; }
+      else if (volumeCommand.action === 'mute') {
+        player.mute();
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
+        addToast('YouTube player muted by staff command.', 'info');
+        return;
+      }
+      else if (volumeCommand.action === 'unmute') {
+        player.unMute();
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
+        addToast('YouTube player unmuted by staff command.', 'info');
+        return;
+      }
       player.setVolume(next);
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
+      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
       addToast(`YouTube volume set to ${next}%.`, 'success');
       return;
     }
@@ -1624,13 +2538,16 @@ function YediHubAppContent() {
     if (currentVideo?.platform === 'tiktok') {
       const iframeWindow = tiktokIframeRef.current?.contentWindow;
       if (!iframeWindow) { addToast('TikTok player is not ready for volume commands yet.', 'warning'); return; }
-      if (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100) {
-        addToast('TikTok only exposes mute/unmute to remote commands. Use its in-player volume slider for exact levels.', 'info');
+      if (volumeCommand.action === 'up' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100)) {
+        addToast('TikTok does not allow exact volume changes from chat commands. Use the volume control inside the TikTok player; !mute, !unmute, !volume 0 and !volume 100 still work.', 'info');
         return;
       }
-      const shouldMute = volumeCommand.action === 'mute' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
+      const shouldMute = volumeCommand.action === 'mute' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
+      tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: shouldMute ? 'muted' : 'unmuted' };
+      tiktokAudioStateRef.current = { requestId: currentVideo.id, muted: shouldMute };
+      updatePlaybackIntent(currentVideo.id, { muted: shouldMute }, 'tiktok');
       const messageType = shouldMute ? 'mute' : 'unMute';
-      iframeWindow.postMessage({ type: messageType, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+      postTikTokPlayerCommand(iframeWindow, messageType, null);
       addToast(shouldMute ? 'TikTok audio muted by staff command.' : 'TikTok audio unmuted by staff command. Use the in-player slider for incremental volume changes.', 'info');
       return;
     }
@@ -1645,46 +2562,143 @@ function YediHubAppContent() {
 
   const handlePreviousTrack = () => {
     exitTikTokFullscreenBeforeTrackChange();
-    const outgoing = currentVideoRef.current;
+    const latestVideos = videosRef.current || videos;
+    const outgoing = currentVideoRef.current ||
+      latestVideos.find((video) => video.status === 'playing') ||
+      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
+      null;
     if (!outgoing) return;
-    const previouslyPlayed = videos
-      .filter((video) => video.status === 'watched' && video.id !== outgoing.id)
-      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))[0];
+
+    const transition = buildPreviousTrackTransition(latestVideos, outgoing);
+    const { previouslyPlayed, updates, nextVideos } = transition;
+    if (previouslyPlayed) recordActivity('track_replayed', previouslyPlayed, { actor: twitchAuth.username, source: 'dashboard' });
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
     }
-    const updates = new Map();
-    updates.set(outgoing.id, { status: 'queue', queueOrder: getNextQueueOrder() });
-    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false });
-    setVideos((previous) => previous.map((video) => {
-      const change = updates.get(video.id);
-      return change ? { ...video, ...change } : video;
-    }));
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
+    currentVideoRef.current = nextVideos.find((video) => String(video.id) === String(previouslyPlayed.id)) || null;
     setSimProgress(0);
+
     if (db && firebaseUser) {
       const batch = writeBatch(db);
-      updates.forEach((change, id) => batch.set(
-        doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(id)),
-        change, { merge: true }
-      ));
+      buildQueueSyncWrites(updates, latestVideos, normalizeRoomName(channelRoom)).forEach(({ id, payload }) => {
+        batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id), payload, { merge: true });
+      });
       batch.commit().catch((error) => {
         console.warn('Previous-track transition could not sync to Firestore.', error);
         setCloudSynced(false);
         setSyncStatusText('Previous track changed locally — cloud sync failed');
       });
     }
+    addToast(`Previous: ${String(previouslyPlayed.title || 'video').slice(0, 32)}...`, 'info');
   };
 
   // Player and bridge callbacks always use current handlers and queue state.
-  handleSkipNextRef.current = handleSkipNext;  handleSkipNextRef.current = handleSkipNext;
+  handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
-    if (!currentVideo || currentVideo.id !== videoId) return;
-    if (streamSettings.autoPlayNext) {
-      handleSkipNextRef.current?.();
-    }
+    const playing = currentVideoRef.current || currentVideo;
+    if (!playing || String(playing.id) !== String(videoId)) return;
+    if (streamSettings.autoPlayNext) handleSkipNextRef.current?.('completed');
+    else recordActivity('playback_completed', playing, { source: 'player-ended' });
   };
+
+  const togglePlaybackFromKeyboard = () => {
+    const video = currentVideoRef.current || currentVideo;
+    if (!video) return;
+    if (video.platform === 'youtube') {
+      const player = youtubePlayerRef.current;
+      if (!player || typeof player.getPlayerState !== 'function') {
+        addToast('YouTube player is not ready for keyboard controls yet.', 'warning');
+        return;
+      }
+      const state = Number(player.getPlayerState());
+      if (state === 1 || state === 3) {
+        updatePlaybackIntent(video.id, { paused: true });
+        keyboardPausedRef.current = { videoId: String(video.id), paused: true };
+        player.pauseVideo?.();
+      } else {
+        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
+        updatePlaybackIntent(video.id, { paused: false });
+        keyboardPausedRef.current = { videoId: String(video.id), paused: false };
+        player.playVideo?.();
+      }
+      return;
+    }
+    if (video.platform === 'tiktok') {
+      const iframeWindow = tiktokIframeRef.current?.contentWindow;
+      if (!iframeWindow) {
+        addToast('TikTok player is not ready for keyboard controls yet.', 'warning');
+        return;
+      }
+      const sameVideo = keyboardPausedRef.current.videoId === String(video.id);
+      const shouldPause = sameVideo ? !keyboardPausedRef.current.paused : true;
+      keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
+      if (shouldPause) {
+        updatePlaybackIntent(video.id, { paused: true });
+      } else {
+        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
+        updatePlaybackIntent(video.id, { paused: false });
+      }
+      postTikTokPlayerCommand(iframeWindow, shouldPause ? 'pause' : 'play', null);
+      return;
+    }
+    addToast('This player does not expose remote play/pause controls. Use its in-player controls.', 'info');
+  };
+
+  const toggleMuteFromKeyboard = () => {
+    const video = currentVideoRef.current || currentVideo;
+    if (!video) return;
+    if (video.platform === 'youtube') {
+      const player = youtubePlayerRef.current;
+      const isMuted = typeof player?.isMuted === 'function'
+        ? player.isMuted()
+        : Boolean(youtubePlaybackInfoRef.current.muted);
+      handleVolumeCommandRef.current?.({ action: isMuted ? 'unmute' : 'mute' }, 'streamer');
+      return;
+    }
+    if (video.platform === 'tiktok') {
+      const actualAudioState = tiktokAudioStateRef.current.requestId === String(video.id)
+        ? tiktokAudioStateRef.current.muted
+        : null;
+      const muted = typeof actualAudioState === 'boolean'
+        ? actualAudioState
+        : tiktokMutePreferenceRef.current.requestId === String(video.id) &&
+          tiktokMutePreferenceRef.current.preference === 'muted';
+      handleVolumeCommandRef.current?.({ action: muted ? 'unmute' : 'mute' }, 'streamer');
+      return;
+    }
+    addToast('This player does not expose a remote mute control. Use its in-player controls.', 'info');
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.isContentEditable ||
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      );
+      if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen) return;
+      const key = String(event.key || '').toLowerCase();
+      if (event.code === 'Space' || key === ' ') {
+        event.preventDefault();
+        if (!event.repeat) togglePlaybackFromKeyboard();
+      } else if (key === 'm') {
+        if (!event.repeat) toggleMuteFromKeyboard();
+      } else if (isStaff && (key === 'arrowright' || key === 'n')) {
+        event.preventDefault();
+        if (!event.repeat) handleSkipNextRef.current?.();
+      } else if (isStaff && (key === 'arrowleft' || key === 'p')) {
+        event.preventDefault();
+        if (!event.repeat) handlePreviousTrack();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, topMenuOpen]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -1706,7 +2720,7 @@ function YediHubAppContent() {
     const postCommand = (func, args = []) => {
       if (cancelled) return;
       try {
-        playerWindow.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
+        postYouTubePlayerCommand(playerWindow, func, args);
       } catch (error) {
         console.debug('YouTube command could not be sent.', error);
       }
@@ -1715,6 +2729,8 @@ function YediHubAppContent() {
       getCurrentTime: () => Number(youtubePlaybackInfoRef.current.currentTime) || 0,
       getDuration: () => Number(youtubePlaybackInfoRef.current.duration) || 0,
       getVolume: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.volume)) ? Number(youtubePlaybackInfoRef.current.volume) : 100,
+      seekTo: (seconds, allowSeekAhead = true) => postCommand('seekTo', [Math.max(0, Number(seconds) || 0), Boolean(allowSeekAhead)]),
+      getPlayerState: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.playerState)) ? Number(youtubePlaybackInfoRef.current.playerState) : -1,
       setVolume: (value) => postCommand('setVolume', [Math.max(0, Math.min(100, Number(value) || 0))]),
       mute: () => postCommand('mute'),
       unMute: () => postCommand('unMute'),
@@ -1734,7 +2750,19 @@ function YediHubAppContent() {
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
-      postCommand('playVideo');
+      const intent = getPlaybackIntentForVideo(video.id);
+      const pending = pendingPlaybackRestoreRef.current;
+      const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
+      const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
+        ? pending.currentTime
+        : known;
+      if (intent.paused) postCommand('pauseVideo');
+      if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
+        postCommand('seekTo', [restoreSeconds, true]);
+      }
+      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
+      if (intent.muted === true) postCommand('mute');
+      else if (intent.muted === false) postCommand('unMute');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -1751,14 +2779,46 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        if (typeof info.muted === 'boolean') {
+          const guard = playbackRestoreGuardRef.current;
+          const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
+          const intent = getPlaybackIntentForVideo(video.id);
+          if (!restoringMute && intent.muted !== info.muted) updatePlaybackIntent(video.id, { muted: info.muted });
+        }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
-        if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
-          setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
+        if (Number.isFinite(now) && now >= 0 && currentVideoRef.current?.id === video.id) {
+          recordPlaybackPosition(video.id, now);
+        }
+        if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
+          playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+          reportPlayerDuration(video.id, duration);
+          if (Number.isFinite(now)) setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
         }
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
+        const videoId = String(video.id);
+        const intent = getPlaybackIntentForVideo(videoId);
+        const restoreGuard = playbackRestoreGuardRef.current;
+        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
+          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
+        if (stateFromEvent === 2) {
+          // Providers can report a synthetic pause when the browser backgrounds an iframe.
+          // Do not persist that as the viewer's deliberate pause preference.
+          if (document.visibilityState !== 'hidden') {
+            updatePlaybackIntent(videoId, { paused: true });
+            keyboardPausedRef.current = { videoId, paused: true };
+          }
+        } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
+          // Consume this one transient resume event only. Do not keep rejecting
+          // explicit Play clicks for the remainder of a long visibility guard.
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+          postCommand('pauseVideo');
+        } else if (stateFromEvent === 1) {
+          updatePlaybackIntent(videoId, { paused: false });
+          keyboardPausedRef.current = { videoId, paused: false };
+        }
         if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
         if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
           endedHandled = true;
@@ -1787,17 +2847,45 @@ function YediHubAppContent() {
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
-  // window reference, listener, and startup timeout; stale messages from the previous iframe
+  // window reference and listener. Its first muted report can be an autoplay/browser state,
+  // not a user's preference, so do not persist it until startup unmute is acknowledged.
   useEffect(() => {
     const video = currentVideo;
     if (!video || video.platform !== 'tiktok' || !video.videoId) return undefined;
     let cancelled = false;
+    let startupUnmuteAttempts = 0;
+    let startupAudioConfirmed = false;
+    let startupMuteGuardUntil = 0;
     const retryTimers = [];
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
-    const sendCommand = (type, targetWindow = getWindow()) => {
+    const initialIntent = getPlaybackIntentForVideo(video.id, 'tiktok');
+    startupAudioConfirmed = initialIntent.muted === true;
+    tiktokMutePreferenceRef.current = {
+      requestId: video.id,
+      preference: initialIntent.muted === true ? 'muted' : initialIntent.muted === false ? 'unmuted' : 'auto',
+    };
+    tiktokAudioStateRef.current = {
+      requestId: video.id,
+      muted: typeof initialIntent.muted === 'boolean' ? initialIntent.muted : null,
+    };
+    const sendCommand = (type, targetWindow = getWindow(), value = null) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
-        targetWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+        postTikTokPlayerCommand(targetWindow, type, value);
       }
+    };
+    const requestStartupUnmute = () => {
+      const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
+      const preference = tiktokMutePreferenceRef.current.requestId === video.id
+        ? tiktokMutePreferenceRef.current.preference
+        : 'auto';
+      if (!shouldAutoUnmuteTikTok({ mutedIntent: intent.muted, mutePreference: preference })) return false;
+      if (intent.paused || document.visibilityState === 'hidden' || startupUnmuteAttempts >= 3) return false;
+      startupUnmuteAttempts += 1;
+      if (!startupAudioConfirmed) startupMuteGuardUntil = Date.now() + 3500;
+      sendCommand('unMute');
+      // Record intended audio separately from transient onMute autoplay reports.
+      updatePlaybackIntent(video.id, { muted: false }, 'tiktok');
+      return true;
     };
     const handleTikTokMessage = (event) => {
       if (event.origin !== 'https://www.tiktok.com' || event.source !== getWindow()) return;
@@ -1805,24 +2893,88 @@ function YediHubAppContent() {
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
-        const playerWindow = getWindow();
-        sendCommand('play', playerWindow);
-        sendCommand('unMute', playerWindow);
-        [250, 800].forEach((delay) => {
-          retryTimers.push(window.setTimeout(() => {
-            if (!cancelled && getWindow() === playerWindow) {
-              sendCommand('unMute', playerWindow);
-              if (delay === 800) sendCommand('play', playerWindow);
-            }
-          }, delay));
+        // A recreated iframe must restore playback position and audio preference.
+        const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
+        const pending = pendingPlaybackRestoreRef.current;
+        const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
+        const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
+          ? pending.currentTime
+          : known;
+        const deferPlaybackUntilVisible = document.visibilityState === 'hidden';
+        if (intent.paused || deferPlaybackUntilVisible) sendCommand('pause');
+        if (restoreSeconds > 0.5) sendCommand('seekTo', tiktokIframeRef.current?.contentWindow, restoreSeconds);
+        if (!intent.paused && !deferPlaybackUntilVisible) sendCommand('play');
+        if (intent.muted === true) {
+          startupAudioConfirmed = true;
+          startupMuteGuardUntil = 0;
+          tiktokAudioStateRef.current = { requestId: video.id, muted: true };
+          sendCommand('mute');
+        } else {
+          requestStartupUnmute();
+          // TikTok can finish constructing its media element after onPlayerReady.
+          // Retry unMute briefly after startup without changing the iframe URL.
+          [350, 1100].forEach((delay) => {
+            retryTimers.push(window.setTimeout(() => {
+              if (!cancelled && !startupAudioConfirmed) requestStartupUnmute();
+            }, delay));
+          });
+        }
+      } else if (data.type === 'onMute' && typeof data.value === 'boolean') {
+        const explicitPreference = tiktokMutePreferenceRef.current.requestId === video.id
+          ? tiktokMutePreferenceRef.current.preference
+          : 'auto';
+        const ignoreStartupMute = shouldIgnoreTikTokStartupMute({
+          muted: data.value,
+          startupMuteGuardActive: !startupAudioConfirmed &&
+            (startupMuteGuardUntil === 0 || Date.now() < startupMuteGuardUntil),
+          startupAudioConfirmed,
+          explicitMutePreference: explicitPreference,
         });
+        tiktokAudioStateRef.current = { requestId: video.id, muted: data.value };
+        if (data.value === false) {
+          startupAudioConfirmed = true;
+          startupMuteGuardUntil = 0;
+        }
+        if (ignoreStartupMute) return;
+        updatePlaybackIntent(video.id, { muted: data.value }, 'tiktok');
+        tiktokMutePreferenceRef.current = {
+          requestId: video.id,
+          preference: data.value ? 'muted' : 'unmuted',
+        };
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
-        if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        if (currentVideoRef.current?.id === video.id) recordPlaybackPosition(video.id, currentTime);
+        if (duration > 0) {
+          if (currentVideoRef.current?.id === video.id) {
+            playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
+            reportPlayerDuration(video.id, duration);
+          }
+          setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        }
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        if (state === 1) sendCommand('unMute');
+        const videoId = String(video.id);
+        const intent = getPlaybackIntentForVideo(videoId, 'tiktok');
+        const restoreGuard = playbackRestoreGuardRef.current;
+        const suppressUnexpectedResume = state === 1 && intent.paused &&
+          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
+        if (state === 2) {
+          if (document.visibilityState !== 'hidden') {
+            updatePlaybackIntent(videoId, { paused: true }, 'tiktok');
+            keyboardPausedRef.current = { videoId, paused: true };
+          }
+        } else if (state === 1 && suppressUnexpectedResume) {
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+          sendCommand('pause');
+        } else if (state === 1) {
+          updatePlaybackIntent(videoId, { paused: false }, 'tiktok');
+          keyboardPausedRef.current = { videoId, paused: false };
+        }
+        // Retry host unmute once playback actually starts; only an explicit mute choice wins.
+        if (state === 1 && !suppressUnexpectedResume && !startupAudioConfirmed) {
+          requestStartupUnmute();
+        }
         if (state === 0) handleMediaEndedRef.current?.(video.id);
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
@@ -1862,11 +3014,12 @@ function YediHubAppContent() {
   };
 
   const handleRequeue = (video) => {
+    const requestedAt = Date.now();
     syncUpdateVideo(video.id, {
       status: 'queue',
       queueOrder: getNextQueueOrder(),
-      timestamp: Date.now(),
-      addedAt: 'Re-queued'
+      timestamp: requestedAt,
+      addedAt: new Date(requestedAt).toISOString()
     });
     addToast(`Re-added "${video.title.slice(0, 24)}..." to active queue.`, 'info');
   };
@@ -1884,7 +3037,7 @@ function YediHubAppContent() {
   };
 
   const handleCategoryChange = (videoId, newCategory) => {
-    syncUpdateVideo(videoId, { category: newCategory });
+    syncUpdateVideo(videoId, { category: newCategory, categoryManuallySet: true, mediaType: newCategory === 'Music' ? 'Music' : 'Non-Music' });
     addToast(`Category updated to "${newCategory}"`, 'success');
   };
 
@@ -1917,6 +3070,7 @@ function YediHubAppContent() {
     reorderQueueAfterVoteRef.current = true;
     setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
     await syncIncrementUpvote(videoId, voterLogin);
+    recordActivity('vote_cast', target, { actor: voterLogin, source: 'twitch-chat-or-dashboard' });
     addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
     return { ok: true, video: target };
   };
@@ -1942,7 +3096,7 @@ function YediHubAppContent() {
         lastChatReplyAtRef.current = Date.now();
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
-          console.warn('Yedi Hub could not reply in Twitch chat:', result.error || response.statusText);
+          console.warn('whale cum could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
             addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
@@ -1959,14 +3113,16 @@ function YediHubAppContent() {
     const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const target = queue[position - 1];
     if (!target) {
-      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !position to see your requests.`);
+      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !when to see your requests.`);
       return;
     }
     handleUpvote(target.id, voterLogin).then((result) => {
       if (!result?.ok && result?.reason === 'own-request') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you cannot upvote your own request.`);
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Can't upvote your own request.`);
       } else if (!result?.ok && result?.reason === 'already-voted') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you already voted for that video. You can upvote different videos.`);
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Already voted for that video.`);
+      } else if (result?.ok) {
+        sendTwitchChatReply('@' + normalizeTwitchLogin(voterLogin) + ' +1 vote: ' + String(result.video?.title || 'video').slice(0, 38) + '.');
       }
     });
   };
@@ -1989,8 +3145,13 @@ function YediHubAppContent() {
     if (playing && owned(playing)) messages.push('one request is playing now');
 
     let secondsAhead = 0;
+    let hasFallbackBeforeQueue = false;
     if (playing) {
-      const duration = estimateVideoDurationSeconds(playing);
+      const knownPlaybackDuration = playbackDurationRef.current.videoId === String(playing.id)
+        ? Number(playbackDurationRef.current.seconds) : 0;
+      const durationEstimate = getDurationEstimate(playing);
+      const duration = knownPlaybackDuration > 0 ? knownPlaybackDuration : durationEstimate.seconds;
+      if (!(knownPlaybackDuration > 0) && durationEstimate.estimated) hasFallbackBeforeQueue = true;
       const progress = currentVideo?.id === playing.id && (playing.platform === 'youtube' || playing.platform === 'tiktok')
         ? Math.max(0, Math.min(100, Number(simProgress) || 0))
         : 0;
@@ -1998,23 +3159,25 @@ function YediHubAppContent() {
     }
     let queuedDurationBefore = 0;
     const etaById = new Map();
-    queued.forEach((video, index) => {
+    const etaFallbackById = new Map();
+    queued.forEach((video) => {
       etaById.set(video.id, secondsAhead + queuedDurationBefore);
-      queuedDurationBefore += estimateVideoDurationSeconds(video);
+      etaFallbackById.set(video.id, hasFallbackBeforeQueue);
+      const estimate = getDurationEstimate(video);
+      queuedDurationBefore += estimate.seconds;
+      if (estimate.estimated) hasFallbackBeforeQueue = true;
     });
 
     myQueued.forEach(({ video, position }) => {
-      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (est. ${formatQueueWait(etaById.get(video.id))})`);
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))})`);
     });
 
     if (!messages.length) {
-      sendTwitchChatReply(`@${requester} I couldn't find an upcoming request from you. Submit with !assr <URL>, then use !position again.`);
+      sendTwitchChatReply(`@${requester} No upcoming requests. Use !assr <URL/title>.`);
       return;
     }
     const visibleItems = messages.slice(0, 3);
-    const extraCount = Math.max(0, messages.length - visibleItems.length);
-    const extraNote = extraCount > 0 ? `; plus ${extraCount} more status item${extraCount === 1 ? '' : 's'}` : '';
-    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}${extraNote}. Waits are estimates and votes can change positions.`);
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}.`);
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
@@ -2025,12 +3188,12 @@ function YediHubAppContent() {
       .filter((video) => video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === requester)
       .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
     if (!ownedWaiting.length) {
-      sendTwitchChatReply(`@${requester} you have no waiting requests to remove. Playing/already-played videos cannot be removed with !remove.`);
+      sendTwitchChatReply(`@${requester} No waiting request to remove.`);
       return;
     }
     const target = ownedWaiting[0];
     void syncDeleteVideo(target.id);
-    sendTwitchChatReply(`@${requester} removed "${String(target.title || 'your request').slice(0, 70)}" from the queue.`);
+    sendTwitchChatReply(`@${requester} Removed your latest waiting request.`);
   };
   handleRemoveOwnRequestRef.current = handleRemoveOwnRequest;
 
@@ -2038,12 +3201,12 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(requesterLogin);
     const playing = videos.find((video) => video.status === 'playing') || null;
     const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const top = queued.slice(0, 5).map((video, index) =>
-      `#${index + 1} ${String(video.title || 'Untitled').slice(0, 35)} (@${normalizeTwitchLogin(video.requestedBy) || 'viewer'}, +${Number(video.upvotes) || 0})`
+    const top = queued.slice(0, 3).map((video, index) =>
+      '#' + (index + 1) + ' ' + String(video.title || 'Untitled').slice(0, 26)
     );
     const myCount = queued.filter((video) => normalizeTwitchLogin(video.requestedBy) === requester).length;
-    const playingText = playing ? `Now playing: "${String(playing.title || 'Untitled').slice(0, 45)}".` : 'Nothing is playing right now.';
-    sendTwitchChatReply(`${playingText} Queue: ${queued.length} waiting; ${myCount} of yours waiting. ${top.length ? 'Next up: ' + top.join(' | ') + (queued.length > top.length ? ` | +${queued.length - top.length} more` : '') : 'The waiting queue is empty.'}`);
+    const playingText = playing ? 'Now: "' + String(playing.title || 'Untitled').slice(0, 32) + '"' : 'Nothing playing';
+    sendTwitchChatReply('@' + requester + ' ' + playingText + ' | ' + queued.length + ' waiting (' + myCount + ' yours). Next: ' + (top.length ? top.join(', ') : 'empty') + '.');
   };
   handleQueueSummaryRef.current = handleQueueSummary;
 
@@ -2102,6 +3265,58 @@ function YediHubAppContent() {
     }
   };
 
+  const handleDropReorder = (movingId, targetId) => {
+    if (!isStaff || activeTab !== 'queue' || !movingId || !targetId || String(movingId) === String(targetId)) return;
+    const fullQueue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
+    const fromIndex = fullQueue.findIndex((video) => String(video.id) === String(movingId));
+    const targetIndexBeforeRemoval = fullQueue.findIndex((video) => String(video.id) === String(targetId));
+    if (fromIndex < 0 || targetIndexBeforeRemoval < 0 || fromIndex === targetIndexBeforeRemoval) return;
+
+    const [movingVideo] = fullQueue.splice(fromIndex, 1);
+    const targetIndex = fullQueue.findIndex((video) => String(video.id) === String(targetId));
+    if (targetIndex < 0) return;
+    fullQueue.splice(targetIndex, 0, movingVideo);
+
+    const updates = fullQueue.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
+    const orderById = new Map(updates.map((video) => [String(video.id), video.queueOrder]));
+    const nextVideos = videos.map((video) => {
+      const nextOrder = orderById.get(String(video.id));
+      return nextOrder === undefined ? video : { ...video, queueOrder: nextOrder };
+    });
+    queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
+    setSortBy('priority');
+    setVideos(nextVideos);
+
+    if (db && firebaseUser) {
+      void (async () => {
+        const batch = writeBatch(db);
+        updates.forEach((video) => {
+          batch.set(
+            doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+            { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+            { merge: true }
+          );
+        });
+        try {
+          await batch.commit();
+        } catch (error) {
+          console.warn('Drag-and-drop reorder batch failed; attempting merge writes.', error);
+          try {
+            await Promise.all(updates.map((video) => setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            )));
+          } catch (fallbackError) {
+            console.warn('Drag-and-drop queue order could not sync to Firebase.', fallbackError);
+            setCloudSynced(false);
+            setSyncStatusText('Queue order saved locally — cloud update failed');
+          }
+        }
+      })();
+    }
+  };
+
   // Room switching is disabled: this site is dedicated to Twitch channel 2o3a.
   const handleSwitchRoom = (e) => { e?.preventDefault?.(); setChannelRoom(PRIVATE_CHANNEL); setRoomInput(PRIVATE_CHANNEL); };
 
@@ -2113,7 +3328,7 @@ function YediHubAppContent() {
     return (
       <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 text-center shadow-2xl">
-          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">WHALE CUM</h1>
           <p className="mt-3 text-sm text-slate-300">Verifying your private Twitch session…</p>
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-purple-500 to-cyan-400" /></div>
         </div>
@@ -2126,7 +3341,7 @@ function YediHubAppContent() {
         <div className="w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 sm:p-10 text-center shadow-2xl">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-4xl">🧼</div>
           <div className="text-[10px] font-black uppercase tracking-[0.35em] text-amber-200">Private streamer deck</div>
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">Yedi Hub</h1>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">WHALE CUM</h1>
           <p className="mt-3 text-sm leading-6 text-slate-300">A private request player for <strong className="text-purple-200">twitch.tv/2o3a</strong>. Sign in using one of the two approved Twitch accounts.</p>
           {loginError === 'unauthorized' ? <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">This Twitch account is not on the access list. No site access was granted.</div> : null}
           {loginError && loginError !== 'unauthorized' ? <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-xs text-amber-100">Twitch login returned an error. Please try again.</div> : null}
@@ -2144,79 +3359,6 @@ function YediHubAppContent() {
 
 
   // ==========================================
-  // RENDER OBS OVERLAY HUD (POP-OUT MODE)
-  // ==========================================
-  if (showObsOverlay) {
-    return (
-      <div className="gachi-theme gachi-overlay fixed inset-0 bg-[#090a0f] text-white p-6 flex flex-col justify-between font-sans select-none overflow-hidden border-4 border-purple-500/30">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 bg-[#18181b]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 shadow-lg">
-            <Radio className="w-4 h-4 text-purple-400 animate-pulse" />
-            <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
-              ♂ GACHI ARENA • OBS DECK • {channelRoom ? `twitch.tv/${channelRoom}` : 'CHANNEL NOT SET'} ♂
-            </span>
-          </div>
-          <button
-            onClick={() => setShowObsOverlay(false)}
-            className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-all"
-          >
-            Exit Overlay View
-          </button>
-        </div>
-
-        {/* Big Now Playing Banner for OBS */}
-        {currentVideo ? (
-          <div className="max-w-2xl bg-[#121622]/95 border border-purple-500/40 rounded-2xl p-5 shadow-2xl backdrop-blur-md flex items-center gap-5">
-            <img
-              src={currentVideo.thumbnail}
-              alt=""
-              className="w-24 h-24 rounded-xl object-cover border border-white/10 shrink-0"
-            />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-600 text-white">
-                  Now Playing
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
-                  {currentVideo.category}
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                  {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
-                </span>
-              </div>
-              <h2 className="text-lg font-black text-white truncate">{currentVideo.title}</h2>
-              <p className="text-xs text-purple-200">
-                Requested by <strong className="text-white">@{currentVideo.requestedBy}</strong> • 🔥 {currentVideo.upvotes || 0} Hypes
-              </p>
-              {/* Progress bar */}
-              <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mt-2">
-                <div
-                  className="bg-gradient-to-r from-purple-500 to-cyan-400 h-full transition-all duration-300"
-                  style={{ width: `${simProgress}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-slate-400 text-sm">No active video in stream deck.</div>
-        )}
-
-        {/* Next Up Ticker */}
-        <div className="bg-[#121622]/80 backdrop-blur-md px-4 py-2.5 rounded-xl border border-white/5 flex items-center gap-3 max-w-xl">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">Next Up:</span>
-          {counts.queue > 0 ? (
-            <span className="text-xs text-slate-200 truncate">
-              {videos.filter((v) => v.status === 'queue').sort(compareQueueOrder)[0]?.title || 'Loading next item...'}
-            </span>
-          ) : (
-            <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ==========================================
   // MAIN APP INTERFACE
   // ==========================================
   return (
@@ -2225,22 +3367,22 @@ function YediHubAppContent() {
           HEADER: BROADCASTER IDENTITY & SYNC STATUS
           ========================================== */}
       <header className="sticky top-0 z-40 bg-[#0e121a]/95 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-2.5">
-        <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
+        <div className="gachi-topbar-inner w-full max-w-none mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
-          <div className="flex items-center gap-3">
+          <div className="gachi-topbar-brand flex min-w-0 items-center gap-3">
             <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
               <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
-                  Yedi Hub
+                  WHALE CUM
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  🇸🇪 fitta javla fih
+                  ♂ fitta javla fih
                 </span>
               </div>
 
@@ -2253,139 +3395,176 @@ function YediHubAppContent() {
           </div>
 
           {/* Sync & Mode Badges */}
-          <div className="hidden xl:flex items-center gap-2.5 bg-[#141926] border border-slate-800 rounded-xl px-3.5 py-1.5 text-xs">
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className="text-slate-300 font-medium">{syncStatusText}</span>
+          <button
+            type="button"
+            onClick={() => setConnectionDetailsExpanded((expanded) => !expanded)}
+            title="Show connection details"
+            aria-label={`Connection details: ${syncStatusText}`}
+            aria-expanded={connectionDetailsExpanded}
+            className={`gachi-topbar-sync flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${syncIndicatorClass}`}
+          >
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400'}`} />
+              <span className="font-semibold whitespace-nowrap">{syncIndicatorLabel}</span>
             </span>
-
             <span className="text-slate-600">|</span>
-
-            <span className="text-slate-400">
+            <span className="whitespace-nowrap text-slate-300">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
-          </div>
+            <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />
+          </button>
 
-          {/* Right Action Tools */}
-          <div className="flex items-center gap-2">
-            {/* Pop-Out OBS Overlay View */}
+
+          {/* All top-bar actions live inside a single compact dropdown. */}
+          <div className="gachi-topbar-menu relative z-50" ref={topMenuRef}>
             <button
-              onClick={() => setShowObsOverlay(true)}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-semibold transition-colors"
-              title="OBS Overlay Browser Capture Deck"
+              type="button"
+              onClick={() => setTopMenuOpen((open) => !open)}
+              aria-expanded={topMenuOpen}
+              aria-haspopup="true"
+              aria-controls="whale-cum-top-menu"
+              className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-gradient-to-r from-[#24112f] to-[#11101a] px-3.5 py-2 text-xs font-black text-white shadow-lg shadow-purple-950/20 transition hover:border-purple-400/60 hover:from-[#351447] hover:to-[#171020]"
             >
-              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
-              <span>OBS Deck</span>
+              <Settings className="h-4 w-4 text-purple-300" />
+              <span>Options</span>
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${topMenuOpen ? 'rotate-180' : ''}`} />
             </button>
-
-            {/* Queue settings: keep the close/open switch one click away for staff. */}
-            {isStaff && (
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold transition-colors"
-                title="Queue settings — close or reopen requests and configure playback"
-              >
-                <Settings className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Settings</span>
-              </button>
+            {topMenuOpen && (
+              <div id="whale-cum-top-menu" className="absolute right-0 top-full z-[60] mt-2 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-purple-500/25 bg-[#0b0a12] p-2 shadow-2xl shadow-black/70 ring-1 ring-white/5">
+                <div className="border-b border-white/10 px-3 pb-2.5 pt-1">
+                  <div className="text-[9px] font-black uppercase tracking-[0.2em] text-purple-300">Arena options</div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-bold text-white">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</span>
+                    <span className="shrink-0 rounded-md border border-purple-400/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-black uppercase text-purple-200">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</span>
+                  </div>
+                </div>
+                {isStaff && (
+                  <button type="button" onClick={() => { setTopMenuOpen(false); setShowSettingsModal(true); }} className="mt-2 flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                    <Settings className="h-4 w-4 text-cyan-300" />
+                    <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Queue access and playback preferences</span></span>
+                  </button>
+                )}
+                <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
+                  <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
+                </button>
+                <div className="my-2 border-t border-white/10" />
+                <div className="rounded-xl px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
+                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : 'RECONNECTING'}</span>
+                  </div>
+                  <button type="button" onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10">
+                    <RefreshCw className="h-3 w-3" /> Restart command bridge
+                  </button>
+                </div>
+                <div className="mt-1 rounded-xl px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />Chat reply bot</span>
+                    <span className={chatBotSession.connected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-rose-200'}>{chatBotSession.loading ? 'CHECKING' : chatBotSession.connected ? 'ONLINE' : 'OFFLINE'}</span>
+                  </div>
+                  <button type="button" onClick={async () => {
+                    setTopMenuOpen(false);
+                    if (!chatBotSession.connected) { window.location.href = '/api/twitch/bot-login'; return; }
+                    try {
+                      await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
+                      setChatBotSession({ loading: false, connected: false, username: '' });
+                      addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
+                    } catch (error) { addToast('Could not disconnect the chat bot. Please try again.', 'warning'); }
+                  }} className={`mt-2 flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold transition ${chatBotSession.connected ? 'border-slate-700 bg-[#171420] text-slate-200 hover:border-rose-400/40 hover:text-rose-200' : 'border-cyan-500/40 bg-cyan-800/60 text-white hover:bg-cyan-700'}`} title={chatBotSession.connected ? 'Disconnect chat reply account @gachibot69' : 'Connect chat reply account @gachibot69'}>
+                    {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
+                    {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
+                  </button>
+                </div>
+                <div className="my-2 border-t border-white/10" />
+                <button type="button" onClick={() => {
+                  setTopMenuOpen(false);
+                  if (!normalizeRoomName(channelRoom)) { addToast('Set a Twitch channel before copying a room link.', 'warning'); return; }
+                  const shareUrl = new URL(window.location.href);
+                  shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
+                  navigator.clipboard.writeText(shareUrl.toString())
+                    .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
+                    .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
+                }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
+                  <Copy className="h-4 w-4 text-purple-300" />
+                  <span className="flex-1">Copy room link <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Share this broadcaster room</span></span>
+                </button>
+              </div>
             )}
-
-            {/* User Profile / Login Modal Trigger */}
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className="flex items-center gap-2 pl-2 pr-3 py-1 rounded-xl bg-[#141926] hover:bg-slate-800 border border-slate-800 transition-colors"
-            >
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white">
-                {twitchAuth.avatarLetter}
-              </div>
-              <div className="text-left hidden sm:block">
-                <div className="text-xs font-bold text-slate-200 leading-none">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</div>
-                <div className="text-[10px] text-purple-400 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</div>
-              </div>
-            </button>
-
-            {/* Twitch IRC bridge controls only — no chat transcript is shown on the site. */}
-            <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${ircConnected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              {ircConnected ? 'Bridge Live' : 'Bridge Reconnecting'}
-            </div>
-            <button
-              onClick={() => connectTwitchIrc(channelRoom)}
-              className="px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-              title="Restart Twitch command bridge"
-            >
-              Restart Bridge
-            </button>
-            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !position are sent by the separate Twitch account gachibot69">
-              <span className={`h-1.5 w-1.5 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-              {chatBotSession.loading ? 'Bot checking' : chatBotSession.connected ? 'Bot Online' : 'Bot Offline'}
-            </div>
-            <button
-              onClick={async () => {
-                if (!chatBotSession.connected) {
-                  window.location.href = '/api/twitch/bot-login';
-                  return;
-                }
-                try {
-                  await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
-                  setChatBotSession({ loading: false, connected: false, username: '' });
-                  addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
-                } catch (error) {
-                  addToast('Could not disconnect the chat bot. Please try again.', 'warning');
-                }
-              }}
-              className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-bold ${chatBotSession.connected ? 'bg-[#141926] hover:bg-slate-800 text-slate-200 border-slate-800' : 'bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500/40'}`}
-              title={chatBotSession.connected ? 'Disconnect the separate chat reply account' : 'Log in with Twitch account gachibot69 to send chat replies'}
-            >
-              {chatBotSession.loading ? 'Checking Bot…' : chatBotSession.connected ? 'Disconnect Bot' : 'Connect @gachibot69'}
-            </button>
-            <button
-              onClick={() => {
-                if (!normalizeRoomName(channelRoom)) {
-                  addToast('Set a Twitch channel before copying a room link.', 'warning');
-                  return;
-                }
-                const shareUrl = new URL(window.location.href);
-                shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
-                navigator.clipboard.writeText(shareUrl.toString())
-                  .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
-                  .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
-              }}
-              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
-              title="Copy link for this broadcaster room"
-            >
-              <Copy className="w-3 h-3" />
-              Room Link
-            </button>
           </div>
         </div>
+
+        {connectionDetailsExpanded && (
+          <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-4">
+            <div className="min-w-0">
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
+              <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : 'Reconnecting / offline'}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
+              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69' : 'Offline · chat replies unavailable'}</div>
+            </div>
+            <div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
+              <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'}</div>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
-      <div className="flex-1 max-w-[1680px] w-full mx-auto flex flex-col lg:flex-row gap-5 p-4 lg:p-6">
-        {/* LEFT COLUMN: ACTIVE MEDIA PLAYER & QUEUE LISTS */}
-        <div className="flex-1 flex flex-col gap-5 min-w-0">
+      <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
+        <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
+        <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
+          <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
+          <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
+          <p className="mt-1 text-xs sm:text-sm font-black uppercase italic tracking-[0.22em] text-slate-100">REAL MEN WATCH REAL CONTENT</p>
+        </div>
+      </section>
+
+      <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5">
+        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
+          <StatsBoard
+            queueStats={queueStats}
+            activityEvents={activityEvents}
+            currentSessionId={activitySessionIdRef.current}
+            statsNow={statsNow}
+            statsExpanded={statsExpanded}
+            onToggle={() => setStatsExpanded((expanded) => !expanded)}
+            onRefreshStats={handleRefreshStats}
+            isStaff={isStaff}
+            activitySyncStatus={activitySyncStatus}
+            activitySyncTone={activitySyncTone}
+            activitySyncError={activitySyncError}
+            canRetryActivitySync={Boolean(twitchAuth.authenticated)}
+            onRetryActivitySync={handleRetryActivitySync}
+            networkOnline={networkOnline}
+          />
+        </aside>
+        <div className="gachi-player-column flex flex-col gap-4 min-w-0">
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
-          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
+          <section className="gachi-panel bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
             {/* Header info strip */}
             <div className="px-4 py-2.5 bg-[#141926] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-wider text-[11px]">
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  MAIN EVENT
-                </span>
-
                 {currentVideo && (
                   <>
-                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
-                      {currentVideo.category}
+                    <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black tracking-wide border ${currentVideo.status === 'playing' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-purple-500/15 border-purple-500/30 text-purple-200'}`}>
+                      {currentVideo.status === 'playing' ? 'NOW PLAYING' : 'READY TO PLAY'}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                      {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
+                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[getVideoCategory(currentVideo)]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
+                      {getVideoCategory(currentVideo)}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${getVideoMediaType(currentVideo) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                      {getVideoMediaType(currentVideo)}
                     </span>
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
@@ -2409,18 +3588,29 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
-                  className={`relative w-full bg-black flex items-center justify-center transition-all ${
-                    currentVideo.platform === 'tiktok'
-                      ? (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[900px]' : 'h-[55vh] min-h-[460px] max-h-[700px]')
-                      : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
+                  className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
+                    isTheatreMode
+                      ? 'h-[75vh] min-h-[580px] max-h-[960px]'
+                      : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
+                  {isVerticalMedia(currentVideo) && (
+                    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
+                      <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
+                      {/* Keep portrait-video letterboxing black/purple instead of blurring bright thumbnail colors behind it. */}
+                      <div className="absolute inset-0 bg-[#05020a]/80 backdrop-blur-sm" />
+                      <div className="gachi-vertical-letterbox absolute inset-0" />
+                    </div>
+                  )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
+                    <div className={isVerticalMedia(currentVideo)
+                      ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
+                      : "absolute inset-1 h-[calc(100%-0.5rem)] w-[calc(100%-0.5rem)] overflow-hidden rounded-sm border border-[#5d277d]"}>
                     <iframe
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=0&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -2436,9 +3626,22 @@ function YediHubAppContent() {
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
-                        send('playVideo');
+                        const pending = pendingPlaybackRestoreRef.current;
+                        const known = playbackPositionRef.current.videoId === String(currentVideo.id) ? playbackPositionRef.current.seconds : 0;
+                        const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
+                          ? pending.currentTime
+                          : known;
+                        const intent = getPlaybackIntentForVideo(currentVideo.id);
+                        if (intent.paused) send('pauseVideo');
+                        if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
+                          send('seekTo', [restoreSeconds, true]);
+                        }
+                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
+                        if (intent.muted === true) send('mute');
+                        else if (intent.muted === false) send('unMute');
                       }}
                     />
+                    </div>
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
                       <iframe
@@ -2446,7 +3649,7 @@ function YediHubAppContent() {
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
-                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        src={tiktokPlayerSrc}
                         title={currentVideo.title}
                         allow="autoplay; encrypted-media; picture-in-picture; web-share"
                         loading="eager"
@@ -2454,15 +3657,6 @@ function YediHubAppContent() {
                         onLoad={() => {
                           if (currentVideoRef.current?.id !== currentVideo.id) return;
                           setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
-                          const sendAudioCommands = () => {
-                            if (currentVideoRef.current?.id !== currentVideo.id) return;
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) return;
-                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                          };
-                          sendAudioCommands();
-                          [180, 600, 1100].forEach((delay) => window.setTimeout(sendAudioCommands, delay));
                         }}
                         onError={() => {
                           if (currentVideoRef.current?.id !== currentVideo.id) return;
@@ -2472,7 +3666,7 @@ function YediHubAppContent() {
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
                           <div className="text-base font-black text-white">TikTok player could not start</div>
-                          <p className="max-w-sm text-sm text-slate-300">Retry the player or open the post directly on TikTok.</p>
+                          <p className="max-w-sm text-sm text-slate-300">Check that the post is public, then retry the embedded player.</p>
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
                               type="button"
@@ -2482,12 +3676,7 @@ function YediHubAppContent() {
                               }}
                               className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
                             >Retry TikTok player</button>
-                            <a
-                              href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700"
-                            >Open on TikTok</a>
+                            
                           </div>
                         </div>
                       )}
@@ -2495,15 +3684,13 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
-                      <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
-                        Open TikTok <ExternalLink className="h-4 w-4" />
-                      </a>
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so whale cum can extract the post ID.</p>
+                      
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
                     <iframe
                       key={`twitch-${currentVideo.videoId}`}
-                      className="w-full h-full border-0"
+                      className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
                       src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
                       title={currentVideo.title}
                       allow="autoplay; fullscreen; picture-in-picture"
@@ -2534,8 +3721,8 @@ function YediHubAppContent() {
                 </div>
 
                 {/* Sub-Player Controls & Fast Stash Deck */}
-                <div className="p-4 sm:p-5 bg-[#141926] flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="min-w-0 space-y-1 flex-1">
+                <div className="gachi-player-footer p-4 sm:p-5 bg-[#141926] flex flex-col gap-4">
+                  <div className="gachi-player-meta w-full min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
                       <h2 className="text-base sm:text-lg font-extrabold text-white truncate">
                         {currentVideo.title}
@@ -2547,7 +3734,7 @@ function YediHubAppContent() {
                         Requester: <strong className="text-purple-300 font-semibold">@{currentVideo.requestedBy}</strong>
                       </span>
                       <span>•</span>
-                      <span>Added {currentVideo.addedAt}</span>
+                      <span title={formatAbsoluteTimestamp(currentVideo.timestamp)}>Requested {formatRelativeTimestamp(currentVideo.timestamp, statsNow)}</span>
                       {currentVideo.note && (
                         <>
                           <span>•</span>
@@ -2558,62 +3745,23 @@ function YediHubAppContent() {
                   </div>
 
                   {/* Player Quick Action Bar */}
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {currentVideo.platform === 'tiktok' && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const frame = tiktokIframeRef.current?.contentWindow;
-                            if (!frame) {
-                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
-                              return;
-                            }
-                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
-                          }}
-                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
-                        >Enable TikTok sound</button>
-                        <a
-                          href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold"
-                        >Open TikTok</a>
-                      </>
-                    )}
-                    {/* Instant Category Tag Override */}
-                    {isStaff && (
-                      <div className="flex items-center gap-1.5 bg-[#0e121a] px-2.5 py-1.5 rounded-xl border border-slate-700">
-                        <span className="text-[10px] uppercase font-bold text-slate-400">Category:</span>
-                        <select
-                          value={currentVideo.category}
-                          onChange={(e) => handleCategoryChange(currentVideo.id, e.target.value)}
-                          className="bg-transparent text-xs font-bold text-purple-300 focus:outline-none cursor-pointer"
-                        >
-                          {Object.keys(CATEGORY_META).map((cat) => (
-                            <option key={cat} value={cat} className="bg-[#141926] text-white">
-                              {cat}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
+                  <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
-                    <button
-                      onClick={() => handleUpvote(currentVideo.id)}
-                      disabled={currentVideo.status !== 'queue' || normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
-                      title={currentVideo.status === 'playing' ? 'This video is already playing' : normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                        votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
-                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                          : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
-                      }`}
-                    >
-                      <Flame className="w-4 h-4 text-amber-400" />
-                      <span>{currentVideo.status === 'playing' ? 'Playing' : `Upvote (${currentVideo.upvotes || 0})`}</span>
-                    </button>
+                    {currentVideo.status !== 'playing' && (
+                      <button
+                        onClick={() => handleUpvote(currentVideo.id)}
+                        disabled={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
+                        title={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                          votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
+                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                            : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
+                        }`}
+                      >
+                        <ThumbsUp className="w-4 h-4" />
+                        <span>Upvote ({currentVideo.upvotes || 0})</span>
+                      </button>
+                    )}
 
                     {/* Watch Later Quick Stash */}
                     <button
@@ -2625,27 +3773,10 @@ function YediHubAppContent() {
                       <span>Watch Later</span>
                     </button>
 
-                    {/* Previous / Skip / Next Track */}
-                    {isStaff && (
-                      <>
-                      <button
-                        onClick={handlePreviousTrack}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all active:scale-95"
-                        title="Return to the most recently played video"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                        <span>Previous</span>
-                      </button>
-                      <button
-                        onClick={handleSkipNext}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
-                      >
-                        <SkipForward className="w-4 h-4" />
-                        <span>Next Track</span>
-                      </button>
-                      </>
-                    )}
+                    <TransportNavigation isStaff={isStaff} onPrevious={handlePreviousTrack} onNext={handleSkipNext} />
                   </div>
+                  <div className="flex w-full justify-end"><KeyboardShortcutHint isStaff={isStaff} /></div>
+
                 </div>
               </div>
             ) : (
@@ -2653,119 +3784,36 @@ function YediHubAppContent() {
                 <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
                 <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
+                  Paste a video URL in Twitch chat, use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code>, or click Request Video above to add media!
                 </p>
               </div>
             )}
           </section>
 
+        </div>
+
+        <div className="gachi-queue-column min-w-0">
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
-          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
-            {/* Nav Tabs */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
-                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
-                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
-                ].map((tab) => {
-                  const Icon = tab.icon;
-                  const active = activeTab === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                        active
-                          ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                          : 'bg-[#151a27] hover:bg-slate-800 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span>{tab.label}</span>
-                      <span className={`px-1.5 py-0.2 rounded-md text-[11px] font-extrabold ${active ? 'bg-black/30 text-white' : tab.badge}`}>
-                        {tab.count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Sorter */}
-              <select
-                value={activeTab === 'queue' ? 'priority' : sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                disabled={activeTab === 'queue'}
-                title={activeTab === 'queue' ? 'Queue order follows pinned priority, then votes, then request time' : 'Sort this non-queue list'}
-                className="bg-[#151a27] border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-purple-500 disabled:opacity-70"
-              >
-                <option value="priority">Sort: Playback priority</option>
-                <option value="upvotes">Sort: Most Hype (Votes)</option>
-                <option value="newest">Sort: Recently Added</option>
-              </select>
-            </div>
-
-            {/* Category Filter Pills & Search */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-              {/* Category Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
-                <button
-                  onClick={() => setSelectedCategory('All')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    selectedCategory === 'All'
-                      ? 'bg-white/10 border border-purple-500 text-white'
-                      : 'bg-[#141926] text-slate-400 hover:text-white border border-slate-800'
-                  }`}
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                  <span>All Categories</span>
-                </button>
-
-                {Object.entries(CATEGORY_META).map(([catKey, catData]) => {
-                  const Icon = catData.icon;
-                  const active = selectedCategory === catKey;
-                  return (
-                    <button
-                      key={catKey}
-                      onClick={() => setSelectedCategory(catKey)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${
-                        active
-                          ? 'bg-white/10 border-purple-500 text-white'
-                          : 'bg-[#141926] border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <Icon className="w-3.5 h-3.5" style={{ color: catData.colorHex }} />
-                      <span>{catData.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Search */}
-              <div className="relative min-w-[220px]">
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search title or @requester..."
-                  className="w-full bg-[#141926] border border-slate-800 rounded-xl pl-9 pr-7 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            </div>
+          <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
+            <QueueToolbar
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              counts={counts}
+              setMediaTypeFilter={setMediaTypeFilter}
+              sortBy={sortBy}
+              setSortBy={setSortBy}
+              selectedCategory={selectedCategory}
+              setSelectedCategory={setSelectedCategory}
+              categoryMeta={CATEGORY_META}
+              categoryCounts={categoryCounts}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+            />
 
             {/* Video Cards Feed */}
-            <div className="space-y-3 pt-1">
+            <div className="gachi-queue-feed space-y-3 pt-1">
               {filteredVideos.length === 0 ? (
                 <div className="p-10 border border-dashed border-slate-800 rounded-2xl text-center space-y-2 bg-[#121622]/40">
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />
@@ -2775,227 +3823,34 @@ function YediHubAppContent() {
                   </p>
                 </div>
               ) : (
-                filteredVideos.map((video, idx) => {
-                  const isCurrent = currentVideo && currentVideo.id === video.id;
-                  const catObj = CATEGORY_META[video.category] || CATEGORY_META.General;
-
-                  return (
-                    <div
-                      key={video.id}
-                      className={`group relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3.5 rounded-2xl border transition-all ${
-                        isCurrent
-                          ? 'bg-purple-950/20 border-purple-500/50 shadow-lg shadow-purple-950/40'
-                          : video.pinned
-                          ? 'bg-amber-950/15 border-amber-500/30'
-                          : 'bg-[#131722] hover:bg-[#181d2a] border-slate-800/90'
-                      }`}
-                    >
-                      {/* Left: Thumbnail + Metadata */}
-                      <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1 w-full">
-                        {/* Order indicator */}
-                        <div className="hidden sm:flex flex-col items-center justify-center w-7 text-center shrink-0">
-                          {video.pinned ? (
-                            <Pin className="w-4 h-4 text-amber-400 fill-current" />
-                          ) : (
-                            <span className="text-xs font-mono font-bold text-slate-500">#{queueRankById.get(String(video.id)) ?? (idx + 1)}</span>
-                          )}
-                        </div>
-
-                        {/* Thumbnail */}
-                        <div
-                          onClick={() => handlePlayNow(video)}
-                          className="relative w-28 sm:w-36 h-20 rounded-xl overflow-hidden bg-slate-900 shrink-0 cursor-pointer border border-white/5"
-                        >
-                          <img
-                            src={video.thumbnail}
-                            alt=""
-                            onError={(e) => {
-                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
-                            }}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                            <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-lg">
-                              <Play className="w-4 h-4 fill-current ml-0.5" />
-                            </div>
-                          </div>
-                          <span className="absolute bottom-1 right-1 px-1.5 py-0.2 rounded bg-black/80 text-[10px] font-mono font-bold text-slate-200">
-                            {video.duration}
-                          </span>
-                        </div>
-
-                        {/* Details */}
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {/* Editable Category Dropdown for 1-Click Fixes */}
-                            {isStaff ? (
-                              <select
-                                value={video.category}
-                                onChange={(e) => handleCategoryChange(video.id, e.target.value)}
-                                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border cursor-pointer focus:outline-none ${catObj.badgeBg}`}
-                                title="Click to fix or change category"
-                              >
-                                {Object.keys(CATEGORY_META).map((cat) => (
-                                  <option key={cat} value={cat} className="bg-[#141926] text-white">
-                                    {cat}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${catObj.badgeBg}`}>
-                                {video.category}
-                              </span>
-                            )}
-
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                              {video.mediaType || detectMusicType(video.url, video.title, video.note)}
-                            </span>
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
-                              {video.platform}
-                            </span>
-
-                            {video.pinned && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                Pinned Priority
-                              </span>
-                            )}
-                          </div>
-
-                          <h4
-                            onClick={() => handlePlayNow(video)}
-                            className="text-sm font-bold text-slate-100 hover:text-purple-300 cursor-pointer truncate"
-                            title={video.title}
-                          >
-                            {video.title}
-                          </h4>
-
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-400">
-                            <span>
-                              by <strong className="text-slate-200 font-semibold">@{video.requestedBy}</strong>
-                            </span>
-                            <span>•</span>
-                            <span>{video.addedAt}</span>
-                            {video.watchedAt && (
-                              <>
-                                <span>•</span>
-                                <span className="text-emerald-400 font-medium">Played {video.watchedAt}</span>
-                              </>
-                            )}
-                            {video.note && (
-                              <>
-                                <span>•</span>
-                                <span className="text-slate-300 italic truncate max-w-xs">"{video.note}"</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right: Arena Control Buttons */}
-                      <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
-                        {/* Hype Vote */}
-                        <button
-                          onClick={() => handleUpvote(video.id)}
-                          disabled={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`])}
-                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                            (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`]
-                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                              : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700/80 text-slate-300'
-                          }`}
-                          title={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote this video to move it higher in the queue'}
-                        >
-                          <ThumbsUp className="w-3.5 h-3.5" />
-                          <span>{video.upvotes || 0}</span>
-                        </button>
-
-                        {/* Every request is immediately playable; no approval state. */}
-                        <>
-                            {video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) && (
-                              <button
-                                onClick={() => {
-                                  if (window.confirm(`Remove your request "${String(video.title || 'this video').slice(0, 80)}" from the queue?`)) {
-                                    void syncDeleteVideo(video.id);
-                                  }
-                                }}
-                                className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-rose-950/60 text-rose-300 border border-rose-500/20"
-                                title="Remove your own waiting request"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handlePlayNow(video)}
-                              className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
-                            >
-                              Play Now
-                            </button>
-
-                            {isStaff && (
-                              <>
-                                {video.status === 'queue' && (
-                                  <>
-                                    <button
-                                      onClick={() => handleMoveOrder(video.id, 'up')}
-                                      className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-slate-300"
-                                      title="Move Up"
-                                    >
-                                      <ArrowUp className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleMoveOrder(video.id, 'down')}
-                                      className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-slate-300"
-                                      title="Move Down"
-                                    >
-                                      <ArrowDown className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleTogglePin(video)}
-                                      className={`p-1.5 rounded-lg border transition-colors ${
-                                        video.pinned
-                                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                                          : 'bg-[#181e2e] border-transparent hover:bg-slate-700 text-slate-400'
-                                      }`}
-                                      title="Pin Priority"
-                                    >
-                                      <Pin className="w-3.5 h-3.5" />
-                                    </button>
-                                  </>
-                                )}
-
-                                {video.status !== 'watch_later' && (
-                                  <button
-                                    onClick={() => handleMoveToWatchLater(video)}
-                                    className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-cyan-400"
-                                    title="Stash to Watch Later"
-                                  >
-                                    <Bookmark className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-
-                                {video.status === 'watched' && (
-                                  <button
-                                    onClick={() => handleRequeue(video)}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
-                                  >
-                                    <RotateCcw className="w-3 h-3" />
-                                    <span>Re-Queue</span>
-                                  </button>
-                                )}
-
-                                <button
-                                  onClick={() => syncDeleteVideo(video.id)}
-                                  className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
-                                  title="Delete video request"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            )}
-                        </>
-                      </div>
-                    </div>
-                  );
-                })
+                filteredVideos.map((video, idx) => (
+                  <QueueVideoCard
+                    key={video.id}
+                    video={video}
+                    index={idx}
+                    activeTab={activeTab}
+                    currentVideo={currentVideo}
+                    queueRankById={queueRankById}
+                    isStaff={isStaff}
+                    draggedQueueId={draggedQueueId}
+                    setDraggedQueueId={setDraggedQueueId}
+                    dragOverQueueId={dragOverQueueId}
+                    setDragOverQueueId={setDragOverQueueId}
+                    handleDropReorder={handleDropReorder}
+                    handlePlayNow={handlePlayNow}
+                    handleCategoryChange={handleCategoryChange}
+                    handleUpvote={handleUpvote}
+                    twitchUsername={twitchAuth.username}
+                    votedIds={votedIds}
+                    normalizeTwitchLogin={normalizeTwitchLogin}
+                    syncDeleteVideo={syncDeleteVideo}
+                    handleMoveOrder={handleMoveOrder}
+                    handleTogglePin={handleTogglePin}
+                    handleMoveToWatchLater={handleMoveToWatchLater}
+                    handleRequeue={handleRequeue}
+                    now={statsNow}
+                  />
+                ))
               )}
             </div>
           </section>
@@ -3088,8 +3943,8 @@ function YediHubAppContent() {
                   >
                     <option value="Auto">✨ Auto-Detect via Engine</option>
                     <option value="Music">🎵 Music / Beats</option>
-                    <option value="Gaming">🎮 Gaming / Highlights</option>
-                    <option value="Memes">😂 Memes / Comedy</option>
+                    <option value="Gaming">🎮 Blind Playthroughs</option>
+                    <option value="Memes">😂 Shitposts</option>
                     <option value="Clips">🎬 Twitch Clips</option>
                     <option value="IRL">🎙️ IRL / Podcast</option>
                   </select>
@@ -3175,8 +4030,8 @@ function YediHubAppContent() {
           MODAL 3: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
       {showSettingsModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
+          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
@@ -3197,8 +4052,8 @@ function YediHubAppContent() {
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
-                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow direct video links, !assr Twitch requests, and web submissions' },
+                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next video when playback ends where supported' }
               ].map((item) => (
                 <label
                   key={item.key}
@@ -3225,6 +4080,41 @@ function YediHubAppContent() {
                 </label>
               ))}
 
+              <section className="p-3 rounded-xl bg-[#0b0e15] border border-purple-500/25 space-y-3">
+                <div className="flex items-center gap-2">
+                  <FolderSync className="w-4 h-4 text-purple-300" />
+                  <h4 className="font-black text-white">Queue backup & recovery</h4>
+                </div>
+                <p className="text-[11px] leading-5 text-slate-400">
+                  Backups include queue, history, votes, and stream settings—not Twitch login credentials. A safety snapshot is kept in this browser while there are waiting requests.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleDownloadBackup} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-white">
+                    <Download className="w-3.5 h-3.5" /> Download backup
+                  </button>
+                  <button type="button" onClick={() => backupFileInputRef.current?.click()} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-slate-100">
+                    <Upload className="w-3.5 h-3.5" /> Restore file
+                  </button>
+                  <button type="button" onClick={handleRecoverSafetySnapshot} disabled={backupBusy || !safetySnapshot?.videos?.length} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-3 py-2 text-[11px] font-bold text-slate-100">
+                    <History className="w-3.5 h-3.5" /> Recover last snapshot
+                  </button>
+                </div>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={handleImportBackupFile}
+                  aria-label="Choose a Whale Cum queue backup JSON file"
+                />
+                <p className="text-[10px] text-slate-500">
+                  {safetySnapshot?.videos?.length
+                    ? `Last local snapshot: ${safetySnapshot.videos.length} items · ${safetySnapshot.savedAt ? new Date(safetySnapshot.savedAt).toLocaleString() : 'saved earlier'}`
+                    : 'No local recovery snapshot yet. Download a backup before making major queue changes.'}
+                </p>
+                {backupBusy && <p className="text-[11px] text-amber-200" role="status">Restoring backup…</p>}
+                {backupMessage && <p className="text-[11px] leading-5 text-slate-200 break-words" role="status">{backupMessage}</p>}
+              </section>
             </div>
 
             <div className="flex justify-end">
@@ -3275,7 +4165,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('Yedi Hub render failure', error, info);
+    console.error('whale cum render failure', error, info);
     this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
@@ -3284,7 +4174,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">Yedi Hub hit a rendering error</h1>
+            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
             <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
             <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
