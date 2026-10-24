@@ -2276,11 +2276,11 @@ function YediHubAppContent() {
     return () => { alive = false; window.clearInterval(id); };
   }, [moderatorLogin]);
 
-  const activateTwitchWebhook = async ({ automatic = false } = {}) => {
+  const activateTwitchWebhook = async ({ automatic = false, repair = false } = {}) => {
     if (!moderatorLogin || webhookSetupBusy) return;
     setWebhookSetupBusy(true);
     try {
-      const response = await fetch('/api/twitch/bot-session?action=webhook-setup', {
+      const response = await fetch('/api/twitch/bot-session?action=webhook-setup' + (repair ? '&repair=1' : ''), {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
         headers: { 'Content-Type': 'application/json' }, body: '{}',
         signal: AbortSignal.timeout(20000),
@@ -2296,7 +2296,7 @@ function YediHubAppContent() {
       }));
       if (!automatic || !response.ok) {
         addToast(response.ok
-          ? (data.active ? 'Twitch chat intake is active.' : 'Twitch is verifying the chat webhook.')
+          ? (data.active ? 'Twitch chat intake is active.' : repair ? 'Twitch is verifying the repaired webhook.' : 'Twitch is verifying the chat webhook.')
           : 'Webhook setup failed: ' + String(data.code || response.status) +
             (data.code === 'moderator_chat_scopes_missing' ? ' — authorize moderator chat intake first.' : ''),
           response.ok ? 'success' : 'warning');
@@ -3782,6 +3782,13 @@ function YediHubAppContent() {
                     <RefreshCw className="h-3 w-3" />
                     {webhookSetupBusy ? 'Configuring Twitch…' : 'Activate persistent chat requests'}
                   </button>
+                  {(webhookHealth.active || webhookHealth.status === 'webhook_callback_verification_pending') && (
+                    <button type="button" disabled={webhookSetupBusy}
+                      onClick={() => { setTopMenuOpen(false); void activateTwitchWebhook({ repair: true }); }}
+                      className="mt-2 w-full rounded-lg border border-amber-600/30 px-3 py-2 text-xs text-amber-200 hover:bg-amber-950/30 disabled:opacity-50">
+                      Repair webhook subscription
+                    </button>
+                  )}
                   <div className="mt-2 break-words text-[10px] text-slate-300">
                     {webhookHealth.status || webhookHealth.code}
                   </div>
