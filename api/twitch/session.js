@@ -1,4 +1,5 @@
 import { sanitizePersonalPreferences } from '../../src/personalPreferences.js';
+import { decodeServiceAccount } from '../../server/firebase-guard.js';
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 // Sliding, HttpOnly remember-me cookie. Renewed on every successful session check.
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
@@ -57,8 +58,8 @@ async function getFirebaseAdminAuth() {
   if (typeof serviceAccount.private_key !== 'string' || !serviceAccount.private_key.trim()) {
     throw new Error("Firebase service account is missing the 'private_key' field");
   }
-  // Handle a key pasted with literal backslash-n sequences as well as normal JSON newlines.
-  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+  // Enforce the intended Firebase project before minting client tokens.
+  serviceAccount = decodeServiceAccount(raw);
 
   const appName = 'yedi-hub-firebase-admin';
   const app = getApps().find(item => item.name === appName) || initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id }, appName);

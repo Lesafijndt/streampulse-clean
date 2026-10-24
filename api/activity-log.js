@@ -1,4 +1,5 @@
 import { normalizeActivityEvent } from '../src/activityLog.js';
+import { decodeServiceAccount } from '../server/firebase-guard.js';
 
 const ALLOWED_STAFF = new Set(['paim_beach_pete']);
 const DEFAULT_APP_ID = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
@@ -115,7 +116,7 @@ async function getAdminFirestore() {
       typeof serviceAccount.private_key !== 'string') {
     throw new Error('Firebase Admin configuration is incomplete');
   }
-  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+  serviceAccount = decodeServiceAccount(raw);
   const name = 'whale-cum-activity-admin';
   const app = getApps().find((item) => item.name === name) ||
     initializeApp({ credential: cert(serviceAccount), projectId: serviceAccount.project_id }, name);

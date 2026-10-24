@@ -35,7 +35,7 @@ async function validate(token) {
   return response.json();
 }
 
-async function obtainSession(req, res, kind) {
+export async function obtainSession(req, res, kind) {
   const data = cookiesFrom(req.headers.cookie);
   const prefix = kind === 'bot' ? 'yedi_twitch_bot_' : 'yedi_twitch_';
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -84,9 +84,10 @@ export default async function handler(req, res) {
   if (!host || String(req.headers.origin || '') !== protocol + '://' + host) {
     return res.status(403).json({ ok: false, code: 'origin_denied' });
   }
-  const body = typeof req.body === 'string' ? (() => {
-    try { return JSON.parse(req.body); } catch { return {}; }
-  })() : (req.body || {});
+  // This endpoint shares a raw-body API function with the signed webhook.
+  const { readTwitchRawBody } = await import('./twitch-webhook.js');
+  const raw = await readTwitchRawBody(req).catch(() => Buffer.alloc(0));
+  const body = (() => { try { return JSON.parse(raw.toString('utf8')); } catch { return {}; } })();
   const sessionId = String(body.sessionId || '');
   if (!/^[A-Za-z0-9_-]{12,256}$/.test(sessionId)) {
     return res.status(400).json({ ok: false, code: 'invalid_websocket_session' });

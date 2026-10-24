@@ -1,4 +1,7 @@
 const BOT_LOGIN = 'gachibot69';
+// Preserve exact request bytes for Twitch's HMAC verification. This route also
+// hosts the existing moderator WebSocket subscription within the Hobby limit.
+export const config = { api: { bodyParser: false } };
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
@@ -26,6 +29,16 @@ function replyUnauthenticated(res) {
 }
 
 export default async function handler(req, res) {
+  const action = String(req.query?.action || '');
+  if (req.method === 'POST' && action === 'webhook') {
+    const { default: webhook } = await import('../../server/twitch-webhook.js');
+    return webhook(req, res);
+  }
+  if ((req.method === 'POST' && action === 'webhook-setup') ||
+      (req.method === 'GET' && action === 'webhook-status')) {
+    const { default: configure } = await import('../../server/twitch-webhook-setup.js');
+    return configure(req, res, { statusOnly: action === 'webhook-status' });
+  }
   // Keep EventSub subscription setup within the already-deployed bot-session
   // serverless function. Vercel Hobby only permits 12 API functions.
   if (req.method === 'POST' && String(req.query?.action || '') === 'subscribe') {

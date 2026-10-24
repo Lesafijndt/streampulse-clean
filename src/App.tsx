@@ -492,6 +492,11 @@ function YediHubAppContent() {
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
+  const [webhookHealth, setWebhookHealth] = useState({
+    loading: true, active: false, code: 'checking', status: '', lastWebhookAt: 0,
+    lastWebhookResult: 'none', lastWebhookQueued: 0,
+  });
+  const [webhookSetupBusy, setWebhookSetupBusy] = useState(false);
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 65, muted: false, playerState: -1 });
@@ -2200,27 +2205,74 @@ function YediHubAppContent() {
     setIrcConnected(false);
   };
 
-  // Persisted channel room => the browser/OBS source automatically reconnects the bridge.
-  // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
+  // Twitch intake is now persisted by an EventSub HTTPS webhook. Deliberately
+  // DO NOT start an authenticated browser WebSocket: moderator dashboards may
+  // close, and two concurrent listeners would race to add duplicate requests.
   useEffect(() => {
-    const target = PRIVATE_CHANNEL;
-    ircTargetRef.current = target;
-    const canReceiveChat = twitchAuth.authenticated &&
-      normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete' &&
-      chatBotSession.connected && chatBotSession.canReadChat && db && firebaseUser;
-    shouldReconnectIrcRef.current = Boolean(canReceiveChat);
-    if (!canReceiveChat) {
-      disconnectTwitchIrc(false);
+    shouldReconnectIrcRef.current = false;
+    disconnectTwitchIrc(false);
+  }, []);
+
+  // Refresh only the moderator's server-verified webhook/Firestore status.
+  useEffect(() => {
+    if (!moderatorLogin || !chatBotSession.connected) {
+      setWebhookHealth(previous => ({
+        ...previous, loading: false, active: false,
+        code: !moderatorLogin ? 'moderator_only' : 'bot_reauthorization_required',
+      }));
       return undefined;
     }
-    const startTimer = window.setTimeout(() => connectTwitchIrc(target, { silent: true }), 150);
-    return () => {
-      window.clearTimeout(startTimer);
-      disconnectTwitchIrc(false);
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const response = await fetch('/api/twitch/bot-session?action=webhook-status', {
+          credentials: 'same-origin', cache: 'no-store',
+          signal: AbortSignal.timeout(15000),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (alive) setWebhookHealth({
+          loading: false, active: response.ok && data.active === true,
+          code: String(data.code || response.status), status: String(data.status || ''),
+          lastWebhookAt: Number(data.lastWebhookAt) || 0,
+          lastWebhookResult: String(data.lastWebhookResult || 'none'),
+          lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+        });
+      } catch {
+        if (alive) setWebhookHealth(previous => ({
+          ...previous, loading: false, active: false, code: 'status_unavailable',
+        }));
+      }
     };
-    // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated, twitchAuth.username, chatBotSession.connected, chatBotSession.canReadChat, db, firebaseUser]);
+    void refresh();
+    const id = window.setInterval(refresh, 60000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [moderatorLogin, chatBotSession.connected, chatBotSession.canReadChat]);
+
+  const activateTwitchWebhook = async () => {
+    if (!moderatorLogin || webhookSetupBusy) return;
+    setWebhookSetupBusy(true);
+    try {
+      const response = await fetch('/api/twitch/bot-session?action=webhook-setup', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' }, body: '{}',
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await response.json().catch(() => ({}));
+      setWebhookHealth(previous => ({
+        ...previous, loading: false, active: response.ok && data.active === true,
+        code: String(data.code || response.status), status: String(data.status || ''),
+        lastWebhookAt: Number(data.lastWebhookAt) || previous.lastWebhookAt,
+        lastWebhookResult: String(data.lastWebhookResult || previous.lastWebhookResult),
+        lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+      }));
+      addToast(response.ok
+        ? 'Server webhook configured. Twitch will verify the callback before it is active.'
+        : 'Webhook setup failed: ' + String(data.code || response.status), response.ok ? 'success' : 'warning');
+    } catch {
+      setWebhookHealth(previous => ({ ...previous, code: 'setup_network_error', active: false }));
+      addToast('Could not reach the server-side Twitch webhook setup.', 'warning');
+    } finally { setWebhookSetupBusy(false); }
+  };
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -3659,17 +3711,31 @@ function YediHubAppContent() {
                 <div className="my-2 border-t border-white/10" />
                 {isModerator && <div className="rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
-                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'SUBSCRIBED' : 'OFFLINE'}</span>
+                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300">
+                      <span className={`h-2 w-2 rounded-full ${webhookHealth.active ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      Twitch server webhook
+                    </span>
+                    <span className={webhookHealth.active ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>
+                      {webhookHealth.loading ? 'CHECKING' : webhookHealth.active ? 'ACTIVE' : 'NOT ACTIVE'}
+                    </span>
                   </div>
-                  <button type="button" onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10">
-                    <RefreshCw className="h-3 w-3" /> Restart command bridge
+                  <button type="button" disabled={webhookSetupBusy}
+                    onClick={() => { setTopMenuOpen(false); void activateTwitchWebhook(); }}
+                    className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:opacity-50">
+                    <RefreshCw className="h-3 w-3" />
+                    {webhookSetupBusy ? 'Configuring Twitch…' : 'Activate persistent chat requests'}
                   </button>
-                  <div className="mt-2 break-words text-[10px] text-slate-300">{chatBridgeStatus}</div>
+                  <div className="mt-2 break-words text-[10px] text-slate-300">
+                    {webhookHealth.status || webhookHealth.code}
+                  </div>
                   <div className="mt-1 text-[9px] text-slate-400">
-                    Last chat received: {chatBridgeLastMessageAt ? new Date(chatBridgeLastMessageAt).toLocaleTimeString() : 'Never'}
-                    {' · '}
-                    Last request: {chatBridgeLastRequestAt ? new Date(chatBridgeLastRequestAt).toLocaleTimeString() : 'Never'}
+                    Last verified chat: {webhookHealth.lastWebhookAt
+                      ? new Date(webhookHealth.lastWebhookAt).toLocaleString() : 'Not recorded'}
+                    {' · '}Result: {webhookHealth.lastWebhookResult}
+                    {' · '}Queued: {webhookHealth.lastWebhookQueued}
+                  </div>
+                  <div className="mt-1 text-[9px] text-slate-500">
+                    Chat intake continues server-side even if this dashboard is closed.
                   </div>
                 </div>}
                 {isModerator && <div className="mt-1 rounded-xl px-3 py-2">
@@ -3689,9 +3755,9 @@ function YediHubAppContent() {
                     {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
                     {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
                   </button>
-                  {chatBotSession.connected && !chatBotSession.canReadChat && (
+                  {chatBotSession.connected && !webhookHealth.active && (
                     <a href="/api/twitch/bot-login" className="mt-2 block rounded-lg border border-amber-400/40 bg-amber-900/30 px-3 py-2 text-center text-[10px] font-bold text-amber-100">
-                      Reauthorize @gachibot69 to read Twitch chat
+                      Reauthorize @gachibot69 for Twitch chat webhook permissions
                     </a>
                   )}
                 </div>}
@@ -3720,8 +3786,12 @@ function YediHubAppContent() {
               <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
             </div>
             <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{chatBridgeStatus}</div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch server webhook</div>
+              <div className={webhookHealth.active ? 'text-emerald-300' : 'text-amber-200'}>
+                {webhookHealth.active ? 'Server webhook active' : webhookHealth.code}
+                {' · '}Last delivery: {webhookHealth.lastWebhookAt
+                  ? new Date(webhookHealth.lastWebhookAt).toLocaleTimeString() : 'Never'}
+              </div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>

@@ -39,7 +39,7 @@ export default async function handler(req, res) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'user:read:chat user:write:chat',
+    scope: 'user:read:chat user:bot user:write:chat',
     state,
     force_verify: 'true'
   });
