@@ -108,7 +108,7 @@ test('signed webhook uses existing bot-session API endpoint; moderator UI never 
   assert.match(bot, /action === 'webhook'/);
   assert.match(bot, /action === 'webhook-setup'/);
   assert.match(login, /user:bot/);
-  assert.match(app, /Server webhook active/);
+  assert.match(app, /Twitch listening \(delivery not guaranteed\)/);
   assert.match(app, /activateTwitchWebhook/);
   assert.doesNotMatch(app, /window\.setTimeout\(\(\) => connectTwitchIrc\(target, \{ silent: true \}\), 150\)/);
 });
@@ -124,7 +124,7 @@ test('persistent Twitch chat subscriptions use the verified moderator rather tha
   assert.match(setup, /condition: \{ broadcaster_user_id: broadcasterId, user_id: staff\.userId \}/);
   assert.doesNotMatch(setup, /obtainSession\(req, res, 'bot'\)/);
   assert.match(login, /chat_setup/);
-  assert.match(login, /data\?\.client_id !== clientId/);
+  assert.match(login, /obtainSession\(req, res, 'staff'\)/);
   assert.match(login, /paim_beach_pete/);
   assert.match(login, /user:read:email user:read:chat user:bot/);
   assert.match(app, /Authorize moderator chat intake with Twitch/);
@@ -201,4 +201,63 @@ test('moderator setup starts automatically after chat scopes are approved, and s
   assert.match(app, /activateTwitchWebhook\(\{ automatic: true \}\)/);
   assert.match(app, /Firestore quota is exhausted/);
   assert.match(app, /receiptCode: String\(data\.receiptCode/);
+});
+
+
+test('chat OAuth upgrade preserves refreshed cookies and rejects requests without a moderator session', async t => {
+  const { default: login } = await import('../api/twitch/login.js');
+  const oldFetch = globalThis.fetch;
+  const oldId = process.env.TWITCH_CLIENT_ID;
+  const oldSecret = process.env.TWITCH_CLIENT_SECRET;
+  process.env.TWITCH_CLIENT_ID = 'chat-consent-test-id';
+  process.env.TWITCH_CLIENT_SECRET = 'chat-consent-test-secret';
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes('/oauth2/token')) return Response.json({
+      access_token: 'new-access', refresh_token: 'new-refresh',
+    });
+    if (String(url).includes('/oauth2/validate')) {
+      return Response.json({
+        client_id: 'chat-consent-test-id', login: 'paim_beach_pete',
+        user_id: '1234567', scopes: ['user:read:email'], expires_in: 3600,
+      });
+    }
+    throw new Error('unexpected URL in test: ' + url);
+  };
+  t.after(() => {
+    globalThis.fetch = oldFetch;
+    if (oldId === undefined) delete process.env.TWITCH_CLIENT_ID;
+    else process.env.TWITCH_CLIENT_ID = oldId;
+    if (oldSecret === undefined) delete process.env.TWITCH_CLIENT_SECRET;
+    else process.env.TWITCH_CLIENT_SECRET = oldSecret;
+  });
+  const makeRes = () => ({
+    statusCode: 200, headers: {}, location: '',
+    setHeader(k,v) { this.headers[k] = v; },
+    getHeader(k) { return this.headers[k]; },
+    status(code) { this.statusCode=code; return this; },
+    send(str) { this.body=str; return this; },
+    redirect(code, url) { this.statusCode=code; this.location=url; return this; },
+  });
+  const res = makeRes();
+  await login({
+    method: 'GET', query: {chat_setup:'1'},
+    headers: { host: 'streampulse-clean.vercel.app', cookie: 'yedi_twitch_refresh=old-refresh' },
+  },res);
+  assert.equal(res.statusCode,302);
+  const cookies = Array.isArray(res.headers['Set-Cookie']) ? res.headers['Set-Cookie'] : [res.headers['Set-Cookie']];
+  assert.ok(cookies.some(value => value.startsWith('yedi_twitch_access=')));
+  assert.ok(cookies.some(value => value.startsWith('yedi_twitch_refresh=')));
+  assert.ok(cookies.some(value => value.startsWith('yedi_twitch_oauth_state=')));
+  const uri = new URL(res.location);
+  assert.equal(uri.searchParams.get('scope'), 'user:read:email user:read:chat user:bot');
+  const blocked = makeRes();
+  await login({method:'GET',query:{chat_setup:'1'},headers:{host:'streampulse-clean.vercel.app'}},blocked);
+  assert.equal(blocked.statusCode,403);
+});
+
+test('moderator can authorize missing chat scopes from the visible header without opening settings', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /Twitch chat requests are not connected/);
+  assert.match(app, /href="\\/api\\/twitch\\/login\\?chat_setup=1"/);
+  assert.match(app, /Authorize Twitch chat requests/);
 });
