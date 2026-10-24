@@ -33,3 +33,11 @@ test('provider command bridge sends correctly shaped YouTube and TikTok messages
   assert.match(html, /data-test-status="pass"/, 'YouTube and TikTok browser command assertions should pass; output: ' + html.slice(-3500));
   assert.doesNotMatch(html, /data-test-status="fail"/, 'provider command assertions failed');
 });
+
+
+test('portrait and landscape player iframes remain contained and centered at three viewport widths', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/player-geometry.html');
+  assert.match(html, /data-test-status="pass"/,
+    'Browser player geometry must pass for 360, 600, and 820px stages; output: ' + html.slice(-5000));
+  assert.doesNotMatch(html, /data-test-status="fail"/, 'Player iframe clipping or alignment regression');
+});

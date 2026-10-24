@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WHALE CUM player sizing geometry fixture</title>
+<link rel="stylesheet" href="../../src/index.css"></head>
+<body class="gachi-theme" style="margin:0">
+<section class="gachi-player-column" style="width:100%">
+  <div class="gachi-player-stage relative w-full aspect-video" id="portrait-stage"
+       style="position:relative;width:820px;aspect-ratio:16/9;display:flex;overflow:hidden">
+    <div class="gachi-portrait-shell">
+      <iframe class="gachi-tiktok-player gachi-video-embed" src="about:blank" title="TikTok geometry fixture"></iframe>
+    </div>
+  </div>
+  <div class="gachi-player-stage relative w-full aspect-video" id="landscape-stage"
+       style="position:relative;width:820px;aspect-ratio:16/9;display:flex;overflow:hidden">
+    <div class="gachi-landscape-shell">
+      <iframe class="gachi-video-embed" src="about:blank" title="YouTube geometry fixture"></iframe>
+    </div>
+  </div>
+</section>
+<pre id="report"></pre>
+<script>
+requestAnimationFrame(() => {
+  const results = [];
+  const nearly = (a,b,tolerance=3) => Math.abs(a-b) <= tolerance;
+  for (const width of [360, 600, 820]) {
+    const portraitStage = document.getElementById('portrait-stage');
+    const landscapeStage = document.getElementById('landscape-stage');
+    portraitStage.style.width = landscapeStage.style.width = width + 'px';
+    const stage = portraitStage.getBoundingClientRect();
+    const shell = portraitStage.querySelector('.gachi-portrait-shell').getBoundingClientRect();
+    const portraitIframe = portraitStage.querySelector('iframe').getBoundingClientRect();
+    const wideStage = landscapeStage.getBoundingClientRect();
+    const landscapeIframe = landscapeStage.querySelector('iframe').getBoundingClientRect();
+    results.push({
+      width, stageWidth: stage.width, stageHeight: stage.height,
+      shellWidth: shell.width, shellHeight: shell.height,
+      shellCenter: shell.left + shell.width / 2 - stage.left,
+      portraitIframeWidth: portraitIframe.width, portraitIframeHeight: portraitIframe.height,
+      landscapeWidth: landscapeIframe.width, landscapeHeight: landscapeIframe.height,
+      pass: nearly(stage.height, width * 9 / 16)
+        && nearly(shell.left + shell.width / 2, stage.left + stage.width / 2)
+        && nearly(shell.height, stage.height)
+        && shell.left >= stage.left - 1
+        && shell.right <= stage.right + 1
+        && nearly(portraitIframe.width, shell.width)
+        && nearly(portraitIframe.height, shell.height)
+        && nearly(landscapeIframe.width, wideStage.width)
+        && nearly(landscapeIframe.height, wideStage.height),
+    });
+  }
+  const pass = results.every(x => x.pass);
+  document.body.dataset.testStatus = pass ? 'pass' : 'fail';
+  document.getElementById('report').textContent = JSON.stringify(results, null, 2);
+});
+</script>
+</body>
+</html>
