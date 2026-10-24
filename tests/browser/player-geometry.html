@@ -24,9 +24,11 @@ requestAnimationFrame(() => {
   const results = [];
   const nearly = (a,b,tolerance=3) => Math.abs(a-b) <= tolerance;
   for (const width of [360, 600, 820]) {
+    // Production CSS gives each stage width:100% !important. Test the real
+    // containing dashboard column instead of overriding a child stage width.
+    document.querySelector('.gachi-player-column').style.width = width + 'px';
     const portraitStage = document.getElementById('portrait-stage');
     const landscapeStage = document.getElementById('landscape-stage');
-    portraitStage.style.width = landscapeStage.style.width = width + 'px';
     const stage = portraitStage.getBoundingClientRect();
     const shell = portraitStage.querySelector('.gachi-portrait-shell').getBoundingClientRect();
     const portraitIframe = portraitStage.querySelector('iframe').getBoundingClientRect();
