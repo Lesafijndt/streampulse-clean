@@ -495,7 +495,7 @@ function YediHubAppContent() {
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
   const [webhookHealth, setWebhookHealth] = useState({
     loading: true, active: false, code: 'checking', status: '', lastWebhookAt: 0,
-    lastWebhookResult: 'none', lastWebhookQueued: 0,
+    lastWebhookResult: 'none', lastWebhookQueued: 0, receiptCode: 'unknown',
   });
   const [webhookSetupBusy, setWebhookSetupBusy] = useState(false);
   const youtubeIframeRef = useRef(null);
@@ -2262,6 +2262,7 @@ function YediHubAppContent() {
           lastWebhookAt: Number(data.lastWebhookAt) || 0,
           lastWebhookResult: String(data.lastWebhookResult || 'none'),
           lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+          receiptCode: String(data.receiptCode || 'unknown'),
         });
       } catch {
         if (alive) setWebhookHealth(previous => ({
@@ -2290,6 +2291,7 @@ function YediHubAppContent() {
         lastWebhookAt: Number(data.lastWebhookAt) || previous.lastWebhookAt,
         lastWebhookResult: String(data.lastWebhookResult || previous.lastWebhookResult),
         lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+        receiptCode: String(data.receiptCode || previous.receiptCode || 'unknown'),
       }));
       addToast(response.ok
         ? 'Server webhook configured. Twitch will verify the callback before it is active.'
@@ -3744,7 +3746,7 @@ function YediHubAppContent() {
                       Twitch server webhook
                     </span>
                     <span className={webhookHealth.active ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>
-                      {webhookHealth.loading ? 'CHECKING' : webhookHealth.active ? 'ACTIVE' : 'NOT ACTIVE'}
+                      {webhookHealth.loading ? 'CHECKING' : webhookHealth.active ? 'LISTENING' : 'NOT ACTIVE'}
                     </span>
                   </div>
                   {['moderator_chat_scopes_missing', 'webhook_not_subscribed'].includes(webhookHealth.code) && (
@@ -3766,8 +3768,18 @@ function YediHubAppContent() {
                   <div className="mt-2 break-words text-[10px] text-slate-300">
                     {webhookHealth.status || webhookHealth.code}
                   </div>
+                  {webhookHealth.receiptCode === 'firestore_quota_exceeded' && (
+                    <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-900/20 px-2 py-2 text-[10px] font-bold text-amber-100">
+                      Firestore quota is exhausted. Twitch may receive messages, but video requests cannot be saved to the shared queue until storage is available.
+                    </div>
+                  )}
+                  {webhookHealth.active && webhookHealth.receiptCode !== 'firestore_quota_exceeded' && !webhookHealth.lastWebhookAt && (
+                    <div className="mt-2 text-[10px] text-amber-200">
+                      Listening is enabled, but no successful request receipt has been verified. Test with a fresh URL from a normal viewer.
+                    </div>
+                  )}
                   <div className="mt-1 text-[9px] text-slate-400">
-                    Last verified chat: {webhookHealth.lastWebhookAt
+                    Last saved request receipt: {webhookHealth.lastWebhookAt
                       ? new Date(webhookHealth.lastWebhookAt).toLocaleString() : 'Not recorded'}
                     {' · '}Result: {webhookHealth.lastWebhookResult}
                     {' · '}Queued: {webhookHealth.lastWebhookQueued}
@@ -3823,15 +3835,15 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch server webhook</div>
-              <div className={webhookHealth.active ? 'text-emerald-300' : 'text-amber-200'}>
-                {webhookHealth.active ? 'Server webhook active' : webhookHealth.code}
+              <div className={webhookHealth.receiptCode === 'firestore_quota_exceeded' ? 'text-rose-200' : webhookHealth.active ? 'text-emerald-300' : 'text-amber-200'}>
+                {webhookHealth.receiptCode === 'firestore_quota_exceeded' ? 'Firestore quota exceeded; requests cannot be saved' : webhookHealth.active ? 'Twitch listening (delivery not guaranteed)' : webhookHealth.code}
                 {' · '}Last delivery: {webhookHealth.lastWebhookAt
                   ? new Date(webhookHealth.lastWebhookAt).toLocaleTimeString() : 'Never'}
               </div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
-              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected && !chatBotSession.canReadChat ? 'Replies only · reauthorize bot for chat reading' : chatBotSession.connected ? 'Online · @gachibot69 (read/write)' : 'Offline · chat intake unavailable'}</div>
+              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected && !chatBotSession.canReadChat ? 'Replies only · reauthorize bot for chat reading' : chatBotSession.connected ? 'Online · @gachibot69 (replies enabled)' : 'Offline · chat replies unavailable'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
