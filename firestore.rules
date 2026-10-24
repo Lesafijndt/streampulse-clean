@@ -21,8 +21,14 @@ service cloud.firestore {
           || (request.resource.data.preferences is map
           && request.resource.data.preferences.keys().hasOnly([
             'activeTab', 'selectedCategory', 'mediaTypeFilter', 'sortBy',
-            'searchQuery', 'isTheatreMode', 'statsExpanded'
-          ])));
+            'searchQuery', 'isTheatreMode', 'statsExpanded', 'streamSettings'
+          ])
+          && (!('streamSettings' in request.resource.data.preferences)
+            || (request.resource.data.preferences.streamSettings is map
+              && request.resource.data.preferences.streamSettings.keys().hasOnly([
+                'streamMode', 'subsOnly', 'autoPlayNext', 'allowYouTube',
+                'allowTwitch', 'allowTikTok', 'maxDurationMinutes'
+              ]))))));
       allow delete: if false;
     }
     // Only sessions minted by the server after a successful allowlisted Twitch OAuth login.

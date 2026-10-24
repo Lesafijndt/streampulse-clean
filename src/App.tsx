@@ -358,7 +358,8 @@ function YediHubAppContent() {
 
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
-    const saved = readStoredValue(roomStorageKey(channelRoom, 'settings'), {});
+    const saved = {};
+    // Cloud-only personal settings are loaded after Twitch/Firebase login.
     // Ignore the retired approval toggle from settings saved by an earlier version.
     const compatibleSaved = saved && typeof saved === 'object'
       ? Object.fromEntries(Object.entries(saved).filter(([key]) => key !== 'requireApproval'))
@@ -591,10 +592,8 @@ function YediHubAppContent() {
     if (writeStoredValue(snapshotKey, snapshot)) setSafetySnapshot(snapshot);
   }, [videos, streamSettings, votedIds, channelRoom]);
 
-  useEffect(() => {
-    if (!normalizeRoomName(channelRoom)) return;
-    writeStoredValue(roomStorageKey(channelRoom, 'settings'), streamSettings);
-  }, [streamSettings, channelRoom]);
+  // Personal queue/player preferences are saved under user_profiles in Firestore,
+  // not duplicated into browser localStorage or the shared room document.
 
   useEffect(() => {
     if (!normalizeRoomName(channelRoom)) return;
@@ -966,7 +965,8 @@ function YediHubAppContent() {
             queueOpenCloudOverrideRef.current = null;
           }
           queueOpenRef.current = Boolean(merged.queueOpen);
-          setStreamSettings((current) => JSON.stringify(current) === JSON.stringify(merged) ? current : merged);
+          setStreamSettings((current) => current.queueOpen === Boolean(merged.queueOpen)
+            ? current : { ...current, queueOpen: Boolean(merged.queueOpen) });
         }
         setRoomConfigLoadedFor(normalizedRoom);
         return;
@@ -975,8 +975,7 @@ function YediHubAppContent() {
       // Shared room queue controls belong to the moderator, not the streamer.
       if (!moderatorLogin) { setRoomConfigLoadedFor(normalizedRoom); return; }
       // First setup of a room: seed its cloud configuration from defaults.
-      const local = {};
-      const seed = { ...DEFAULT_STREAM_SETTINGS, ...(local && typeof local === 'object' ? local : {}) };
+      const seed = { queueOpen: true };
       setDoc(configRef, { channelRoom: normalizedRoom, streamSettings: seed, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
         .then(() => { if (active) setRoomConfigLoadedFor(normalizedRoom); })
         .catch((error) => {
@@ -1001,7 +1000,7 @@ function YediHubAppContent() {
     const normalizedRoom = normalizeRoomName(channelRoom);
     if (!moderatorLogin || !normalizedRoom || !db || !firebaseUser || roomConfigLoadedFor !== normalizedRoom) return;
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizedRoom);
-    setDoc(configRef, { channelRoom: normalizedRoom, streamSettings, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
+    setDoc(configRef, { channelRoom: normalizedRoom, streamSettings: { queueOpen: streamSettings.queueOpen }, bridgeAutoConnect: true, updatedAt: Date.now() }, { merge: true })
       .catch((error) => {
         console.warn('Could not save cloud room settings.', error);
         setSyncStatusText('Room settings save failed — local settings remain saved');
@@ -1029,6 +1028,9 @@ function YediHubAppContent() {
       if (prefs.searchQuery !== undefined) setSearchQuery(prefs.searchQuery);
       if (prefs.isTheatreMode !== undefined) setIsTheatreMode(prefs.isTheatreMode);
       if (prefs.statsExpanded !== undefined) setStatsExpanded(prefs.statsExpanded);
+      if (prefs.streamSettings) {
+        setStreamSettings(current => ({ ...current, ...prefs.streamSettings, queueOpen: current.queueOpen }));
+      }
       setProfileLoadedFor(login);
     }).catch(error => console.warn('Could not load personal cloud preferences:', error?.code || error));
     return () => { valid = false; };
@@ -1038,7 +1040,7 @@ function YediHubAppContent() {
     if (!db || !firebaseUser || profileLoadedFor !== login || !ALLOWED_TWITCH_USERS.has(login)) return;
     const prefs = sanitizePersonalPreferences({
       activeTab, selectedCategory, mediaTypeFilter, sortBy, searchQuery,
-      isTheatreMode, statsExpanded,
+      isTheatreMode, statsExpanded, streamSettings,
     });
     const pending = window.setTimeout(() => {
       void setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_profiles', login),
@@ -1047,7 +1049,7 @@ function YediHubAppContent() {
     }, 650);
     return () => window.clearTimeout(pending);
   }, [db, firebaseUser, appId, twitchAuth.username, profileLoadedFor,
-      activeTab, selectedCategory, mediaTypeFilter, sortBy, searchQuery, isTheatreMode, statsExpanded]);
+      activeTab, selectedCategory, mediaTypeFilter, sortBy, searchQuery, isTheatreMode, statsExpanded, streamSettings]);
 
   // Sync Video Changes Helper (updates Firestore if online, updates state locally)
   const syncUpdateVideo = async (videoId, updates) => {
