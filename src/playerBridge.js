@@ -111,3 +111,10 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
   return actions;
 }
+
+
+/** A fresh YouTube embed may emit PAUSED before it has played a single frame.
+ * Never persist this startup/browser-autoplay event as the user's choice. */
+export function shouldPersistYouTubePausedEvent({ hasPlayed = false, visible = true } = {}) {
+  return hasPlayed === true && visible === true;
+}

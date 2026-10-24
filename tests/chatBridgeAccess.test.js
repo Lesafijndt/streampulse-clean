@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canHostLocalChatBridge } from '../src/chatBridgeAccess.js';
+import { canHostLocalChatBridge, hasVerifiedCloudChatIntake } from '../src/chatBridgeAccess.js';
 
 test('the authenticated moderator may host the local Twitch request bridge', () => {
   assert.equal(canHostLocalChatBridge({
@@ -34,4 +34,19 @@ test('regular viewers and unauthenticated sessions cannot host the bridge', () =
     role: 'moderator',
     username: 'anotheraccount',
   }), false);
+});
+
+
+test('enabled EventSub does not silence IRC until a webhook has actually processed', () => {
+  const now = Date.parse('2026-10-24T12:00:00.000Z');
+  const base = {
+    active: true, firestoreStatus: 'connected',
+    lastWebhookStatus: 'persisted', lastProcessingStatus: 'ok',
+    lastWebhookAt: now - 1000,
+  };
+  assert.equal(hasVerifiedCloudChatIntake({ ...base, lastWebhookAt: 0 }, now), false);
+  assert.equal(hasVerifiedCloudChatIntake({ ...base, lastProcessingStatus: 'pending' }, now), false);
+  assert.equal(hasVerifiedCloudChatIntake({ ...base, firestoreStatus: 'unavailable' }, now), false);
+  assert.equal(hasVerifiedCloudChatIntake(base, now), true);
+  assert.equal(hasVerifiedCloudChatIntake({ ...base, lastWebhookAt: now - 11 * 60_000 }, now), false);
 });

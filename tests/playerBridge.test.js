@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
+import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute, shouldPersistYouTubePausedEvent } from '../src/playerBridge.js';
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };
@@ -195,4 +195,11 @@ test('shared player preferences persist volume and route Twitch Clips through a 
   assert.match(appSource, /player\.isPaused\?\.\(\)/);
   assert.match(appSource, /status: 'native'/);
   assert.doesNotMatch(appSource, /durationSeconds \+ 4/);
+});
+
+
+test('YouTube startup pause does not overwrite user autoplay preference', () => {
+  assert.equal(shouldPersistYouTubePausedEvent({ hasPlayed: false, visible: true }), false);
+  assert.equal(shouldPersistYouTubePausedEvent({ hasPlayed: true, visible: false }), false);
+  assert.equal(shouldPersistYouTubePausedEvent({ hasPlayed: true, visible: true }), true);
 });

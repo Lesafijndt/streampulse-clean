@@ -101,11 +101,11 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute, shouldPersistYouTubePausedEvent } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
-import { canHostLocalChatBridge } from './chatBridgeAccess.js';
+import { canHostLocalChatBridge, hasVerifiedCloudChatIntake } from './chatBridgeAccess.js';
 import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
 
@@ -895,7 +895,10 @@ function YediHubAppContent() {
         const result = await response.json().catch(() => ({}));
         if (cancelled) return;
         const active = Boolean(response.ok && result.active === true);
-        cloudChatListenerReadyRef.current = active;
+        // Active subscription alone is NOT proof of working webhook delivery.
+        // Leave the moderator IRC backup enabled until a recent persisted request
+        // has been processed, or chat will silently stop when webhook intake stalls.
+        cloudChatListenerReadyRef.current = hasVerifiedCloudChatIntake(result);
         setCloudChatListener({
           status: String(result.status || (response.ok ? 'inactive' : 'error')),
           active,
@@ -2287,7 +2290,8 @@ function YediHubAppContent() {
       matchingVideo?.platform ||
       (String(currentVideoRef.current?.id || '') === id ? currentVideoRef.current?.platform : '');
     const isTikTok = platform === 'tiktok';
-    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v2-' + id);
+    // v3 drops pause state accidentally saved by older autoplay initialization.
+    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v3-' + id);
     // Older builds accidentally saved autoplay mute as a deliberate preference.
     // Keep the old pause intent, but read TikTok audio preference from a clean separate key.
     const tiktokMuteStorageKey = isTikTok
@@ -2688,12 +2692,14 @@ function YediHubAppContent() {
 
       ws.onopen = () => {
         if (ircSocketRef.current !== ws) return;
-        ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+        // An anonymous nickname without PASS can be rejected by Twitch before JOIN.
+        ws.send('PASS SCHMOOPIIE');
         ws.send(`NICK justinfan${Math.floor(10000 + Math.random() * 89999)}`);
+        ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
         ws.send(`JOIN #${cleanChan}`);
         reconnectAttemptsRef.current = 0;
-        setIrcConnected(true);
-        if (!options.silent) addToast(`Twitch command bridge connected to #${cleanChan}.`, 'success');
+        // WebSocket OPEN is not proof that Twitch accepted our IRC JOIN.
+        setIrcConnected(false);
       };
 
       ws.onmessage = (event) => {
@@ -2703,6 +2709,9 @@ function YediHubAppContent() {
         // frame as one string dropped all but its first PRIVMSG (and could drop
         // messages after a PING), which made requests appear intermittently flaky.
         for (const raw of splitTwitchIrcFrame(event.data)) {
+          if (/\bROOMSTATE\s+#2o3a\b/i.test(raw) || /\b366\s+\S+\s+#2o3a\b/i.test(raw)) {
+            setIrcConnected(true);
+          }
           if (/^PING(?:\s|$)/.test(raw)) {
             ws.send('PONG :tmi.twitch.tv');
             continue;
@@ -2733,8 +2742,9 @@ function YediHubAppContent() {
           const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
           const volumeCommand = parseModVolumeCommand(lowerText);
           if (isRequestCommand || isDirectVideoUrl) {
-            // EventSub owns request ingestion once enabled; the browser listener is only a
-            // temporary fallback during setup and must not double-add cloud requests.
+            // Only stop the IRC fallback after recent EventSub delivery was actually
+            // persisted AND processed, not when Twitch merely reports enabled.
+            // Server-side media IDs and transactions deduplicate overlapping delivery.
             if (!cloudChatListenerReadyRef.current) {
               handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
             }
@@ -3582,7 +3592,7 @@ function YediHubAppContent() {
     const playerWindow = iframe.contentWindow;
     if (!playerWindow) return undefined;
     let cancelled = false;
-    let hasStarted = false;
+    let hasPlayed = false;
     let endedHandled = false;
     let previousState = -1;
     const postCommand = (func, args = []) => {
@@ -3700,9 +3710,13 @@ function YediHubAppContent() {
         const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
           restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
         if (stateFromEvent === 2) {
-          // Providers can report a synthetic pause when the browser backgrounds an iframe.
-          // Do not persist that as the viewer's deliberate pause preference.
-          if (document.visibilityState !== 'hidden') {
+          // YouTube can emit PAUSED while constructing the iframe, before any
+          // playback has started. This is not a user pause and must not cancel
+          // subsequent autoplay retries or permanently black out the player.
+          if (shouldPersistYouTubePausedEvent({
+            hasPlayed,
+            visible: document.visibilityState !== 'hidden',
+          })) {
             updatePlaybackIntent(videoId, { paused: true });
             keyboardPausedRef.current = { videoId, paused: true };
           }
@@ -3715,8 +3729,8 @@ function YediHubAppContent() {
           updatePlaybackIntent(videoId, { paused: false });
           keyboardPausedRef.current = { videoId, paused: false };
         }
-        if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
-        if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
+        if (stateFromEvent === 1) hasPlayed = true;
+        if (stateFromEvent === 0 && hasPlayed && previousState !== 0 && !endedHandled) {
           endedHandled = true;
           if (currentVideoRef.current?.id === video.id) handleMediaEndedRef.current?.(video.id);
         }
