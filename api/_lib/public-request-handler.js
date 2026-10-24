@@ -4,13 +4,81 @@ import { classifyFirebaseHealthError } from './firebase-health-diagnostic.js';
 import { processEventSubChatMessage } from './cloud-chat-requests.js';
 
 const requestWindowMs = 60_000;
-const maxRequestsPerWindow = 5;
+const maxRequestsPerWindow = 120;
+const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
+const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const requestAttempts = new Map();
 
 function sendJson(res, status, body) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   return res.status(status).json(body);
+}
+
+function parseCookies(header = '') {
+  return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
+    const index = value.indexOf('=');
+    try { return [value.slice(0, index), decodeURIComponent(value.slice(index + 1))]; }
+    catch { return [value.slice(0, index), '']; }
+  }));
+}
+
+function appendCookie(res, value) {
+  const previous = res.getHeader?.('Set-Cookie');
+  const list = previous ? (Array.isArray(previous) ? previous : [previous]) : [];
+  res.setHeader('Set-Cookie', [...list, value]);
+}
+
+function setStaffCookie(res, name, value, maxAge) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  appendCookie(res, `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`);
+}
+
+async function validateStaffRequest(req, res) {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET;
+  if (!clientId) return null;
+  const cookies = parseCookies(req.headers.cookie);
+  let accessToken = cookies.yedi_twitch_access || '';
+  let refreshToken = cookies.yedi_twitch_refresh || '';
+
+  const validate = async (token) => {
+    if (!token) return null;
+    const response = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { Authorization: `OAuth ${token}` },
+      signal: AbortSignal.timeout(5000),
+      cache: 'no-store',
+    });
+    return response.ok ? response.json().catch(() => null) : null;
+  };
+
+  let identity = await validate(accessToken);
+  if (!identity && refreshToken && clientSecret) {
+    const refreshedResponse = await fetch('https://id.twitch.tv/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+      signal: AbortSignal.timeout(6500),
+      cache: 'no-store',
+    });
+    const refreshed = await refreshedResponse.json().catch(() => ({}));
+    if (refreshedResponse.ok && refreshed.access_token) {
+      accessToken = refreshed.access_token;
+      if (refreshed.refresh_token) refreshToken = refreshed.refresh_token;
+      identity = await validate(accessToken);
+    }
+  }
+
+  const login = String(identity?.login || '').toLowerCase();
+  if (!identity || identity.client_id !== clientId || !ALLOWED_STAFF.has(login)) return null;
+  setStaffCookie(res, 'yedi_twitch_access', accessToken, Math.max(1, Math.min(Number(identity.expires_in) || 14400, 14400)));
+  if (refreshToken) setStaffCookie(res, 'yedi_twitch_refresh', refreshToken, REMEMBERED_SESSION_MAX_AGE);
+  return { login, userId: String(identity.user_id || '') };
 }
 
 function getRequester(value) {
@@ -80,13 +148,6 @@ export default async function handler(req, res) {
   }
 
   const requester = getRequester(body.requestedBy);
-  if (!checkRateLimit(getClientKey(req))) {
-    return sendJson(res, 429, {
-      ok: false,
-      code: 'rate_limited',
-      message: 'Too many requests from this connection. Wait a minute and try again.',
-    });
-  }
 
   const title = String(body.title || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 180);
   const note = String(body.note || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 300);
@@ -103,16 +164,39 @@ export default async function handler(req, res) {
     });
   }
 
+  let staff;
+  try {
+    staff = await validateStaffRequest(req, res);
+  } catch (error) {
+    console.error('Could not validate queue writer session:', String(error?.message || error).slice(0, 240));
+  }
+  if (!staff) {
+    return sendJson(res, 401, {
+      ok: false,
+      code: 'staff_session_required',
+      message: 'The moderator or streamer session expired. Sign in again before adding requests.',
+    });
+  }
+  if (!checkRateLimit('staff:' + staff.login)) {
+    return sendJson(res, 429, {
+      ok: false,
+      code: 'rate_limited',
+      message: 'The request bridge is receiving too many additions at once. Wait a moment and try again.',
+    });
+  }
+
+  const source = String(body.source || '') === 'twitch-chat-bridge' ? 'twitch-chat-bridge' : 'dashboard';
+
   try {
     const result = await processEventSubChatMessage({
       event: {
         broadcaster_user_login: '2o3a',
         chatter_user_login: requester,
         message: { text: url },
-        source: 'website',
+        source,
       },
-      messageId: 'website-' + randomUUID(),
-      requestOptions: { source: 'website', title, note, category, startSeconds },
+      messageId: source + '-' + randomUUID(),
+      requestOptions: { source, title, note, category, startSeconds },
     });
 
     if (result?.queued) {

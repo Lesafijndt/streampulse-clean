@@ -67,3 +67,25 @@ test('the dashboard exposes a request button, fullscreen, muted YouTube autoplay
   assert.match(app, /if \(intent\.muted !== true\) send\('unMute'\)/);
   assert.match(app, /Click to start video/);
 });
+
+
+test('valid queue additions require an approved dashboard session before Firebase is touched', async () => {
+  const res = makeResponse();
+  await handler({
+    method: 'POST',
+    headers: { origin: 'https://streampulse-clean.vercel.app', host: 'streampulse-clean.vercel.app', 'x-forwarded-proto': 'https' },
+    body: { url: 'https://youtu.be/dQw4w9WgXcQ', requestedBy: 'viewer' },
+  }, res);
+  assert.equal(res.code, 401);
+  assert.equal(res.body.code, 'staff_session_required');
+});
+
+test('queue additions use the server path and cloud chat setup is moderator-operable', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const setup = await readFile(new URL('../api/twitch/eventsub-setup.js', import.meta.url), 'utf8');
+  assert.match(app, /twitch-chat-bridge/);
+  assert.match(app, /refreshCloudChatListener\(canConfigureCloudChat\)/);
+  assert.doesNotMatch(setup, /streamer_required/);
+  assert.match(setup, /moderator status for the chatting bot/);
+});

@@ -880,7 +880,7 @@ function YediHubAppContent() {
 
     let cancelled = false;
     let inFlight = false;
-    const isStreamer = normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL;
+    const canConfigureCloudChat = ALLOWED_TWITCH_USERS.has(normalizeTwitchLogin(twitchAuth.username));
 
     const refreshCloudChatListener = async (setup = false) => {
       if (inFlight || cancelled) return;
@@ -937,8 +937,8 @@ function YediHubAppContent() {
 
     // Let the existing session/bot refresh effects renew their HttpOnly tokens first.
     const initialTimer = window.setTimeout(() => {
-      void refreshCloudChatListener(isStreamer);
-    }, isStreamer ? 2200 : 500);
+      void refreshCloudChatListener(canConfigureCloudChat);
+    }, canConfigureCloudChat ? 1200 : 500);
     const pollTimer = window.setInterval(() => {
       void refreshCloudChatListener(false);
     }, 120000);
@@ -1785,63 +1785,54 @@ function YediHubAppContent() {
       recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
     }
 
-    if (db && firebaseUser) {
+    if (twitchAuth.authenticated) {
       const itemId = String(localItem.id);
       pendingQueueAddAttemptAtRef.current.set(itemId, Date.now());
-      const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
-      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
       try {
-        const committedVersion = await runTransaction(db, async (transaction) => {
-          const [settingsSnapshot, itemSnapshot] = await Promise.all([
-            transaction.get(settingsRef),
-            transaction.get(itemRef),
-          ]);
-          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
-          const version = Number(settings.queueVersion) || 0;
-          if (itemSnapshot.exists()) {
-            const existing = itemSnapshot.data() || {};
-            if (!(existing.status === 'watched' && isMediaHistoryCooldownExpired(existing, Date.now()))) {
-              const duplicate = new Error('DUPLICATE_QUEUE_ITEM');
-              duplicate.code = 'duplicate_queue_item';
-              throw duplicate;
-            }
-          }
-          const writeAt = Date.now();
-          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-            ? settings.chatIntakeHealth : {};
-          transaction.set(itemRef, { ...localItem, createdAt: Date.now() });
-          transaction.set(settingsRef, {
-            queueVersion: version + 1,
-            queueUpdatedAt: writeAt,
-            chatIntakeHealth: {
-              ...previousHealth,
-              lastWriteAt: writeAt,
-              lastWriteStatus: 'ok',
-              lastWriteSource: 'moderator-browser',
-              lastWrittenMediaId: itemId,
-              lastProcessingError: null,
-            },
-          }, { merge: true });
-          return version + 1;
+        const source = String(localItem.note || '').toLowerCase().includes('twitch chat')
+          ? 'twitch-chat-bridge'
+          : 'dashboard';
+        const response = await fetch('/api/public-request', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: localItem.url,
+            title: localItem.title,
+            requestedBy: localItem.requestedBy,
+            note: localItem.note,
+            category: localItem.category,
+            startSeconds: localItem.startSeconds,
+            source,
+          }),
         });
-        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (response.status === 409 && ['duplicate', 'queue_closed'].includes(String(result.code || ''))) {
+            pendingQueueAddsRef.current.delete(itemId);
+            pendingQueueAddAttemptAtRef.current.delete(itemId);
+            persistPendingQueueAdds();
+            videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
+            setVideos((prev) => prev.filter((video) => String(video.id) !== itemId));
+            recordLocalQueueWriteHealth();
+            return;
+          }
+          const error = new Error(String(result.message || 'The shared queue server could not confirm this request.'));
+          error.code = String(result.code || 'queue_server_write_failed');
+          throw error;
+        }
         pendingQueueAddsRef.current.delete(itemId);
         pendingQueueAddAttemptAtRef.current.delete(itemId);
         persistPendingQueueAdds();
         recordLocalQueueWriteHealth();
+        setCloudSynced(true);
+        setSyncStatusText('Cloud Synced');
       } catch (error) {
-        if (error?.code === 'duplicate_queue_item') {
-          pendingQueueAddsRef.current.delete(itemId);
-          pendingQueueAddAttemptAtRef.current.delete(itemId);
-          persistPendingQueueAdds();
-          videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
-          setVideos((prev) => prev.filter((video) => String(video.id) !== itemId));
-          return;
-        }
         recordLocalQueueWriteHealth(error);
-        console.warn('Firestore add failed; the request is retained locally until cloud confirmation.', error);
+        console.warn('Server queue add failed; the request is retained locally until retry.', error);
         setCloudSynced(false);
-        setSyncStatusText('Cloud write failed — sync needs attention');
+        setSyncStatusText('Cloud write failed — server retry pending');
       }
     }
   };

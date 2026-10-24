@@ -10,7 +10,6 @@ const BOT_LOGIN = 'gachibot69';
 const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
-const REQUIRED_STREAMER_SCOPES = ['channel:bot'];
 let cachedAppToken = { value: '', expiresAt: 0 };
 let lastInboxDrainScheduledAt = 0;
 
@@ -198,13 +197,10 @@ function statusResult(subscription) {
   }
   return { active: false, status: 'inactive', code: 'not_configured', message: 'Cloud chat listener is not configured yet.' };
 }
-function getMissingScopeMessage(staff, bot) {
-  if (!REQUIRED_STREAMER_SCOPES.every((scope) => staff.scopes.has(scope))) {
-    return {
-      active: false, status: 'needs_authorization', code: 'staff_scope_missing',
-      message: '2o3a must reauthorize Twitch and grant channel:bot to enable cloud chat capture.',
-    };
-  }
+function getMissingScopeMessage(_staff, bot) {
+  // With an app access token Twitch accepts either broadcaster channel:bot authorization
+  // OR moderator status for the chatting bot. Do not incorrectly block moderator-operated
+  // setup just because the broadcaster's current dashboard token lacks channel:bot.
   if (!REQUIRED_BOT_SCOPES.every((scope) => bot.scopes.has(scope))) {
     return {
       active: false, status: 'needs_authorization', code: 'bot_scope_missing',
@@ -238,9 +234,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ active: false, status: 'error', code: 'origin_not_configured', message: 'Set TWITCH_APP_URL in Vercel to the production HTTPS site.' });
     }
 
-    if (String(staff.login || '') !== STREAMER_LOGIN) {
-      return res.status(403).json({ active: false, status: 'needs_authorization', code: 'streamer_required', message: 'Only the 2o3a streamer session can enable cloud chat capture.' });
-    }
+    // Either approved dashboard account may run setup. Twitch validates whether
+    // @gachibot69 is a channel moderator or the broadcaster granted channel:bot.
     // If an active subscription already exists, don't demand new scopes or create a duplicate.
     try {
       const { broadcasterId, botId } = await resolveUserIds();
@@ -300,7 +295,7 @@ export default async function handler(req, res) {
         message: firebaseFailure
           ? 'Cloud chat capture cannot start because Firestore is unavailable. Check Firebase service-account configuration, access, and quota.'
           : status === 403
-            ? 'Twitch denied the subscription. Verify the requested scopes and that the accounts belong to the same Twitch developer application.'
+            ? 'Twitch denied the subscription. Ensure @gachibot69 is a moderator in 2o3a chat (or reauthorize 2o3a with channel:bot), then retry.'
             : 'Could not configure the Twitch cloud chat listener. Check the Twitch EventSub/API configuration and retry.',
       });
     }
