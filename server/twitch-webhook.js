@@ -49,6 +49,12 @@ export default async function handleTwitchWebhook(req, res) {
   const timestamp = String(req.headers['twitch-eventsub-message-timestamp'] || '');
   const signature = String(req.headers['twitch-eventsub-message-signature'] || '');
   if (!verifyTwitchSignature({ id, timestamp, signature, rawBody: raw, secret })) {
+    // An EventSub subscription can remain enabled even after the server-side
+    // signing secret changes. Log a safe diagnostic, never the secret or body.
+    console.warn('twitch_webhook_signature_rejected', {
+      messageType: String(req.headers['twitch-eventsub-message-type'] || 'unknown').slice(0, 64),
+      hasMessageId: Boolean(id), payloadBytes: raw.length,
+    });
     return res.status(403).json({ code: 'invalid_signature' });
   }
   let frame;
