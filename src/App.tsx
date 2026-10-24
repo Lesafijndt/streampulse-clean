@@ -607,6 +607,13 @@ function YediHubAppContent() {
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
+  // Live diagnostics for the authenticated moderator Twitch chat bridge.
+  const [chatBridgeHealth, setChatBridgeHealth] = useState({
+    status: 'idle', code: '', lastMessageAt: 0, lastRequestAt: 0, lastRequestResult: '',
+  });
+  const updateChatBridgeHealth = (patch) => {
+    setChatBridgeHealth((previous) => ({ ...previous, ...patch }));
+  };
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
@@ -1844,6 +1851,8 @@ function YediHubAppContent() {
         recordLocalQueueWriteHealth();
         setCloudSynced(true);
         setSyncStatusText('Cloud Synced');
+        if (source === 'twitch-chat-bridge') updateChatBridgeHealth({ lastRequestResult: 'confirmed_in_shared_queue' });
+        return true;
       } catch (error) {
         // The backend can fail independently of a healthy authenticated Firestore
         // listener. Restore the previous moderator-browser transaction as a
@@ -1898,10 +1907,11 @@ function YediHubAppContent() {
             recordLocalQueueWriteHealth();
             setCloudSynced(true);
             setSyncStatusText('Cloud Synced · moderator backup');
+            if (source === 'twitch-chat-bridge') updateChatBridgeHealth({ lastRequestResult: 'confirmed_by_moderator_backup' });
             console.info('Backend queue request failed, but Firestore moderator backup confirmed the request.', {
               backendCode: String(error.publicCode || 'unknown'),
             });
-            return;
+            return true;
           } catch (backupError) {
             // Preserve BOTH errors in the console; the diagnostic shows the
             // actual Firestore failure if the browser fallback also fails.
@@ -1925,11 +1935,16 @@ function YediHubAppContent() {
           }
         }
         recordLocalQueueWriteHealth(error);
+        if (source === 'twitch-chat-bridge') {
+          updateChatBridgeHealth({ lastRequestResult: 'queue_write_failed', code: String(error?.publicCode || error?.code || 'queue_write_failed').slice(0, 80) });
+        }
         console.warn('Both queue request routes failed; keeping it in the pending journal.', error);
         setCloudSynced(false);
         setSyncStatusText('Cloud queue write failed — retry pending');
+        return false;
       }
     }
+    return false;
   };
 
   // A quota outage may produce no later Firestore snapshot to trigger the existing recovery
@@ -2756,6 +2771,7 @@ function YediHubAppContent() {
     if (!isCommandBridgeOwner || !chatBotSession.connected) {
       shouldReconnectIrcRef.current = false;
       setIrcConnected(false);
+      updateChatBridgeHealth({ status: 'inactive', code: chatBotSession.connected ? 'moderator_only' : 'bot_login_required' });
       return;
     }
     const channel = normalizeRoomName(targetChan || PRIVATE_CHANNEL);
@@ -2779,6 +2795,7 @@ function YediHubAppContent() {
     }
     ircSocketRef.current = socket;
     setIrcConnected(false);
+    updateChatBridgeHealth({ status: 'connecting' });
     let subscribed = Boolean(options.reconnectUrl);
     const seen = new Set();
     socket.onmessage = async (message) => {
@@ -2787,10 +2804,15 @@ function YediHubAppContent() {
       try { frame = JSON.parse(String(message.data || '')); } catch { return; }
       const type = String(frame?.metadata?.message_type || '');
       if (type === 'session_welcome') {
-        if (subscribed) { setIrcConnected(true); return; }
+        if (subscribed) {
+          setIrcConnected(true);
+          updateChatBridgeHealth({ status: 'subscribed', code: '' });
+          return;
+        }
         const sessionId = String(frame?.payload?.session?.id || '');
         if (!sessionId) { socket.close(); return; }
         try {
+          updateChatBridgeHealth({ status: 'subscribing' });
           const response = await fetch('/api/twitch/auth?action=ws-subscribe', {
             method: 'POST', credentials: 'same-origin', cache: 'no-store',
             headers: { 'Content-Type': 'application/json' },
@@ -2799,15 +2821,19 @@ function YediHubAppContent() {
           const result = await response.json().catch(() => ({}));
           if (ircSocketRef.current !== socket) return;
           if (!response.ok || result.ok !== true) {
-            console.warn('Twitch chat WebSocket subscription failed:', result.code || response.status);
+            const code = String(result.code || 'subscribe_http_' + response.status);
+            console.warn('Twitch chat WebSocket subscription failed:', code);
+            updateChatBridgeHealth({ status: 'error', code });
             socket.close();
             return;
           }
           subscribed = true;
           reconnectAttemptsRef.current = 0;
           setIrcConnected(true);
+          updateChatBridgeHealth({ status: 'subscribed', code: '' });
         } catch (error) {
           console.warn('Moderator chat subscription request failed:', error);
+          updateChatBridgeHealth({ status: 'error', code: 'subscription_request_failed' });
           if (ircSocketRef.current === socket) socket.close();
         }
         return;
@@ -2817,27 +2843,43 @@ function YediHubAppContent() {
         if (url.startsWith('wss://eventsub.wss.twitch.tv/')) connectTwitchIrc(channel, { reconnectUrl: url, silent: true });
         return;
       }
-      if (type === 'revocation') { socket.close(); return; }
+      if (type === 'revocation') {
+        updateChatBridgeHealth({ status: 'error', code: 'twitch_subscription_revoked' });
+        socket.close();
+        return;
+      }
       if (type !== 'notification' || !subscribed ||
         String(frame?.payload?.subscription?.type || '') !== 'channel.chat.message') return;
       const event = frame.payload.event, id = String(frame.metadata?.message_id || '');
       if (!event || !id || seen.has(id)) return;
       seen.add(id);
       if (seen.size > 300) seen.clear();
+      updateChatBridgeHealth({ lastMessageAt: Date.now() });
       const login = normalizeTwitchLogin(event.chatter_user_login);
       const text = String(event.message?.text || '').trim();
       if (normalizeTwitchLogin(event.broadcaster_user_login) !== PRIVATE_CHANNEL ||
           !login || KNOWN_CHAT_BOTS.has(login) || !text || cloudChatListenerReadyRef.current) return;
       if (/^!assr(?:\s|$)/i.test(text) || isSupportedMediaUrlMessage(text)) {
+        updateChatBridgeHealth({ lastRequestAt: Date.now(), lastRequestResult: 'received_from_twitch' });
         const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
         handleIncomingChatCommandRef.current?.(login, role, text);
       }
     };
-    socket.onerror = () => { if (ircSocketRef.current === socket) setIrcConnected(false); };
+    socket.onerror = () => {
+      if (ircSocketRef.current === socket) {
+        setIrcConnected(false);
+        updateChatBridgeHealth({ status: 'error', code: 'twitch_socket_error' });
+      }
+    };
     socket.onclose = () => {
       if (ircSocketRef.current !== socket) return;
       ircSocketRef.current = null;
       setIrcConnected(false);
+      setChatBridgeHealth((previous) => ({
+        ...previous,
+        status: 'reconnecting',
+        code: previous.code || 'websocket_disconnected',
+      }));
       if (shouldReconnectIrcRef.current) {
         reconnectAttemptsRef.current += 1;
         const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
@@ -3026,8 +3068,8 @@ function YediHubAppContent() {
       }
     }
 
-    // A video can be requested again once it has been in History for 16 hours.
-    // Active queue/playing/watch-later entries are still protected from duplicates.
+    // Watched videos can be requested again immediately. Prevent duplicates only
+    // while a copy is queued, playing, awaiting playback, or being submitted.
     const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
     const matchingItems = videosRef.current.filter((video) =>
       getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
@@ -3036,18 +3078,9 @@ function YediHubAppContent() {
       ['queue', 'playing', 'watch_later'].includes(String(video?.status || '').toLowerCase())
     ) || matchingItems.sort((a, b) => (Number(b.playedAt) || Date.parse(b.watchedAt || '') || 0) -
       (Number(a.playedAt) || Date.parse(a.watchedAt || '') || 0))[0] || null;
-    const historyCanBeRequestedAgain = existingItem?.status === 'watched' &&
-      isMediaHistoryCooldownExpired(existingItem, Date.now());
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
-    if ((existingItem && !historyCanBeRequestedAgain) || requestAlreadyPending) {
-      const remainingMs = existingItem?.status === 'watched'
-        ? getMediaHistoryCooldownRemainingMs(existingItem, Date.now())
-        : 0;
-      const remainingHours = Math.max(1, Math.ceil(remainingMs / (60 * 60 * 1000)));
-      const message = remainingMs > 0
-        ? 'That video is in History; it can be requested again ' + remainingHours + 'h after its last play.'
-        : 'That video is already queued or playing. Duplicate request ignored.';
-      addToast(message, 'warning');
+    if ((existingItem && existingItem.status !== 'watched') || requestAlreadyPending) {
+      addToast('That video is already queued or playing. Duplicate request ignored.', 'warning');
       return false;
     }
     // Lock the identity before any more asynchronous work so two requesters cannot race.
@@ -3166,8 +3199,11 @@ function YediHubAppContent() {
         })
       }));
     }
-    void syncAddVideo(newVideo);
+    const confirmed = await syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
+    if (!confirmed && String(note).toLowerCase().includes('twitch chat')) {
+      updateChatBridgeHealth({ lastRequestResult: 'pending_cloud_confirmation' });
+    }
 
     if (deferredMetadataPromise && !resolvedDurationSec) {
       const newVideoId = String(newVideo.id);
@@ -4761,6 +4797,15 @@ function YediHubAppContent() {
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
               <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Authenticated Twitch WebSocket connected' : isCommandBridgeOwner && !chatBotSession.connected ? 'Connect @gachibot69 to enable moderator chat intake' : isCommandBridgeOwner ? 'Connecting authenticated chat…' : 'Moderator browser only'}</div>
+              <div className="mt-1 break-words text-[9px] text-slate-400">
+                Bridge: {chatBridgeHealth.status}{chatBridgeHealth.code ? ' · ' + chatBridgeHealth.code : ''}
+              </div>
+              <div className="mt-1 break-words text-[9px] text-slate-400">Last chat message: {formatTechnicalTimestamp(chatBridgeHealth.lastMessageAt)}</div>
+              <div className="mt-1 break-words text-[9px] text-slate-400">
+                Last chat request: {formatTechnicalTimestamp(chatBridgeHealth.lastRequestAt)}
+                {chatBridgeHealth.lastRequestResult ? ' · ' + chatBridgeHealth.lastRequestResult.replaceAll('_', ' ') : ''}
+              </div>
+              {!chatBotSession.connected && <a href="/api/twitch/bot-login" className="mt-1 inline-block text-[10px] font-bold text-cyan-200 underline underline-offset-2">Connect @gachibot69 to receive chat requests</a>}
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
@@ -4926,9 +4971,12 @@ function YediHubAppContent() {
                   className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
                     isPlayerFullscreen
                       ? 'h-screen min-h-0 max-h-none w-screen'
-                      : isTheatreMode
-                        ? 'aspect-video h-auto max-h-[85vh]' : 'aspect-video h-auto max-h-[75vh]'
+                      : 'aspect-video h-auto max-h-none'
                   }`}
+                  style={!isPlayerFullscreen ? {
+                    maxWidth: isTheatreMode ? 'min(100%, 153vh)' : 'min(100%, 116vh)',
+                    marginInline: 'auto',
+                  } : undefined}
                 >
                   {isVerticalMedia(currentVideo) && (
                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">

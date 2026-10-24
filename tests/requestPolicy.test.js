@@ -33,30 +33,20 @@ test('does not mistake title text or invalid offsets for a playback position', (
   assert.equal(parseMediaStartSeconds('https://youtu.be/abcdefghijk'), 0);
 });
 
-test('history item becomes requestable exactly 16 hours after watchedAt', () => {
-  const item = { status: 'watched', watchedAt: new Date(NOW - MEDIA_HISTORY_COOLDOWN_MS).toISOString() };
-  assert.equal(isMediaHistoryCooldownExpired(item, NOW), true);
-  assert.equal(getMediaHistoryCooldownRemainingMs(item, NOW), 0);
-});
-
-test('history cooldown does not expire early and active entries never qualify', () => {
-  const recent = { status: 'watched', watchedAt: new Date(NOW - MEDIA_HISTORY_COOLDOWN_MS + 1000).toISOString() };
-  assert.equal(isMediaHistoryCooldownExpired(recent, NOW), false);
-  assert.equal(getMediaHistoryCooldownRemainingMs(recent, NOW), 1000);
-  assert.equal(isMediaHistoryCooldownExpired({ status: 'queue', watchedAt: new Date(NOW - MEDIA_HISTORY_COOLDOWN_MS * 2).toISOString() }, NOW), false);
-  assert.equal(isMediaHistoryCooldownExpired({ status: 'watched' }, NOW), false);
-});
-
-test('legacy History records without watchedAt eventually become requestable', () => {
-  assert.equal(isMediaHistoryCooldownExpired({
-    status: 'watched', playedAt: NOW - MEDIA_HISTORY_COOLDOWN_MS - 1,
-  }, NOW), true);
-  assert.equal(isMediaHistoryCooldownExpired({
-    status: 'watched', timestamp: NOW - MEDIA_HISTORY_COOLDOWN_MS - 1,
-  }, NOW), true);
-  assert.equal(isMediaHistoryCooldownExpired({
-    status: 'watched', timestamp: NOW - 1000,
-  }, NOW), false);
+test('watched videos are immediately requestable regardless of playback timestamp', () => {
+  assert.equal(MEDIA_HISTORY_COOLDOWN_MS, 0);
+  for (const video of [
+    { status: 'watched', watchedAt: new Date(NOW).toISOString() },
+    { status: 'watched', playedAt: NOW },
+    { status: 'watched' },
+    { status: 'watched', timestamp: NOW - 1000 },
+  ]) {
+    assert.equal(isMediaHistoryCooldownExpired(video, NOW), true);
+    assert.equal(getMediaHistoryCooldownRemainingMs(video, NOW), 0);
+  }
+  for (const status of ['queue', 'playing', 'watch_later']) {
+    assert.equal(isMediaHistoryCooldownExpired({ status }, NOW), false);
+  }
 });
 
 test('EventSub inbox retries use exponential backoff and stop after five failures', () => {

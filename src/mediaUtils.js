@@ -386,35 +386,16 @@ export function parseMediaUrl(rawUrl = '') {
 }
 
 
-// A completed/played item can be requested again after this cooldown.
-export const MEDIA_HISTORY_COOLDOWN_MS = 16 * 60 * 60 * 1000;
+// Watched videos are requestable immediately. Keep these exports for existing
+// callers, but never gate History replay on an elapsed-time restriction.
+export const MEDIA_HISTORY_COOLDOWN_MS = 0;
 
-function historyTimestamp(video = {}) {
-  const watchedAt = Date.parse(String(video.watchedAt || ""));
-  if (Number.isFinite(watchedAt) && watchedAt > 0) return watchedAt;
-  // Older queue records may have no watchedAt. Use the best known playback/creation
-  // timestamp so legacy History entries eventually become requestable instead of locking forever.
-  for (const value of [video.playedAt, video.timestamp, video.createdAt]) {
-    const timestamp = Number(value);
-    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
-    const parsed = Date.parse(String(value || ""));
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  const addedAt = Date.parse(String(video.addedAt || ""));
-  return Number.isFinite(addedAt) && addedAt > 0 ? addedAt : null;
+export function getMediaHistoryCooldownRemainingMs(_video = {}) {
+  return 0;
 }
 
-export function getMediaHistoryCooldownRemainingMs(video = {}, now = Date.now(), cooldownMs = MEDIA_HISTORY_COOLDOWN_MS) {
-  if (String(video.status || "").toLowerCase() !== "watched") return 0;
-  const timestamp = historyTimestamp(video);
-  if (!timestamp) return Math.max(0, Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS);
-  return Math.max(0, (Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS) - (Number(now) - timestamp));
-}
-
-export function isMediaHistoryCooldownExpired(video = {}, now = Date.now(), cooldownMs = MEDIA_HISTORY_COOLDOWN_MS) {
-  if (String(video.status || "").toLowerCase() !== "watched") return false;
-  const timestamp = historyTimestamp(video);
-  return Boolean(timestamp && Number(now) - timestamp >= (Number(cooldownMs) || MEDIA_HISTORY_COOLDOWN_MS));
+export function isMediaHistoryCooldownExpired(video = {}) {
+  return String(video?.status || '').toLowerCase() === 'watched';
 }
 
 function parseMediaTimeValue(value) {

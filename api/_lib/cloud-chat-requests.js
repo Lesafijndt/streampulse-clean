@@ -386,7 +386,7 @@ async function processCloudChatCommand({ db, appId, event, messageId, requester,
   const staff = isStaffEvent(event);
 
   if (name === 'help') {
-    await sendEventSubChatReply(event, 'Requests: !assr <URL or title> or post a link; YouTube timestamps work. !queue, !when, !remove, !bigcock [#]. History videos can be requested again after 16 hours. Mods: !skip. Volume commands require the player dashboard open.');
+    await sendEventSubChatReply(event, 'Requests: !assr <URL or title> or post a link; YouTube timestamps work. !queue, !when, !remove, !bigcock [#]. Videos in History can be requested again immediately. Mods: !skip. Volume commands require the player dashboard open.');
     return { handled: true, reason: 'help' };
   }
 

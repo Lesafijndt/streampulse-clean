@@ -38,6 +38,17 @@ test('moderator chat fallback uses authenticated EventSub and player retains 16:
   assert.match(app, /auth\?action=ws-subscribe/);
   assert.match(app, /chatBotSession\.connected/);
   assert.doesNotMatch(app, /PASS SCHMOOPIIE/);
-  assert.match(app, /aspect-video h-auto max-h-\[75vh\]/);
+  assert.match(app, /aspect-video h-auto max-h-none/);
   assert.match(app, /await fetch\('\/api\/public-request'/);
+});
+
+
+test('chat bridge exposes failed subscription stages and last received request', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /lastMessageAt: 0/);
+  assert.match(app, /lastRequestAt: 0/);
+  assert.match(app, /lastRequestResult: 'received_from_twitch'/);
+  assert.match(app, /twitch_chat_permission_denied|Twitch chat WebSocket subscription failed/);
+  assert.match(app, /lastRequestResult: 'confirmed_in_shared_queue'/);
+  assert.match(app, /lastRequestResult: 'confirmed_by_moderator_backup'/);
 });
