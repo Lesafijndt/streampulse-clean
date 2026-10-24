@@ -87,7 +87,7 @@ async function getSubscriptions(headers) {
   return subscriptions;
 }
 
-export default async function configureWebhook(req, res, { statusOnly = false } = {}) {
+export default async function configureWebhook(req, res, { statusOnly = false, readReceipt = recentWebhookDelivery } = {}) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
@@ -115,7 +115,7 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
       ['enabled', 'webhook_callback_verification_pending'].includes(entry.status));
     // A successful Twitch subscription alone does NOT prove that the Firestore
     // queue project works. Surface a safe status for the moderator.
-    const firestore = await recentWebhookDelivery();
+    const firestore = await readReceipt();
     const repair = !statusOnly && String(req.query?.repair || '') === '1';
     if (existing && !repair) {
       return res.status(200).json({ ok: true, active: existing.status === 'enabled',

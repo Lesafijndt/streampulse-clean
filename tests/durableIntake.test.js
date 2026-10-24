@@ -66,6 +66,9 @@ test('enabled moderator webhook is visible even when the current login token has
     throw Error('unexpected request');
   };
   const res = response();
-  await setup({ method: 'GET', headers: { cookie: 'yedi_twitch_access=valid', host: 'streampulse-clean.vercel.app' } }, res, { statusOnly: true });
+  await setup({ method: 'GET', headers: { cookie: 'yedi_twitch_access=valid', host: 'streampulse-clean.vercel.app' } }, res, {
+    statusOnly: true, readReceipt: async () => ({ receiptCode: 'firestore_quota_exceeded' }),
+  });
   assert.equal(res.statusCode, 200); assert.equal(res.body.active, true); assert.equal(res.body.code, 'webhook_existing');
+  assert.equal(res.body.receiptCode, 'firestore_quota_exceeded');
 });

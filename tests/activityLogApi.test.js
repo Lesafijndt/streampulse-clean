@@ -41,7 +41,8 @@ test('activity log rejects browser writes with a missing Origin header', async (
 });
 
 test('activity log requests are never cacheable', async () => {
-  const req = { method: 'GET', headers: { host: 'whale-cum.test', origin: 'https://whale-cum.test' }, query: {} };
+  const origin = new URL(process.env.TWITCH_APP_URL || 'https://whale-cum.test').origin;
+  const req = { method: 'GET', headers: { host: new URL(origin).host, origin }, query: {} };
   const res = responseMock();
   await handler(req, res);
   assert.equal(res.headers['Cache-Control'], 'no-store, max-age=0');
