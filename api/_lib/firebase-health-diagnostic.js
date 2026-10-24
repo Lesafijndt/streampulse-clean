@@ -43,7 +43,7 @@ export function classifyFirebaseHealthError(error) {
   if (/ABORTED|transaction aborted/i.test(message) || code === '10' || code === 'aborted') {
     return { code: 'firestore_transaction_contention', message: 'Concurrent queue changes aborted the transaction. Retry the request.' };
   }
-  if (/INTERNAL|internal error/i.test(message) || code === '13' || code === 'internal') {
+  if (/\bINTERNAL:\s|\binternal error\b/i.test(message) || code === '13' || code === 'internal') {
     return { code: 'firestore_server_internal', message: 'The Firestore backend returned an internal error.' };
   }
   // Do not send raw backend exception text, which could include project paths or environment details.
