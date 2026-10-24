@@ -90,21 +90,20 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
   try {
     const staff = await obtainSession(req, res, 'staff');
     if (!staff) return res.status(403).json({ ok: false, code: 'moderator_required' });
-    if (!process.env.TWITCH_EVENTSUB_SECRET || process.env.TWITCH_EVENTSUB_SECRET.length < 10) {
-      return res.status(503).json({ ok: false, code: 'webhook_secret_missing' });
-    }
-    const callback = expectedCallback();
-    const headers = await appAccessToken();
-    const broadcasterId = await getBroadcasterId(headers);
-    // The Twitch viewer-listening principal is the verified channel
-    // moderator, not the reply bot. Twitch permits moderator status in place
-    // of a broadcaster channel:bot grant for an app-token webhook.
+    // Check the already-verified user grant BEFORE making unnecessary Twitch
+    // app-token and broadcaster API calls on every status refresh.
     if (!MODERATOR_CHAT_SCOPES.every(scope => staff.scopes.includes(scope))) {
       return res.status(403).json({
         ok: false, code: 'moderator_chat_scopes_missing',
         missing: MODERATOR_CHAT_SCOPES.filter(scope => !staff.scopes.includes(scope)),
       });
     }
+    if (!process.env.TWITCH_EVENTSUB_SECRET || process.env.TWITCH_EVENTSUB_SECRET.length < 10) {
+      return res.status(503).json({ ok: false, code: 'webhook_secret_missing' });
+    }
+    const callback = expectedCallback();
+    const headers = await appAccessToken();
+    const broadcasterId = await getBroadcasterId(headers);
     const all = await getSubscriptions(headers);
     const existing = all.find(entry =>
       entry.type === 'channel.chat.message' &&
@@ -116,9 +115,27 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
     // A successful Twitch subscription alone does NOT prove that the Firestore
     // queue project works. Surface a safe status for the moderator.
     const firestore = await recentWebhookDelivery();
-    if (existing) {
+    const repair = !statusOnly && String(req.query?.repair || '') === '1';
+    if (existing && !repair) {
       return res.status(200).json({ ok: true, active: existing.status === 'enabled',
         status: existing.status, code: 'webhook_existing', ...firestore });
+    }
+    if (existing && repair) {
+      // Explicit moderator-controlled recovery for a subscription signed with
+      // an older TWITCH_EVENTSUB_SECRET. Only touch this app's own callback,
+      // broadcaster, and moderator registration; never other subscriptions.
+      const id = String(existing.id || '');
+      if (!/^[A-Za-z0-9_-]{6,140}$/.test(id)) {
+        return res.status(502).json({ ok: false, code: 'invalid_webhook_subscription_id' });
+      }
+      const deletion = await fetch(
+        'https://api.twitch.tv/helix/eventsub/subscriptions?id=' + encodeURIComponent(id),
+        { method: 'DELETE', headers, signal: AbortSignal.timeout(8000), cache: 'no-store' },
+      );
+      if (!deletion.ok && deletion.status !== 404) {
+        return res.status(502).json({ ok: false, code: 'webhook_repair_delete_failed' });
+      }
+      console.info('twitch_webhook_subscription_repair_requested');
     }
     if (statusOnly) return res.status(200).json({
       ok: true, active: false, code: 'webhook_not_subscribed', ...firestore,
@@ -143,7 +160,7 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
     }
     return res.status(202).json({ ok: true, active: false,
       status: result.data?.[0]?.status || 'webhook_callback_verification_pending',
-      code: 'webhook_verification_pending' });
+      code: repair ? 'webhook_repair_pending' : 'webhook_verification_pending' });
   } catch (error) {
     console.error('twitch_webhook_configuration_failed', { code: String(error?.code || 'unknown') });
     return res.status(503).json({ ok: false, code: String(error?.code || 'webhook_setup_unavailable') });
