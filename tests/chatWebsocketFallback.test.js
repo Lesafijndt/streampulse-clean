@@ -67,7 +67,7 @@ test('Twitch WebSocket handles all distinct URLs and diagnoses ordinary chat sep
   assert.match(app, /const links = allowedSender \? extractSupportedMediaUrls\(text\) : \[\]/);
   assert.match(app, /for \(const requestedUrl of links\.length \? links : \[text\]\)/);
   assert.match(app, /lastMessageKind: allowedSender/);
-  assert.match(app, /Block Hyperlinks/);
+  assert.match(app, /Moderator action: open Twitch Mod View/);
 });
 
 test('server EventSub route also supports several URLs in one approved message', async () => {
