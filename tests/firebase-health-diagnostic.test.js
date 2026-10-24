@@ -27,3 +27,9 @@ test('unknown Firebase health errors do not leak server exception text', () => {
   assert.equal(result.code, 'firestore_health_check_failed');
   assert.doesNotMatch(result.message, /secret-ish|\/a\/b/);
 });
+
+test('transaction invalid arguments and preconditions are not misreported as unknown health failures', () => {
+  assert.equal(classifyFirebaseHealthError({ code: 9, message: 'FAILED_PRECONDITION' }).code, 'firestore_failed_precondition');
+  assert.equal(classifyFirebaseHealthError({ code: 3, message: 'INVALID_ARGUMENT' }).code, 'firestore_invalid_argument');
+  assert.equal(classifyFirebaseHealthError({ code: 10, message: 'ABORTED' }).code, 'firestore_transaction_contention');
+});

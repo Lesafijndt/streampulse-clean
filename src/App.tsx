@@ -393,7 +393,11 @@ function YediHubAppContent() {
   const recordLocalQueueWriteHealth = (error = null) => {
     const previous = readStoredValue(localQueueWriteHealthKey, {});
     const timestamp = Date.now();
-    const diagnostic = error ? classifyFirebaseHealthError(error) : null;
+    const diagnostic = error
+      ? (typeof error.publicCode === 'string' && /^[a-z0-9_]{3,70}$/.test(error.publicCode)
+        ? { code: error.publicCode, message: error.publicMessage || 'The backend could not confirm this request.' }
+        : classifyFirebaseHealthError(error))
+      : null;
     const pendingCount = pendingQueueAddsRef.current?.size || 0;
     const next = error
       ? {
@@ -1822,7 +1826,8 @@ function YediHubAppContent() {
             return;
           }
           const error = new Error(String(result.message || 'The shared queue server could not confirm this request.'));
-          error.code = String(result.code || 'queue_server_write_failed');
+          error.publicCode = String(result.code || 'queue_server_write_failed');
+          error.publicMessage = String(result.message || 'The server rejected this request.');
           throw error;
         }
         pendingQueueAddsRef.current.delete(itemId);
@@ -2658,142 +2663,100 @@ function YediHubAppContent() {
   // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
   const connectTwitchIrc = (targetChan, options = {}) => {
-    // The moderator browser provides the local fallback when cloud EventSub intake is inactive.
-    // The server-side EventSub webhook remains the durable path when it is healthy.
-    if (!isCommandBridgeOwner) {
+    // Twitch IRC no longer documents anonymous chat access. Use the bot's
+    // existing authorized token with EventSub WebSocket from moderator browser.
+    if (!isCommandBridgeOwner || !chatBotSession.connected) {
       shouldReconnectIrcRef.current = false;
       setIrcConnected(false);
-      if (!options.silent) addToast('The local Twitch command bridge is managed from the moderator dashboard.', 'warning');
       return;
     }
-    const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
-    if (!cleanChan) {
-      addToast('Please enter a valid Twitch channel name.', 'warning');
-      return;
-    }
-
+    const channel = normalizeRoomName(targetChan || PRIVATE_CHANNEL);
+    if (channel !== PRIVATE_CHANNEL) return;
     shouldReconnectIrcRef.current = true;
-    ircTargetRef.current = cleanChan;
-    writeStoredValue(`${STORAGE_PREFIX}:active-room`, cleanChan);
-    if (reconnectTimerRef.current) {
-      window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-
-    const previousSocket = ircSocketRef.current;
-    if (previousSocket) {
-      ircSocketRef.current = null;
-      try { previousSocket.close(); } catch { /* Socket may already be closed. */ }
-    }
-
+    ircTargetRef.current = channel;
+    if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    const oldSocket = ircSocketRef.current;
+    ircSocketRef.current = null;
+    try { oldSocket?.close(); } catch { /* Expired socket. */ }
+    let socket;
     try {
-      const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
-      ircSocketRef.current = ws;
-
-      ws.onopen = () => {
-        if (ircSocketRef.current !== ws) return;
-        // An anonymous nickname without PASS can be rejected by Twitch before JOIN.
-        ws.send('PASS SCHMOOPIIE');
-        ws.send(`NICK justinfan${Math.floor(10000 + Math.random() * 89999)}`);
-        ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
-        ws.send(`JOIN #${cleanChan}`);
-        reconnectAttemptsRef.current = 0;
-        // WebSocket OPEN is not proof that Twitch accepted our IRC JOIN.
-        setIrcConnected(false);
-      };
-
-      ws.onmessage = (event) => {
-        if (ircSocketRef.current !== ws) return;
-
-        // A single WebSocket frame can contain multiple IRC lines. Handling the
-        // frame as one string dropped all but its first PRIVMSG (and could drop
-        // messages after a PING), which made requests appear intermittently flaky.
-        for (const raw of splitTwitchIrcFrame(event.data)) {
-          if (/\bROOMSTATE\s+#2o3a\b/i.test(raw) || /\b366\s+\S+\s+#2o3a\b/i.test(raw)) {
-            setIrcConnected(true);
-          }
-          if (/^PING(?:\s|$)/.test(raw)) {
-            ws.send('PONG :tmi.twitch.tv');
-            continue;
-          }
-
-          const message = parseTwitchPrivmsgLine(raw);
-          if (!message) continue;
-          const { tags: tagMap, login, text: rawText } = message;
-          const username = String(tagMap['display-name'] || login || 'Viewer');
-          const voterLogin = normalizeTwitchLogin(login || username);
-          const text = String(rawText || '').trim();
-          const usernameKey = voterLogin || normalizeTwitchLogin(username);
-          const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
-          if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) continue;
-
-          const badges = String(tagMap.badges || '').split(',').filter(Boolean).map((badge) => badge.split('/')[0]);
-          const role = badges.includes('broadcaster')
-            ? 'streamer'
-            : (tagMap.mod === '1' || badges.includes('moderator'))
-            ? 'moderator'
-            : badges.includes('vip')
-            ? 'vip'
-            : badges.includes('subscriber')
-            ? 'subscriber'
-            : 'viewer';
-          const lowerText = text.toLowerCase();
-          const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
-          const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
-          const volumeCommand = parseModVolumeCommand(lowerText);
-          if (isRequestCommand || isDirectVideoUrl) {
-            // Only stop the IRC fallback after recent EventSub delivery was actually
-            // persisted AND processed, not when Twitch merely reports enabled.
-            // Server-side media IDs and transactions deduplicate overlapping delivery.
-            if (!cloudChatListenerReadyRef.current) {
-              handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
-            }
-          } else if (['!remove', '!unrequest', '!queue'].includes(lowerText)) {
-            if (!cloudChatListenerReadyRef.current) {
-              if (lowerText === '!queue') handleQueueSummaryRef.current?.(voterLogin || username);
-              else handleRemoveOwnRequestRef.current?.(voterLogin || username);
-            }
-          } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
-            if (!cloudChatListenerReadyRef.current) handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
-          } else if (lowerText === '!help') {
-            if (!cloudChatListenerReadyRef.current) {
-              sendTwitchChatReply('Request: post a YouTube, TikTok, Twitch Clip or Kick link anywhere in chat, or use !assr <URL or title> with an optional YouTube timestamp.');
-              sendTwitchChatReply('Your requests: !remove / !unrequest. !when / !position / !myqueue shows your queue spot and ETA. History videos can be requested again 16 hours after their last play.');
-              sendTwitchChatReply('Queue: !queue summarizes playback. !bigcock [#] upvotes a waiting item. Mods: !skip; volume commands need the player dashboard open.');
-            }
-          } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
-            if (!cloudChatListenerReadyRef.current) handleQueuePositionRef.current?.(voterLogin || usernameKey);
-          } else if (lowerText === '!skip' && isStaffRole(role)) {
-            if (!cloudChatListenerReadyRef.current) handleSkipNextRef.current?.();
-          } else if (volumeCommand && isStaffRole(role)) {
-            handleVolumeCommandRef.current?.(volumeCommand, role);
-          }
-        }
-      };
-
-      ws.onerror = () => {
-        if (ircSocketRef.current === ws) setIrcConnected(false);
-      };
-
-      ws.onclose = () => {
-        if (ircSocketRef.current !== ws) return;
-        ircSocketRef.current = null;
-        setIrcConnected(false);
-        if (shouldReconnectIrcRef.current) {
-          reconnectAttemptsRef.current += 1;
-          const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
-          if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = window.setTimeout(() => {
-            connectTwitchIrc(ircTargetRef.current, { silent: true });
-          }, delay);
-        }
-      };
+      const url = String(options.reconnectUrl || '');
+      socket = new WebSocket(url.startsWith('wss://eventsub.wss.twitch.tv/')
+        ? url : 'wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=40');
     } catch (error) {
+      console.warn('Could not open Twitch EventSub WebSocket:', error);
       setIrcConnected(false);
-      if (!options.silent) addToast('Could not start the Twitch bridge. It will retry automatically.', 'warning');
+      return;
     }
+    ircSocketRef.current = socket;
+    setIrcConnected(false);
+    let subscribed = Boolean(options.reconnectUrl);
+    const seen = new Set();
+    socket.onmessage = async (message) => {
+      if (ircSocketRef.current !== socket) return;
+      let frame;
+      try { frame = JSON.parse(String(message.data || '')); } catch { return; }
+      const type = String(frame?.metadata?.message_type || '');
+      if (type === 'session_welcome') {
+        if (subscribed) { setIrcConnected(true); return; }
+        const sessionId = String(frame?.payload?.session?.id || '');
+        if (!sessionId) { socket.close(); return; }
+        try {
+          const response = await fetch('/api/twitch/auth?action=ws-subscribe', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }), signal: AbortSignal.timeout(7500),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (ircSocketRef.current !== socket) return;
+          if (!response.ok || result.ok !== true) {
+            console.warn('Twitch chat WebSocket subscription failed:', result.code || response.status);
+            socket.close();
+            return;
+          }
+          subscribed = true;
+          reconnectAttemptsRef.current = 0;
+          setIrcConnected(true);
+        } catch (error) {
+          console.warn('Moderator chat subscription request failed:', error);
+          if (ircSocketRef.current === socket) socket.close();
+        }
+        return;
+      }
+      if (type === 'session_reconnect') {
+        const url = String(frame?.payload?.session?.reconnect_url || '');
+        if (url.startsWith('wss://eventsub.wss.twitch.tv/')) connectTwitchIrc(channel, { reconnectUrl: url, silent: true });
+        return;
+      }
+      if (type === 'revocation') { socket.close(); return; }
+      if (type !== 'notification' || !subscribed ||
+        String(frame?.payload?.subscription?.type || '') !== 'channel.chat.message') return;
+      const event = frame.payload.event, id = String(frame.metadata?.message_id || '');
+      if (!event || !id || seen.has(id)) return;
+      seen.add(id);
+      if (seen.size > 300) seen.clear();
+      const login = normalizeTwitchLogin(event.chatter_user_login);
+      const text = String(event.message?.text || '').trim();
+      if (normalizeTwitchLogin(event.broadcaster_user_login) !== PRIVATE_CHANNEL ||
+          !login || KNOWN_CHAT_BOTS.has(login) || !text || cloudChatListenerReadyRef.current) return;
+      if (/^!assr(?:\s|$)/i.test(text) || isSupportedMediaUrlMessage(text)) {
+        const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
+        handleIncomingChatCommandRef.current?.(login, role, text);
+      }
+    };
+    socket.onerror = () => { if (ircSocketRef.current === socket) setIrcConnected(false); };
+    socket.onclose = () => {
+      if (ircSocketRef.current !== socket) return;
+      ircSocketRef.current = null;
+      setIrcConnected(false);
+      if (shouldReconnectIrcRef.current) {
+        reconnectAttemptsRef.current += 1;
+        const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
+        reconnectTimerRef.current = window.setTimeout(() => connectTwitchIrc(channel, { silent: true }), delay);
+      }
+    };
   };
-
   const disconnectTwitchIrc = (manual = true) => {
     if (manual) shouldReconnectIrcRef.current = false;
     if (reconnectTimerRef.current) {
@@ -2811,7 +2774,7 @@ function YediHubAppContent() {
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    const isBridgeOwner = canHostLocalChatBridge(twitchAuth);
+    const isBridgeOwner = canHostLocalChatBridge(twitchAuth) && chatBotSession.connected;
     shouldReconnectIrcRef.current = Boolean(isBridgeOwner);
     if (!isBridgeOwner) {
       disconnectTwitchIrc(false);
@@ -2824,7 +2787,7 @@ function YediHubAppContent() {
     };
     // The bridge always joins 2o3a and only runs in the moderator's authenticated browser.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated, twitchAuth.username, twitchAuth.role]);
+  }, [twitchAuth.authenticated, twitchAuth.username, twitchAuth.role, chatBotSession.connected]);
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -4701,7 +4664,7 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : isCommandBridgeOwner ? 'Reconnecting / offline' : 'Moderator browser only'}</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Authenticated Twitch WebSocket connected' : isCommandBridgeOwner && !chatBotSession.connected ? 'Connect @gachibot69 to enable moderator chat intake' : isCommandBridgeOwner ? 'Connecting authenticated chat…' : 'Moderator browser only'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
@@ -4731,7 +4694,7 @@ function YediHubAppContent() {
               <div className="min-w-0">
                 <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Twitch EventSub subscription</div>
                 <div className={cloudChatListener.active ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>
-                  {cloudChatListener.subscriptionStatus || cloudChatListener.status || 'Checking'}{cloudChatListener.active ? ' · healthy' : ' · intake not verified'}
+                  {cloudChatListener.subscriptionStatus || cloudChatListener.status || 'Checking'}{cloudChatListener.active ? (hasVerifiedCloudChatIntake(cloudChatListener) ? ' · intake verified' : ' · awaiting delivery') : ' · intake not verified'}
                 </div>
                 <div className="mt-1 break-words text-[10px] text-slate-500">Latest webhook: {formatTechnicalTimestamp(cloudChatListener.lastWebhookAt)}</div>
                 <div className="mt-1 break-words text-[10px] text-slate-500">Webhook persistence: {cloudChatListener.lastWebhookStatus || 'unknown'}</div>
@@ -4868,8 +4831,7 @@ function YediHubAppContent() {
                     isPlayerFullscreen
                       ? 'h-screen min-h-0 max-h-none w-screen'
                       : isTheatreMode
-                        ? 'h-[75vh] min-h-[580px] max-h-[960px]'
-                        : 'h-[62vh] min-h-[460px] max-h-[780px]'
+                        ? 'aspect-video h-auto max-h-[85vh]' : 'aspect-video h-auto max-h-[75vh]'
                   }`}
                 >
                   {isVerticalMedia(currentVideo) && (

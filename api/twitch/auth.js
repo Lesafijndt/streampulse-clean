@@ -119,6 +119,10 @@ const HANDLERS = Object.freeze({
     const { default: publicRequestHandler } = await import('../_lib/public-request-handler.js');
     return publicRequestHandler(req, res);
   },
+  'ws-subscribe': async (req, res) => {
+    const { default: wsHandler } = await import('../_lib/chat-websocket-subscribe.js');
+    return wsHandler(req, res);
+  },
 });
 
 export const SUPPORTED_TWITCH_AUTH_ACTIONS = Object.freeze(Object.keys(HANDLERS));

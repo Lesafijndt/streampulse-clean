@@ -224,6 +224,7 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     const health = classifyFirebaseHealthError(error);
+    const phase = String(error?.queuePhase || 'processing').replace(/[^a-z0-9_]/g, '').slice(0, 40);
     const code = /Request URL is invalid|unsupported/i.test(String(error?.message || ''))
       ? 'unsupported_media_url'
       : health.code;
@@ -236,8 +237,13 @@ export default async function handler(req, res) {
           : 'The shared queue could not save this request. Check the connection diagnostics and try again.';
     console.error('Public video request could not be queued:', {
       code: health.code,
+      phase,
+      grpcCode: String(error?.code ?? '').slice(0, 20),
       message: String(error?.message || error).slice(0, 240),
     });
-    return sendJson(res, 503, { ok: false, code, message });
+    return sendJson(res, 503, { ok: false, code, phase,
+      message: code === 'firestore_health_check_failed'
+        ? 'Request failed during ' + phase + '. The server logs have the underlying error.' : message,
+    });
   }
 }

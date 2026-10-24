@@ -64,7 +64,7 @@ async function validateAccessToken(accessToken) {
   if (!response.ok) return null;
   return response.json().catch(() => null);
 }
-async function loadUserSession(req, res, kind) {
+export async function loadUserSession(req, res, kind) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   const cookies = parseCookies(req.headers.cookie);

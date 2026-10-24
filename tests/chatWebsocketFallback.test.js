@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import subscribeHandler from '../api/_lib/chat-websocket-subscribe.js';
+
+function response() {
+  return {
+    code: 200, body: null,
+    setHeader() {},
+    status(code) { this.code = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+}
+
+test('authenticated WebSocket setup rejects unsupported methods and origins', async () => {
+  const a = response();
+  await subscribeHandler({ method: 'GET', headers: {} }, a);
+  assert.equal(a.code, 405);
+  const b = response();
+  await subscribeHandler({
+    method: 'POST',
+    headers: { host: 'streampulse-clean.vercel.app', origin: 'https://attacker.example' },
+    body: { sessionId: 'AValidTwitchSession0123456789' },
+  }, b);
+  assert.equal(b.code, 403);
+  const c = response();
+  await subscribeHandler({
+    method: 'POST',
+    headers: { host: 'streampulse-clean.vercel.app', origin: 'https://streampulse-clean.vercel.app' },
+    body: { sessionId: '!!!' },
+  }, c);
+  assert.equal(c.code, 400);
+});
+
+test('moderator chat fallback uses authenticated EventSub and player retains 16:9 dimensions', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /wss:\/\/eventsub\.wss\.twitch\.tv\/ws/);
+  assert.match(app, /auth\?action=ws-subscribe/);
+  assert.match(app, /chatBotSession\.connected/);
+  assert.doesNotMatch(app, /PASS SCHMOOPIIE/);
+  assert.match(app, /aspect-video h-auto max-h-\[75vh\]/);
+  assert.match(app, /await fetch\('\/api\/public-request'/);
+});

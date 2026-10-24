@@ -555,7 +555,10 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
 
   const origin = getPublicOrigin();
   const settingsRef = db.doc(settingsPath(appId));
-  const settingsSnapshot = await settingsRef.get();
+  const settingsSnapshot = await settingsRef.get().catch((error) => {
+    error.queuePhase = 'read_room_settings';
+    throw error;
+  });
   const settings = settingsSnapshot.exists && settingsSnapshot.data()?.streamSettings &&
     typeof settingsSnapshot.data().streamSettings === 'object' ? settingsSnapshot.data().streamSettings : {};
   if (settings.queueOpen === false) {
@@ -681,6 +684,9 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
       lastProcessingError: null,
     }), { merge: true });
     return { result: 'queued', id: itemId, title: cleanTitle };
+  }).catch((error) => {
+    error.queuePhase = 'commit_queue_transaction';
+    throw error;
   });
 
   if (outcome.result === 'queue_closed') {

@@ -34,6 +34,18 @@ export function classifyFirebaseHealthError(error) {
   if (/private.?key|PEM|invalid_grant|invalid credentials/i.test(message)) {
     return { code: 'invalid_service_account_credentials', message: 'The Firebase service-account credentials could not be used to authenticate.' };
   }
+  if (/FAILED_PRECONDITION|failed.?precondition|missing (?:composite )?index/i.test(message) || code === '9' || code === 'failed-precondition') {
+    return { code: 'firestore_failed_precondition', message: 'Firestore rejected a queue precondition or requires an index. Check server logs for the underlying operation.' };
+  }
+  if (/INVALID_ARGUMENT|invalid argument|must not contain undefined/i.test(message) || code === '3' || code === 'invalid-argument') {
+    return { code: 'firestore_invalid_argument', message: 'The queue request contains a value Firestore cannot store. This is a backend data-validation issue.' };
+  }
+  if (/ABORTED|transaction aborted/i.test(message) || code === '10' || code === 'aborted') {
+    return { code: 'firestore_transaction_contention', message: 'Concurrent queue changes aborted the transaction. Retry the request.' };
+  }
+  if (/INTERNAL|internal error/i.test(message) || code === '13' || code === 'internal') {
+    return { code: 'firestore_server_internal', message: 'The Firestore backend returned an internal error.' };
+  }
   // Do not send raw backend exception text, which could include project paths or environment details.
   const safeCode = code.replace(/[^a-z0-9_/-]/g, '').slice(0, 48);
   return {
