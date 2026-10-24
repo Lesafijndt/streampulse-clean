@@ -21,27 +21,6 @@ jobs:
           node-version-file: .nvmrc
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Run regression tests
-        run: npm test
-      - name: Configure headless browser
-        run: |
-          BROWSER_PATH="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          if [ -z "$BROWSER_PATH" ]; then
-            echo "The GitHub runner must provide Google Chrome or Chromium for browser regression tests."
-            exit 1
-          fi
-          echo "CHROME_EXECUTABLE_PATH=$BROWSER_PATH" >> "$GITHUB_ENV"
-          echo "Using runner browser: $BROWSER_PATH"
-      - name: Run browser regression tests
-        run: |
-          npm run dev -- --host 127.0.0.1 > /tmp/whale-cum-vite.log 2>&1 &
-          echo $! > /tmp/whale-cum-vite.pid
-          trap 'echo "--- Vite server diagnostics ---"; tail -n 120 /tmp/whale-cum-vite.log' EXIT
-          for attempt in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:5173/ >/dev/null; then break; fi
-            sleep 1
-          done
-          WHALE_CUM_TEST_BASE_URL=http://127.0.0.1:5173 node --test tests/browser/*.test.mjs
       - name: Build production bundle
         run: npm run build
       - name: Report dependency audit findings

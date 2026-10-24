@@ -1,6 +1,5 @@
 const CHAT_BOT_LOGIN = 'gachibot69';
 const ALLOWED_STAFF_LOGINS = new Set(['2o3a', 'paim_beach_pete']);
-const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
@@ -50,8 +49,8 @@ export default async function handler(req, res) {
 
   // Require the private dashboard login as well as the dedicated bot login.
   // The bot account alone must not expose an arbitrary chat-send endpoint.
-  if (!cookies.yedi_twitch_access && !cookies.yedi_twitch_refresh) return res.status(401).json({ error: 'Sign in to Yedi Hub as 2o3a or paim_beach_pete first.' });
-  if (!cookies.yedi_twitch_bot_access && !cookies.yedi_twitch_bot_refresh) return res.status(401).json({ error: 'Connect the Twitch chat bot account @gachibot69 first.' });
+  if (!cookies.yedi_twitch_access) return res.status(401).json({ error: 'Sign in to Yedi Hub as 2o3a or paim_beach_pete first.' });
+  if (!cookies.yedi_twitch_bot_access) return res.status(401).json({ error: 'Connect the Twitch chat bot account @gachibot69 first.' });
 
   // The API sends only to the configured Yedi Hub origin and rejects missing/cross-origin browser origins.
   try {
@@ -67,18 +66,18 @@ export default async function handler(req, res) {
   if (!message || message.length > 450) return res.status(400).json({ error: 'Message must contain 1–450 characters.' });
 
   try {
-    let staffToken = cookies.yedi_twitch_access || '';
-    let staffRefreshToken = cookies.yedi_twitch_refresh || '';
-    let staffValidation = staffToken ? await validateToken(staffToken) : null;
-    if (!staffValidation && staffRefreshToken && clientSecret) {
+    let staffToken = cookies.yedi_twitch_access;
+    let staffValidation = await validateToken(staffToken);
+    if (!staffValidation && cookies.yedi_twitch_refresh && clientSecret) {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: staffRefreshToken, client_id: clientId, client_secret: clientSecret })
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cookies.yedi_twitch_refresh, client_id: clientId, client_secret: clientSecret })
       });
       const refreshedStaff = await refreshResponse.json();
       if (refreshResponse.ok && refreshedStaff.access_token) {
         staffToken = refreshedStaff.access_token;
-        if (refreshedStaff.refresh_token) staffRefreshToken = refreshedStaff.refresh_token;
+        setBotCookie(res, 'yedi_twitch_access', refreshedStaff.access_token, Math.min(Number(refreshedStaff.expires_in) || 14400, 14400));
+        if (refreshedStaff.refresh_token) setBotCookie(res, 'yedi_twitch_refresh', refreshedStaff.refresh_token, 60 * 60 * 24 * 30);
         staffValidation = await validateToken(staffToken);
       } else {
         clearStaffCookies(res);
@@ -90,21 +89,19 @@ export default async function handler(req, res) {
       clearStaffCookies(res);
       return res.status(401).json({ error: 'Your Yedi Hub staff session expired. Sign in again as 2o3a or paim_beach_pete.' });
     }
-    setBotCookie(res, 'yedi_twitch_access', staffToken, Math.max(1, Math.min(Number(staffValidation.expires_in) || 14400, 14400)));
-    if (staffRefreshToken) setBotCookie(res, 'yedi_twitch_refresh', staffRefreshToken, REMEMBERED_SESSION_MAX_AGE);
 
-    let accessToken = cookies.yedi_twitch_bot_access || '';
-    let botRefreshToken = cookies.yedi_twitch_bot_refresh || '';
-    let validation = accessToken ? await validateToken(accessToken) : null;
-    if (!validation && botRefreshToken && clientSecret) {
+    let accessToken = cookies.yedi_twitch_bot_access;
+    let validation = await validateToken(accessToken);
+    if (!validation && cookies.yedi_twitch_bot_refresh && clientSecret) {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: botRefreshToken, client_id: clientId, client_secret: clientSecret })
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cookies.yedi_twitch_bot_refresh, client_id: clientId, client_secret: clientSecret })
       });
       const refreshed = await refreshResponse.json();
       if (refreshResponse.ok && refreshed.access_token) {
         accessToken = refreshed.access_token;
-        if (refreshed.refresh_token) botRefreshToken = refreshed.refresh_token;
+        setBotCookie(res, 'yedi_twitch_bot_access', refreshed.access_token, Math.min(Number(refreshed.expires_in) || 14400, 14400));
+        if (refreshed.refresh_token) setBotCookie(res, 'yedi_twitch_bot_refresh', refreshed.refresh_token, 60 * 60 * 24 * 30);
         validation = await validateToken(accessToken);
       } else {
         clearBotCookies(res);
@@ -117,8 +114,6 @@ export default async function handler(req, res) {
       clearBotCookies(res);
       return res.status(401).json({ error: 'Chat bot session expired or belongs to a different account. Reconnect @gachibot69.' });
     }
-    setBotCookie(res, 'yedi_twitch_bot_access', accessToken, Math.max(1, Math.min(Number(validation.expires_in) || 14400, 14400)));
-    if (botRefreshToken) setBotCookie(res, 'yedi_twitch_bot_refresh', botRefreshToken, REMEMBERED_SESSION_MAX_AGE);
     if (!scopes.includes('user:write:chat')) {
       return res.status(403).json({ error: 'The @gachibot69 account has not granted Twitch chat-write permission. Reconnect the bot and approve it.' });
     }

@@ -1,93 +1,56 @@
-# WHALE CUM — Private Twitch Request Deck
+# Yedi Hub — Private Twitch Request Deck
 
-WHALE CUM is a private Vite + React dashboard for running a community media queue on Twitch channel `2o3a`. It combines a live player, a shared queue, Twitch chat requests and voting, activity analytics, local recovery snapshots, and optional Firebase cloud synchronization. The UI uses a dark crimson, wine, and purple gachi-wrestling theme.
+A private Vite/React dashboard dedicated to `twitch.tv/2o3a`. Its job is to connect to 2o3a’s Twitch chat in the background and play the links requested with `!assr <URL>`. The public chat transcript is hidden. The app keeps the existing technical Swedish gachi-wrestling visual theme.
 
-## What it does
+## Access control
 
-- **Shared queue:** Accepts supported YouTube videos and Shorts, TikTok videos, Twitch Clips, and Kick Clips. The public **Request Video** form writes through a rate-limited server endpoint so viewers do not need a staff Firebase session; title-based Twitch chat requests search YouTube and use the best match returned by the search route.
-- **Queue management:** Active Queue, Watch Later, and History views; search; category and media-type filters; sorting for non-active lists; upvotes; pinned priority; drag-and-drop ordering and move controls; Play Now; Previous Video and Next Video; and automatic advance when the player reports that media ended.
-- **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
-- **Twitch chat requests:** Regular viewers can request from the website form, post supported links, or use `!assr <URL or title>` in Twitch chat. Website submissions and Twitch EventSub requests both use server-side queue writes. If cloud intake is inactive, the signed-in moderator dashboard runs a local IRC fallback. Every shared request still requires Firestore to accept writes; a quota/rate-limit error cannot be bypassed by browser permissions.
-- **Stats & analytics:** Request totals, completions, skips, votes, estimated queue runway, and a Top 10 Requesters list. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
-- **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
+Only these Twitch accounts are permitted to sign in:
 
-## Access and authentication
-
-Only the Twitch accounts below are allowed to sign in to the dashboard:
-
-| Twitch account | Role |
+| Twitch account | Website role |
 |---|---|
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. `2o3a` gets a playback-first dashboard and owns automatic playback advance. The moderator account `paim_beach_pete` runs the local IRC fallback when cloud intake is inactive and gets the connection controls plus an expanded, read-only **Technical diagnostics** panel with safe Firebase/EventSub diagnostics, last webhook and successful queue-write times, queue version, and configuration-presence checks; secret values are never shown. Healthy EventSub intake works without either dashboard staying open.
+The allowlist is enforced in Vercel API routes after Twitch OAuth; it is not a client-side role selector. Other Twitch accounts receive an access-denied page. The channel is fixed to `2o3a`; URL parameters cannot switch it. The IRC command bridge starts only after an approved account is authenticated.
 
-## Chat commands
-
-| Command | Behavior |
-|---|---|
-| `!assr <URL or title>` | Request supported media by URL or search YouTube by title. YouTube links may include `?t=83`, `?start=83`, `#t=1m23s`, or a timestamp after the link such as `1:23`. |
-| A supported media URL anywhere in a message | Direct YouTube, TikTok, Twitch Clip, or Kick Clip links are treated as requests even with surrounding text or trailing punctuation. |
-| `!remove` / `!unrequest` | Remove your latest eligible waiting request. |
-| `!when`, `!position`, `!myqueue`, `!queueposition` | Show your queue position/ETA where available. |
-| `!queue` | Show queue status and summary. |
-| `!bigcock` / `!bigcock 3` | Upvote the first or a numbered waiting queue item, respectively. You cannot vote for your own request and may vote only once per video. |
-| `!help` | Show user and moderator command help. |
-| Moderator/broadcaster: `!skip` | Advance to the next video. |
-| Moderator/broadcaster: `!volume up/down`, `!volume 0-100`, `!volup`, `!voldown`, `!mute`, `!unmute` | Control supported player audio. TikTok remote commands support mute/unmute and volume 0/100; use the in-player slider for intermediate volume. Twitch Clips use their own controls. |
-
-Requests are blocked while the streamer has closed the queue. Queue/playing items cannot be requested twice, and videos in History become requestable again 16 hours after their last `watchedAt` time. Media identity stays consistent across URL formats and tracking parameters. Twitch chat requests accept timestamps such as `1:23`, `1:02:03`, `83s`, or YouTube `?t=83` / `#t=1m23s` markers. The dashboard request form also has a dedicated YouTube start-time field; its offset is applied when the embed loads. Other provider embeds do not expose a consistent timestamp-seek API.
+For cloud sync, the server mints a Firebase custom token with `yediAuthorized`, `twitchLogin`, and `role` claims. The supplied `firestore.rules` rejects anonymous users and all sessions lacking these server-issued claims. Keep the Firebase service-account key in Vercel server-only environment variables; never expose it in the browser or commit it to GitHub.
 
 ## Twitch OAuth setup
 
-1. Register an application in the [Twitch Developer Console](https://dev.twitch.tv/console/apps).
-2. Set the OAuth redirect URL to exactly `https://YOUR-VERCEL-DOMAIN/api/twitch/callback`.
-3. Add these **server-only** environment variables in Vercel → Project → Settings → Environment Variables. Do not prefix these with `VITE_`:
+1. Register an application at <https://dev.twitch.tv/console/apps>.
+2. Set the app’s OAuth redirect URL to exactly `https://YOUR-VERCEL-DOMAIN/api/twitch/callback`.
+3. Add these server-only environment variables in Vercel → Project → Settings → Environment Variables. Do not prefix any with `VITE_`:
    - `TWITCH_CLIENT_ID`
    - `TWITCH_CLIENT_SECRET`
    - `TWITCH_APP_URL` — `https://YOUR-VERCEL-DOMAIN`
    - `TWITCH_REDIRECT_URI` — `https://YOUR-VERCEL-DOMAIN/api/twitch/callback`
-4. Redeploy after changing environment variables. Only the allowlisted Twitch accounts can sign in.
+4. Redeploy. Only `2o3a` and `paim_beach_pete` will be allowed through the sign-in flow.
 
-## Firebase cloud sync
+## Secure Firebase cloud sync
 
-Cloud sync is optional. Without a valid Firebase web configuration and server service account, approved staff can use local browser storage, but different browsers will not share changes.
+Cloud sync is optional. Without Firebase configuration, approved users can use local browser storage, but the queue will not sync between devices.
 
-1. Configure the public web-app values in Vercel: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, and `VITE_FIREBASE_APP_ID`. They must refer to the same Firebase project as the server service account. `VITE_FIREBASE_NAMESPACE` is optional; the default is `streampulse-live-deck`.
-2. In Firebase Console → Project settings → Service accounts, create a Firebase Admin SDK private key.
-3. Put the complete service-account JSON in the server-only Vercel environment variable `FIREBASE_SERVICE_ACCOUNT_JSON`. Never prefix it with `VITE_`, commit the JSON file, or expose its private key to the browser.
-4. Publish this repository's `firestore.rules` to the same Firebase project. The rules require the server-issued authorization claims; do not restore permissive anonymous client access.
-5. Redeploy after changing Firebase variables or rules.
+1. Configure these public web-app values in Vercel if you want cross-device queue sync: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`. They must reference the same Firebase project as the service account below. `VITE_FIREBASE_NAMESPACE` is optional; default is `streampulse-live-deck`.
+2. In Firebase Console → Project settings → Service accounts, generate a Firebase Admin SDK private key.
+3. Add a server-only Vercel environment variable `FIREBASE_SERVICE_ACCOUNT_JSON` containing the full contents of that service-account JSON. Do not prefix it with `VITE_`, do not commit the JSON file, and do not share its private key.
+4. Publish this project’s `firestore.rules` in the same Firebase project. Remove the old permissive anonymous-client rules.
+5. Redeploy after adding/changing environment variables and rules.
 
-### Enable cloud chat intake (one time)
+The Firebase Admin SDK signs custom tokens only after Twitch login has been checked against the allowlist. The service-account key stays on the server. Anonymous Firebase sign-in is intentionally not used.
 
-1. Open the production WHALE CUM dashboard and sign in as `2o3a`. The app attempts cloud intake setup automatically. If authorization is needed, use the moderator's connection details to identify the missing scope; Twitch must grant `channel:bot` to this app.
-2. Use **Reconnect @gachibot69** if the dashboard prompts for it. That account must grant `user:read:chat`, `user:write:chat`, and `user:bot` to the same Twitch developer application.
-3. Keep the dashboard open until **Cloud chat intake** reports **active**. Vercel creates a webhook subscription for `channel.chat.message`; Twitch verifies the callback and the app reports whether the subscription is active.
-4. Once active, EventSub first persists supported media requests and queue commands in a durable inbox and acknowledges the webhook quickly. A Vercel `waitUntil` task processes the inbox, writes queue/stat updates transactionally, and leaves failures pending for a later retry. Server-side commands include `!queue`, `!when`, `!remove`, `!bigcock`, `!help`, and moderator/broadcaster `!skip`. Queue status shows the last successful server queue write. The streamer's browser does not need to be open to queue requests; volume changes still require the player browser.
-5. If the status mentions Firestore unavailable, check service-account project/permissions and the Firebase usage/quota dashboard. Server-side writes still depend on the Firebase project being available and within quota; a webhook cannot save to the cloud when Firestore rejects the write.
+## Deploy with GitHub Desktop
 
-The server issues a Firebase custom token only after validating an approved Twitch session. The token carries `yediAuthorized`, `twitchLogin`, and `role` claims. Firebase writes require these server-issued claims.
+1. Extract this ZIP.
+2. In GitHub Desktop choose Repository → Show in Explorer.
+3. Copy the **contents** of the extracted folder into your repository folder, including `index.html`, `package.json`, `src/`, `api/`, `firestore.rules`, and `vercel.json`. Keep the repository’s `.git` folder.
+4. Commit to `main`, then click **Push origin**.
+5. In Vercel deploy the pushed commit using framework preset **Vite**, build command `npm run build`, and output directory `dist`.
+6. Add the environment variables above and redeploy.
 
-## Backups and troubleshooting
+## Main behavior
 
-- Export a queue backup before major changes. The dashboard supports importing a valid JSON backup and restoring the last local safety snapshot.
-- Treat the cloud-sync indicator as authoritative for cross-browser sync. A local save protects this browser, but local-only changes do not guarantee that another browser has received them.
-- A provider may block autoplay with sound until a staff member starts playback manually. TikTok, Twitch Clips, and Kick Clips expose different embed/control capabilities; some items may have to be opened from their source page.
-- If cloud chat intake is not **active**, the moderator dashboard provides a local IRC fallback while it stays open. Check its connection details for the missing Twitch scope, bot authorization, EventSub setup, or Firebase availability. A Firestore write failure leaves a pending local recovery item, not a confirmed shared request.
-
-## Development and verification
-
-Requires Node.js 22 (see `.nvmrc`). Install dependencies and run:
-
-```sh
-npm install
-npm test
-npm run build
-```
-
-The GitHub Actions build check runs the unit/regression tests, browser smoke tests for the player command bridge, a production build, and a non-blocking dependency audit. Passing automated tests does not replace checking real Twitch OAuth, Firebase rules/environment variables, or real third-party embeds in a browser.
-
-## Deployment
-
-The repository is connected to Vercel for production deployment from `main`. The app uses the Vite framework preset, `npm run build` as the build command, and `dist` as the output directory. The four Twitch login/logout URLs rewrite to one shared handler to stay under the Vercel Hobby limit of 12 serverless functions; `.github/workflows/build.yml` includes a test to prevent exceeding that limit. Configure environment variables in Vercel, never in committed source files.
+- The page is fixed to `twitch.tv/2o3a`.
+- `!assr <URL>` requests enter the queue from Twitch chat. The site does not render a chat transcript or show a manual website-request form.
+- The hidden Twitch IRC bridge runs only while the site or OBS browser source is open and an approved user is signed in. Vercel does not keep a browser WebSocket alive while every browser is closed.
+- YouTube/TikTok/Twitch clip embeds and queue controls are retained. Some browsers may block autoplay with sound until playback is started manually once.
+- Twitch OAuth cookies are HttpOnly and SameSite=Lax; production cookies use Secure. Logging out clears the Twitch session and signs out Firebase.

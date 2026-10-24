@@ -1,6 +1,4 @@
 const BOT_LOGIN = 'gachibot69';
-const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
-const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {
@@ -34,22 +32,17 @@ export default async function handler(req, res) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   const cookies = parseCookies(req.headers.cookie);
-  if (!clientId || (!cookies.yedi_twitch_bot_access && !cookies.yedi_twitch_bot_refresh)) return replyUnauthenticated(res);
+  if (!clientId || !cookies.yedi_twitch_bot_access) return replyUnauthenticated(res);
 
   try {
-    // A refresh cookie can restore the bot session when the short-lived access
-    // cookie expired while the browser was closed.
-    let accessToken = cookies.yedi_twitch_bot_access || '';
-    let refreshToken = cookies.yedi_twitch_bot_refresh || '';
-    let validationResponse = accessToken
-      ? await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${accessToken}` } })
-      : null;
-    let validation = validationResponse?.ok ? await validationResponse.json() : null;
+    let accessToken = cookies.yedi_twitch_bot_access;
+    let validationResponse = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${accessToken}` } });
+    let validation = validationResponse.ok ? await validationResponse.json() : null;
 
-    if (!validation && refreshToken && clientSecret) {
+    if (!validation && cookies.yedi_twitch_bot_refresh && clientSecret) {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret })
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cookies.yedi_twitch_bot_refresh, client_id: clientId, client_secret: clientSecret })
       });
       const refreshed = await refreshResponse.json();
       if (!refreshResponse.ok || !refreshed.access_token) {
@@ -57,19 +50,17 @@ export default async function handler(req, res) {
         return replyUnauthenticated(res);
       }
       accessToken = refreshed.access_token;
-      if (refreshed.refresh_token) refreshToken = refreshed.refresh_token;
+      setCookie(res, 'yedi_twitch_bot_access', refreshed.access_token, Math.min(Number(refreshed.expires_in) || 14400, 14400));
+      if (refreshed.refresh_token) setCookie(res, 'yedi_twitch_bot_refresh', refreshed.refresh_token, 60 * 60 * 24 * 30);
       validationResponse = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${accessToken}` } });
       validation = validationResponse.ok ? await validationResponse.json() : null;
     }
 
     const scopes = Array.isArray(validation?.scopes) ? validation.scopes : [];
-    if (!validation || validation.client_id !== clientId || String(validation.login || '').toLowerCase() !== BOT_LOGIN || !REQUIRED_BOT_SCOPES.every((scope) => scopes.includes(scope))) {
+    if (!validation || validation.client_id !== clientId || String(validation.login || '').toLowerCase() !== BOT_LOGIN || !scopes.includes('user:write:chat')) {
       clearBotCookies(res);
       return replyUnauthenticated(res);
     }
-    const accessCookieMaxAge = Math.max(1, Math.min(Number(validation.expires_in) || 14400, 14400));
-    setCookie(res, 'yedi_twitch_bot_access', accessToken, accessCookieMaxAge);
-    if (refreshToken) setCookie(res, 'yedi_twitch_bot_refresh', refreshToken, REMEMBERED_SESSION_MAX_AGE);
     return res.status(200).json({ connected: true, user: { id: String(validation.user_id), login: BOT_LOGIN } });
   } catch (error) {
     console.error('Twitch chat bot session check failed:', error?.message || error);

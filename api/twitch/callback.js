@@ -1,8 +1,6 @@
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 const BOT_LOGIN = 'gachibot69';
-const REQUIRED_BOT_SCOPES = ['user:read:chat', 'user:write:chat', 'user:bot'];
-// Persistent refresh cookies are renewed by the session endpoints on use (up to 400 days).
-const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
+const CHAT_WRITE_SCOPE = 'user:write:chat';
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map(v => v.trim()).filter(Boolean).map(v => {
@@ -52,7 +50,7 @@ export default async function handler(req, res) {
 
   // Clear only the state cookie for the OAuth flow being completed.
   if (botFlow) setCookie(res, req, 'yedi_twitch_bot_oauth_state', '', 0, 'Lax');
-  else setCookie(res, req, 'yedi_twitch_oauth_state', '', 0, 'Lax');
+  else setCookie(res, req, 'yedi_twitch_oauth_state', '', 0, 'None');
 
   if (req.query.error) {
     if (botFlow) clearBotCookies(res, req);
@@ -99,13 +97,13 @@ export default async function handler(req, res) {
         return redirectWithError(res, 'bot', 'wrong_account');
       }
       const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
-      if (!REQUIRED_BOT_SCOPES.every((scope) => scopes.includes(scope))) {
+      if (!scopes.includes(CHAT_WRITE_SCOPE)) {
         clearBotCookies(res, req);
         return redirectWithError(res, 'bot', 'missing_scope');
       }
 
       setCookie(res, req, 'yedi_twitch_bot_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-      if (token.refresh_token) setCookie(res, req, 'yedi_twitch_bot_refresh', token.refresh_token, REMEMBERED_SESSION_MAX_AGE);
+      if (token.refresh_token) setCookie(res, req, 'yedi_twitch_bot_refresh', token.refresh_token, 60 * 60 * 24 * 30);
       else setCookie(res, req, 'yedi_twitch_bot_refresh', '', 0);
       return res.redirect(302, '/?bot_connected=1');
     }
@@ -123,7 +121,7 @@ export default async function handler(req, res) {
     }
 
     setCookie(res, req, 'yedi_twitch_access', token.access_token, Math.min(Number(token.expires_in) || 14400, 14400));
-    if (token.refresh_token) setCookie(res, req, 'yedi_twitch_refresh', token.refresh_token, REMEMBERED_SESSION_MAX_AGE);
+    if (token.refresh_token) setCookie(res, req, 'yedi_twitch_refresh', token.refresh_token, 60 * 60 * 24 * 30);
     else setCookie(res, req, 'yedi_twitch_refresh', '', 0);
     return res.redirect(302, '/');
   } catch (error) {

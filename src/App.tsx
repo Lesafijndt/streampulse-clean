@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
-  Pause,
-  Volume2,
-  VolumeX,
   SkipForward,
   RotateCcw,
   Clock,
@@ -28,6 +25,7 @@ import {
   Shield,
   Users,
   ThumbsUp,
+  Flame,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -43,16 +41,7 @@ import {
   Layers,
   HelpCircle,
   Copy,
-  FolderSync,
-  Download,
-  Upload,
-  History,
-  Activity,
-  BarChart3,
-  Timer,
-  TrendingUp,
-  ChevronDown,
-  Keyboard
+  FolderSync
 } from 'lucide-react';
 
 // Firebase imports
@@ -70,44 +59,12 @@ import {
   doc,
   setDoc,
   updateDoc,
-  runTransaction,
+  increment,
+  arrayUnion,
   writeBatch,
   deleteDoc,
-  getDocs,
   onSnapshot
 } from 'firebase/firestore';
-import { classifyFirebaseHealthError } from '../api/_lib/firebase-health-diagnostic.js';
-import {
-  buildCategoryCounts,
-  buildNextTrackTransition,
-  buildHistoryRequeuePatch,
-  buildPreviousTrackTransition,
-  filterVideosForView,
-  formatMediaDuration,
-  getQueueMediaCounts,
-  getDurationEstimate,
-  getThumbnailDurationLabel,
-  getDurationCacheKey,
-  applyCachedVideoDurations,
-  buildQueueStatistics,
-  formatRuntimeHoursMinutes,
-  mergeVideoDurationData,
-  createQueueBackup,
-  validateQueueBackup
-} from './queueLogic.js';
-import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl, parseMediaStartSeconds, stripMediaTimestampSuffix, isMediaHistoryCooldownExpired, getMediaHistoryCooldownRemainingMs } from './mediaUtils.js';
-import StatsBoard from './components/StatsBoard';
-import TransportNavigation from './components/TransportNavigation';
-import KeyboardShortcutHint from './components/KeyboardShortcutHint';
-import QueueToolbar from './components/QueueToolbar';
-import QueueVideoCard from './components/QueueVideoCard';
-import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute, shouldPersistYouTubePausedEvent } from './playerBridge.js';
-import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
-import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
-import { extractSupportedMediaUrl, extractSupportedMediaUrls, linkFreeYouTubeRequestUrl, getTwitchMessageText, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
-import { canHostLocalChatBridge, hasVerifiedCloudChatIntake } from './chatBridgeAccess.js';
-import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
 
 
@@ -126,33 +83,6 @@ const DEFAULT_STREAM_SETTINGS = {
   allowTikTok: true,
   maxDurationMinutes: 12,
 };
-
-const WORKSPACE_LAYOUT_STORAGE_KEY = `${STORAGE_PREFIX}:workspace-layout:v1`;
-const WORKSPACE_PANEL_IDS = ['queue', 'player', 'stats'];
-const DEFAULT_WORKSPACE_LAYOUT = {
-  // Queue left, player center, stats right.
-  order: ['queue', 'player', 'stats'],
-  visible: { queue: true, player: true, stats: true },
-};
-const WORKSPACE_PANEL_META = {
-  queue: { title: 'Queue & library', detail: 'Requests, watch later, history, filters and sorting' },
-  player: { title: 'Player', detail: 'Video playback, track details and transport controls' },
-  stats: { title: 'Stats & analytics', detail: 'Queue metrics and top requesters' },
-};
-
-function normalizeWorkspaceLayout(value) {
-  const rawOrder = Array.isArray(value?.order)
-    ? value.order.filter((id) => WORKSPACE_PANEL_IDS.includes(id))
-    : [];
-  const order = [...rawOrder, ...WORKSPACE_PANEL_IDS.filter((id) => !rawOrder.includes(id))]
-    .filter((id, index, items) => items.indexOf(id) === index);
-  const visible = Object.fromEntries(WORKSPACE_PANEL_IDS.map((id) => [
-    id,
-    typeof value?.visible?.[id] === 'boolean' ? value.visible[id] : true,
-  ]));
-  if (!WORKSPACE_PANEL_IDS.some((id) => visible[id])) visible.player = true;
-  return { order, visible };
-}
 
 function readStoredValue(key, fallback) {
   if (typeof window === 'undefined') return fallback;
@@ -214,25 +144,6 @@ function normalizeLegacyVideoVotes(video) {
   const voters = hasVoters
     ? raw.voters.map((item) => typeof item === 'string' || typeof item === 'number' ? String(item) : '').filter(Boolean)
     : [];
-  const rawCategory = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : 'General';
-  const categoryManuallySet = raw.categoryManuallySet === true;
-  const normalizedBase = {
-    ...raw,
-    url: typeof raw.url === 'string' ? raw.url : '',
-    title,
-    note: typeof raw.note === 'string' ? raw.note : '',
-    category: rawCategory,
-    categoryManuallySet,
-  };
-  const normalizedCategory = getVideoCategory(normalizedBase);
-  const mediaType = getVideoMediaType({ ...normalizedBase, category: normalizedCategory });
-  const normalizedPlatform = validPlatforms.has(raw.platform) ? raw.platform : 'external';
-  const hasTrustedDuration = ['metadata', 'player'].includes(String(raw.durationSource || ''));
-  const legacyEstimatedDuration = !hasTrustedDuration && (
-    (Number(raw.durationSec) === 45 && String(raw.duration || '') === '00:45' &&
-      ['tiktok', 'twitch', 'kick'].includes(normalizedPlatform)) ||
-    (Number(raw.durationSec) === 225 && ['03:45', '3:45'].includes(String(raw.duration || '')))
-  );
 
   return {
     ...raw,
@@ -241,19 +152,15 @@ function normalizeLegacyVideoVotes(video) {
     url: typeof raw.url === 'string' ? raw.url : '',
     platform: validPlatforms.has(raw.platform) ? raw.platform : 'external',
     videoId: raw.videoId === undefined || raw.videoId === null ? '' : String(raw.videoId),
-    category: normalizedCategory,
-    categoryManuallySet,
-    // One resolved media type drives counters, filters, and the labels shown in the queue.
-    mediaType,
+    category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : 'General',
+    mediaType: typeof raw.mediaType === 'string' ? raw.mediaType : '',
     requestedBy: typeof raw.requestedBy === 'string' || typeof raw.requestedBy === 'number' ? String(raw.requestedBy) : 'Viewer',
     status: validStatuses.has(raw.status) ? raw.status : 'queue',
-    duration: legacyEstimatedDuration ? '' : (typeof raw.duration === 'string' ? raw.duration : ''),
-    durationSec: !legacyEstimatedDuration && Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
-    durationSource: legacyEstimatedDuration ? 'unknown' : (raw.durationSource || 'unknown'),
+    duration: typeof raw.duration === 'string' ? raw.duration : '03:45',
+    durationSec: Number.isFinite(Number(raw.durationSec)) && Number(raw.durationSec) > 0 ? Number(raw.durationSec) : undefined,
     addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
     watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
     note: typeof raw.note === 'string' ? raw.note : '',
-    metadataUrl: typeof raw.metadataUrl === 'string' ? raw.metadataUrl : '',
     thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : '',
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
     queueOrder: raw.queueOrder === undefined || raw.queueOrder === null || !Number.isFinite(Number(raw.queueOrder)) ? undefined : Number(raw.queueOrder),
@@ -261,6 +168,17 @@ function normalizeLegacyVideoVotes(video) {
     upvotes: Math.max(0, hasVoters ? (Number(raw.upvotes) || 0) : ((Number(raw.upvotes) || 0) - 1)),
     voters,
   };
+}
+
+function estimateVideoDurationSeconds(video) {
+  const storedDuration = Number(video?.durationSec);
+  if (video?.platform === 'tiktok' || video?.platform === 'twitch') {
+    return storedDuration > 0 && storedDuration <= 90 ? storedDuration : 45;
+  }
+  if (Number.isFinite(storedDuration) && storedDuration > 0) return storedDuration;
+  const match = String(video?.duration || '').match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (match) return (Number(match[1] || 0) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
+  return 225;
 }
 
 function formatQueueWait(seconds) {
@@ -310,11 +228,6 @@ const KNOWN_CHAT_BOTS = new Set([
   'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
-// Accept direct media links even when chat includes surrounding text or punctuation.
-function isSupportedMediaUrlMessage(rawText = '') {
-  return Boolean(extractSupportedMediaUrl(rawText));
-}
-
 // Mod volume commands: !volume up/down, !volup/!voldown, !volume 0-100, !mute/!unmute.
 function parseModVolumeCommand(rawText) {
   const command = String(rawText || '').trim().toLowerCase();
@@ -329,17 +242,226 @@ function parseModVolumeCommand(rawText) {
   return { action: 'set', value: Math.max(0, Math.min(100, Number(value))) };
 }
 
-function formatTechnicalTimestamp(value) {
-  const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp > 0
-    ? new Date(timestamp).toLocaleString()
-    : 'Not recorded yet';
-}
-
 function isStaffRole(role) {
   return role === 'streamer' || role === 'moderator';
 }
 
+
+const CATEGORY_META = {
+  Music: {
+    label: 'Music',
+    icon: Music,
+    badgeBg: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+    colorHex: '#f43f5e',
+    keywords: [
+      'official music video', 'official video', 'official audio', 'lyrics',
+      'lyric video', 'feat.', 'ft.', 'prod.', 'prod by', 'remix', 'soundtrack',
+      'ost', 'bgm', 'instrumental', 'bass boosted', 'live performance', 'album',
+      'lofi', 'synthwave', 'beat', 'trap', 'rap', 'hip hop', 'guitar', 'piano cover',
+      'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'visualizer', 'ep', 'single'
+    ]
+  },
+  Gaming: {
+    label: 'Gaming',
+    icon: Gamepad2,
+    badgeBg: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    colorHex: '#10b981',
+    keywords: [
+      'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
+      'clutch', 'valorant', 'cs2', 'counter-strike', 'fortnite', 'league of legends',
+      'overwatch', 'apex legends', 'gta', 'minecraft', 'elden ring', 'boss fight',
+      'esports', 'smash bros', 'roblox', 'highlight', 'ranked', 'ace', 'headshot'
+    ]
+  },
+  Memes: {
+    label: 'Memes / Comedy',
+    icon: Laugh,
+    badgeBg: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    colorHex: '#f59e0b',
+    keywords: [
+      'meme', 'funny', 'try not to laugh', 'ylyl', 'shitpost', 'hilarious',
+      'joke', 'parody', 'fails', 'vines', 'trolling', 'comedy', 'prank',
+      'skit', 'lol', 'kekw', 'cursed', 'brainrot'
+    ]
+  },
+  Clips: {
+    label: 'Twitch Clips',
+    icon: Scissors,
+    badgeBg: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+    colorHex: '#8b5cf6',
+    keywords: ['twitch clip', 'stream highlight', 'twitch.tv', 'clip', 'streamer react']
+  },
+  IRL: {
+    label: 'IRL / Talk',
+    icon: Radio,
+    badgeBg: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+    colorHex: '#06b6d4',
+    keywords: [
+      'podcast', 'interview', 'reaction', 'reacts', 'reacting', 'documentary',
+      'debate', 'discussion', 'drama', 'vlog', 'commentary', 'unboxing', 'review',
+      'asmr', 'cooking', 'travel', 'live stream'
+    ]
+  },
+  General: {
+    label: 'General Video',
+    icon: Sparkles,
+    badgeBg: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
+    colorHex: '#94a3b8',
+    keywords: []
+  }
+};
+
+/**
+ * Multi-layered detection engine:
+ * 1. Checks URL domains (music.youtube.com, clips.twitch.tv, tiktok.com, spotify, etc.)
+ * 2. Checks hashtags in request command (e.g. #music, #gaming)
+ * 3. Checks keyword heuristic weights across title & note
+ * 4. Respects broadcaster mode (e.g. Music-Only streams)
+ */
+function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all') {
+  const cleanUrl = (url || '').toLowerCase();
+  const textBlob = `${cleanUrl} ${(title || '')} ${(note || '')}`.toLowerCase();
+
+  // 1. Explicit hashtags
+  if (textBlob.includes('#music') || textBlob.includes('#song')) return 'Music';
+  if (textBlob.includes('#game') || textBlob.includes('#gaming')) return 'Gaming';
+  if (textBlob.includes('#meme') || textBlob.includes('#funny')) return 'Memes';
+  if (textBlob.includes('#clip')) return 'Clips';
+  if (textBlob.includes('#irl') || textBlob.includes('#podcast')) return 'IRL';
+
+  // 2. Strong URL Domain signals
+  if (cleanUrl.includes('music.youtube.com') || cleanUrl.includes('spotify.com') || cleanUrl.includes('soundcloud.com')) {
+    return 'Music';
+  }
+  if (cleanUrl.includes('clips.twitch.tv') || cleanUrl.includes('/clip/')) {
+    return 'Clips';
+  }
+  if (cleanUrl.includes('tiktok.com')) {
+    // If stream is Music mode, default to music unless strictly funny
+    return textBlob.includes('music') || textBlob.includes('song') || textBlob.includes('sound') ? 'Music' : 'Memes';
+  }
+
+  // 3. Keyword Scoring Heuristics
+  let bestCategory = streamMode === 'music_only' ? 'Music' : 'General';
+  let highestScore = 0;
+
+  for (const [catKey, catData] of Object.entries(CATEGORY_META)) {
+    if (catKey === 'General') continue;
+    let score = 0;
+    for (const kw of catData.keywords) {
+      if (textBlob.includes(kw)) {
+        // High-confidence keywords grant higher weight
+        if (kw === 'official music video' || kw === 'official audio' || kw === 'ost' || kw === 'lyric video') {
+          score += 4;
+        } else if (kw === 'valorant' || kw === 'cs2' || kw === 'speedrun' || kw === 'gameplay') {
+          score += 3;
+        } else if (kw === 'try not to laugh' || kw === 'shitpost') {
+          score += 3;
+        } else {
+          score += 1;
+        }
+      }
+    }
+    if (score > highestScore) {
+      highestScore = score;
+      bestCategory = catKey;
+    }
+  }
+
+  return bestCategory;
+}
+
+// Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
+// The request pipeline enriches URL-only submissions with public oEmbed titles when available.
+function detectMusicType(url = '', title = '', note = '') {
+  const parsed = (() => { try { return new URL(String(url || '')); } catch { return null; } })();
+  const host = (parsed?.hostname || '').toLowerCase();
+  const blob = `${String(url || '')} ${String(title || '')} ${String(note || '')}`.toLowerCase();
+  if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') || host.endsWith('.soundcloud.com')) return 'Music';
+  if (/(?:^|[\s#])(?:#music|#song|#songrequest)(?:\b|$)/i.test(blob)) return 'Music';
+  const musicSignals = [
+    'official music video', 'official audio', 'music video', 'lyric video', 'lyrics',
+    'soundtrack', 'original soundtrack', 'ost', 'instrumental', 'music', 'song', 'songs',
+    'remix', 'album', 'single', 'lofi', 'synthwave', 'hip hop', 'hip-hop', 'rap', 'beat',
+    'bass boosted', 'vocaloid', 'nightcore', 'orchestra', 'acoustic', 'piano cover',
+    'guitar cover', 'visualizer', 'edm', 'techno', 'house music', 'metal song', 'jazz',
+    'classical music', 'bgm', 'karaoke', 'live performance', 'music mix', 'dj set'
+  ];
+  const nonMusicSignals = [
+    'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
+    'tutorial', 'how to', 'review', 'podcast', 'interview', 'documentary', 'vlog',
+    'reaction', 'reacts', 'try not to laugh', 'meme', 'shitpost', 'comedy', 'prank',
+    'fails', 'highlights', 'twitch clip', 'stream highlight', 'news', 'explained'
+  ];
+  const musicScore = musicSignals.reduce((n, word) => n + (blob.includes(word) ? (['official audio', 'official music video', 'music video', 'soundtrack', 'lyric video'].includes(word) ? 3 : 1) : 0), 0);
+  const nonMusicScore = nonMusicSignals.reduce((n, word) => n + (blob.includes(word) ? 1 : 0), 0);
+  return musicScore > 0 && musicScore >= nonMusicScore ? 'Music' : 'Non-Music';
+}
+
+/**
+ * Standardize media platform parsing
+ */
+function parseMediaUrl(rawUrl = '') {
+  const url = (rawUrl || '').trim();
+  if (!url) return { platform: 'web', videoId: null, thumbnail: null };
+
+  // YouTube / YouTube Music
+  const ytMatch = url.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/i);
+  if (ytMatch && ytMatch[1]) {
+    return {
+      platform: 'youtube',
+      videoId: ytMatch[1],
+      thumbnail: `https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`,
+      isYouTubeMusic: url.includes('music.youtube.com')
+    };
+  }
+
+  let parsedUrl = null;
+  try { parsedUrl = new URL(url); } catch { /* Invalid URLs are treated as external links below. */ }
+  const hostname = parsedUrl?.hostname?.toLowerCase() || '';
+
+  // Twitch Clips
+  if ((hostname === 'twitch.tv' || hostname.endsWith('.twitch.tv')) && (url.includes('/clip/') || hostname === 'clips.twitch.tv')) {
+    const parts = parsedUrl.pathname.split('/').filter(Boolean);
+    const clipIndex = parts.indexOf('clip');
+    const clipSlug = (clipIndex >= 0 ? parts[clipIndex + 1] : parts[0]) || 'TwitchClip';
+    return {
+      platform: 'twitch',
+      videoId: clipSlug,
+      thumbnail: `https://placehold.co/640x360/581c87/f3e8ff?text=Twitch+Clip+%E2%80%A2+${encodeURIComponent(clipSlug.slice(0, 10))}`
+    };
+  }
+
+  // Kick Clips are queued as external media and open through the official Kick clip page.
+  if (hostname === 'kick.com' || hostname.endsWith('.kick.com')) {
+    const parts = (parsedUrl?.pathname || '').split('/').filter(Boolean);
+    const clipIndex = parts.findIndex((part) => part.toLowerCase() === 'clips' || part.toLowerCase() === 'clip');
+    const clipSlug = clipIndex >= 0 ? parts[clipIndex + 1] : (hostname === 'clip.kick.com' ? parts[0] : null);
+    if (clipSlug) {
+      return { platform: 'kick', videoId: clipSlug, thumbnail: 'https://placehold.co/640x360/18181b/53fc18?text=Kick+Clip' };
+    }
+  }
+
+  // TikTok's official embedded player needs the numeric post ID. Short share URLs
+  // are resolved by /api/resolve-tiktok on Vercel before the request is saved.
+  const isTikTokHost = hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com');
+  if (isTikTokHost) {
+    const idMatch = url.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/i)
+      || url.match(/[?&](?:item_id|video_id)=(\d{10,25})/i);
+    const vid = idMatch?.[1] || null;
+    return {
+      platform: 'tiktok',
+      videoId: vid,
+      thumbnail: 'https://placehold.co/640x360/09090b/ff315f?text=TikTok+Video'
+    };
+  }
+
+  return {
+    platform: 'web',
+    videoId: 'ext-' + Math.random().toString(36).substring(2, 8),
+    thumbnail: 'https://placehold.co/640x360/18181b/a1a1aa?text=Web+Media+Link'
+  };
+}
 
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
@@ -352,20 +474,6 @@ function YediHubAppContent() {
   const [auth, setAuth] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false);
-  const [cloudChatListener, setCloudChatListener] = useState({
-    status: 'checking', active: false, code: '', message: 'Checking cloud chat listener…',
-    subscriptionStatus: 'unknown', healthDiagnosticCode: '', healthDiagnosticMessage: '',
-    firestoreStatus: 'unknown', firebaseAdminConfigured: null, firebaseWebConfigConfigured: null,
-    lastWebhookAt: 0, lastWebhookStatus: 'unknown', lastWriteAt: 0, lastWriteStatus: 'unknown',
-    lastWriteSource: '',
-    lastProcessingError: '', lastProcessingErrorAt: 0, lastProcessingStatus: 'unknown',
-    queueVersion: 0, queueUpdatedAt: 0,
-  });
-  const cloudChatListenerReadyRef = useRef(false);
-  const [networkOnline, setNetworkOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
-  const networkOnlineRef = useRef(networkOnline);
-  const [cloudReconnectTick, setCloudReconnectTick] = useState(0);
-  const [activityReconnectTick, setActivityReconnectTick] = useState(0);
   const [syncStatusText, setSyncStatusText] = useState('Initializing cloud sync...');
   const [roomConfigLoadedFor, setRoomConfigLoadedFor] = useState('');
 
@@ -378,53 +486,9 @@ function YediHubAppContent() {
   // Streamers and mods share the room based on the Broadcaster's Twitch username
   const [channelRoom, setChannelRoom] = useState(() => getSavedRoom());
   const [roomInput, setRoomInput] = useState(() => getSavedRoom());
-  const localQueueWriteHealthKey = roomStorageKey(channelRoom, 'queue-write-health');
-  const [localQueueWriteHealth, setLocalQueueWriteHealth] = useState(() => {
-    const stored = readStoredValue(localQueueWriteHealthKey, null);
-    return stored && typeof stored === 'object'
-      ? stored
-      : { status: 'unknown', code: '', message: '', lastSuccessAt: 0, lastFailureAt: 0 };
-  });
-  useEffect(() => {
-    const stored = readStoredValue(localQueueWriteHealthKey, null);
-    setLocalQueueWriteHealth(stored && typeof stored === 'object'
-      ? stored
-      : { status: 'unknown', code: '', message: '', lastSuccessAt: 0, lastFailureAt: 0 });
-  }, [localQueueWriteHealthKey]);
-  const recordLocalQueueWriteHealth = (error = null) => {
-    const previous = readStoredValue(localQueueWriteHealthKey, {});
-    const timestamp = Date.now();
-    const diagnostic = error
-      ? (typeof error.publicCode === 'string' && /^[a-z0-9_]{3,70}$/.test(error.publicCode)
-        ? { code: error.publicCode, message: error.publicMessage || 'The backend could not confirm this request.' }
-        : classifyFirebaseHealthError(error))
-      : null;
-    const pendingCount = pendingQueueAddsRef.current?.size || 0;
-    const next = error
-      ? {
-          status: 'error', code: diagnostic.code,
-          message: diagnostic.message + ' The queue change is not confirmed in the shared queue. Pending additions are retried every five minutes while this moderator dashboard stays open.',
-          lastSuccessAt: Number(previous?.lastSuccessAt) || 0, lastFailureAt: timestamp,
-        }
-      : pendingCount > 0
-        ? {
-          status: 'pending', code: 'queue_write_retry_pending',
-          message: pendingCount + ' pending queue addition(s) are still only saved on this moderator dashboard and are not confirmed for the streamer.',
-          lastSuccessAt: timestamp, lastFailureAt: Number(previous?.lastFailureAt) || 0,
-        }
-        : {
-          status: 'ok', code: '', message: '',
-          lastSuccessAt: timestamp, lastFailureAt: 0,
-        };
-    writeStoredValue(localQueueWriteHealthKey, next);
-    setLocalQueueWriteHealth(next);
-  };
 
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
-  // The moderator owns the local IRC fallback so the streamer can keep the dashboard focused on playback.
-  const isModerator = twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
-  const isCommandBridgeOwner = canHostLocalChatBridge(twitchAuth);
   const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
   const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
   const authorizedLoginRef = useRef('');
@@ -433,16 +497,7 @@ function YediHubAppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
-  const [requestSubmitting, setRequestSubmitting] = useState(false);
-  const [viewerRequestHealth, setViewerRequestHealth] = useState(null);
-  const [showLayoutCustomizer, setShowLayoutCustomizer] = useState(false);
-  const [workspaceLayout, setWorkspaceLayout] = useState(() =>
-    normalizeWorkspaceLayout(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, DEFAULT_WORKSPACE_LAYOUT))
-  );
-  const [draggedWorkspacePanel, setDraggedWorkspacePanel] = useState('');
-  useEffect(() => {
-    writeStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, workspaceLayout);
-  }, [workspaceLayout]);
+  const [showObsOverlay, setShowObsOverlay] = useState(false);
 
   // Queue Moderation Settings
   const [streamSettings, setStreamSettings] = useState(() => {
@@ -457,7 +512,6 @@ function YediHubAppContent() {
   // Keep queue closure synchronous so incoming Twitch messages cannot read a stale render state.
   const queueOpenRef = useRef(Boolean(streamSettings.queueOpen));
   const queueOpenCloudOverrideRef = useRef(null);
-  const queueVersionRef = useRef(0);
   useEffect(() => {
     queueOpenRef.current = Boolean(streamSettings.queueOpen);
   }, [streamSettings.queueOpen]);
@@ -466,167 +520,29 @@ function YediHubAppContent() {
   const [videos, setVideos] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'videos'), null);
     if (Array.isArray(saved)) {
-      const realSavedVideos = saved
+      return saved
         .filter((video) => video && typeof video === 'object' && !String(video.id || '').startsWith('demo-'))
         .map(normalizeLegacyVideoVotes);
-      const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
-      return dedupeMediaVideos(applyCachedVideoDurations(realSavedVideos, durationCache)).videos;
     }
     // Start empty so demo requests never appear to be real viewer submissions.
     return [];
-  });
-  const videosRef = useRef(videos);
-  // Queue items are added optimistically. Keep unconfirmed writes separately so a stale
-  // Firestore/cache snapshot cannot immediately erase a request when a cloud write fails.
-  const pendingQueueAddsRef = useRef(null);
-  const pendingQueueAddAttemptAtRef = useRef(new Map());
-  if (pendingQueueAddsRef.current === null) {
-    const savedPendingAdds = readStoredValue(roomStorageKey(channelRoom, 'pending-queue-adds'), []);
-    pendingQueueAddsRef.current = new Map(
-      (Array.isArray(savedPendingAdds) ? savedPendingAdds : [])
-        .filter((video) => video && typeof video === 'object' && video.id)
-        .map((video) => [String(video.id), video])
-    );
-  }
-  const persistPendingQueueAdds = () => writeStoredValue(
-    roomStorageKey(channelRoom, 'pending-queue-adds'),
-    [...pendingQueueAddsRef.current.values()]
-  );
-  // Keep event and iframe callbacks on the latest committed queue, even during rapid navigation.
-  videosRef.current = videos;
-  const pendingMediaRequestKeysRef = useRef(new Set());
-  const durationEnrichmentInFlightRef = useRef(new Set());
-  const tiktokMetadataBackfillRef = useRef({ room: '', attempted: new Set() });
-  const [durationRefreshCount, setDurationRefreshCount] = useState(0);
-  const durationRefreshProcessedRef = useRef(0);
-  const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
-    const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
-    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
-  });
-  const [activityEvents, setActivityEvents] = useState(() => {
-    const stored = readStoredValue(roomStorageKey(channelRoom, 'activity-events'), []);
-    return Array.isArray(stored) ? mergeActivityEvents(stored) : [];
-  });
-  const activityEventsRef = useRef(activityEvents);
-  activityEventsRef.current = activityEvents;
-  const activityCloudIdsRef = useRef(new Set());
-  const activityCloudReadyRef = useRef(false);
-  const activitySyncInFlightRef = useRef(new Set());
-  const [activityCloudReady, setActivityCloudReady] = useState(false);
-  const [activitySyncError, setActivitySyncError] = useState(false);
-  const [activitySyncErrorMessage, setActivitySyncErrorMessage] = useState('');
-  const [activitySyncLoading, setActivitySyncLoading] = useState(false);
-  const activitySessionIdRef = useRef('');
-  if (!activitySessionIdRef.current) {
-    const sessionKey = roomStorageKey(channelRoom, 'activity-session');
-    let sessionId = '';
-    try { sessionId = window.sessionStorage.getItem(sessionKey) || ''; } catch { /* Storage can be blocked. */ }
-    if (!sessionId) {
-      sessionId = 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-      try { window.sessionStorage.setItem(sessionKey, sessionId); } catch { /* Session tracking remains in memory. */ }
-    }
-    activitySessionIdRef.current = sessionId;
-  }
-  const [statsNow, setStatsNow] = useState(() => Date.now());
-  const [statsExpanded, setStatsExpanded] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
-  );
-  const [connectionDetailsExpanded, setConnectionDetailsExpanded] = useState(false);
-  // The moderator is the technical operator of this setup, so keep diagnostics visible
-  // for paim_beach_pete without adding noisy infrastructure controls to the streamer view.
-  useEffect(() => {
-    if (twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete') {
-      setConnectionDetailsExpanded(true);
-    }
-  }, [twitchAuth.authenticated, twitchAuth.username]);
-  const [topMenuOpen, setTopMenuOpen] = useState(false);
-  const topMenuRef = useRef(null);
-  useEffect(() => {
-    if (!topMenuOpen) return undefined;
-    const closeOnPointerDown = (event) => {
-      if (!topMenuRef.current?.contains(event.target)) setTopMenuOpen(false);
-    };
-    const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setTopMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', closeOnPointerDown);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnPointerDown);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [topMenuOpen]);
-  const restoringBackupRef = useRef(false);
-  const backupFileInputRef = useRef(null);
-  const [backupBusy, setBackupBusy] = useState(false);
-  const [backupMessage, setBackupMessage] = useState('');
-  const [safetySnapshot, setSafetySnapshot] = useState(() => {
-    const saved = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
-    const validated = validateQueueBackup(saved);
-    return validated.valid ? validated.backup : null;
   });
 
   // Filter & Nav State
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'watch_later' | 'watched'
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
-  const [draggedQueueId, setDraggedQueueId] = useState('');
-  const [dragOverQueueId, setDragOverQueueId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
   // Player State
   const [simProgress, setSimProgress] = useState(0);
-  const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
-  const keyboardPausedRef = useRef({ videoId: '', paused: false });
-  const [playerControlState, setPlayerControlState] = useState({ videoId: '', paused: false, muted: false, volume: 100 });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
-  const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
-  const playerStageRef = useRef(null);
-  const [youtubeNeedsGesture, setYoutubeNeedsGesture] = useState('');
-  const [youtubeHasRenderedFrameId, setYoutubeHasRenderedFrameId] = useState('');
-  const youtubeStartupMuteRef = useRef({ videoId: '', pending: false });
-  const youtubeVolumeRestoreRef = useRef({ videoId: '', volume: 100, until: 0 });
-  const youtubeMuteRestoreRef = useRef({ videoId: '', muted: null, until: 0 });
-
-  useEffect(() => {
-    const updateFullscreenState = () => setIsPlayerFullscreen(document.fullscreenElement === playerStageRef.current);
-    document.addEventListener('fullscreenchange', updateFullscreenState);
-    updateFullscreenState();
-    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
-  }, []);
   const [tiktokPlayerState, setTikTokPlayerState] = useState({ requestId: '', status: 'idle' });
-  const [tiktokNeedsGestureId, setTiktokNeedsGestureId] = useState('');
-  const [twitchClipPlayback, setTwitchClipPlayback] = useState({ requestId: '', status: 'idle', videoId: '', vodOffset: 0, durationSec: 0 });
-  const [twitchPlayerReadyId, setTwitchPlayerReadyId] = useState('');
-  const [twitchNeedsGestureId, setTwitchNeedsGestureId] = useState('');
-  const twitchPlayerMountRef = useRef(null);
-  const twitchPlayerRef = useRef(null);
-  const twitchObservedAudioRef = useRef({ requestId: '', muted: null, volume: null });
-  // Remember an explicit mute/unmute choice so startup recovery never overrides the app's mute button.
-  const tiktokMutePreferenceRef = useRef({ requestId: '', preference: 'auto' });
-  // Track observed player state separately from the viewer's deliberate preference.
-  const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
-  // Live diagnostics for the authenticated moderator Twitch chat bridge.
-  const [chatBridgeHealth, setChatBridgeHealth] = useState({
-    status: 'idle', code: '', lastMessageAt: 0, lastRequestAt: 0, lastRequestResult: '', lastMessageKind: 'none',
-  });
-  const updateChatBridgeHealth = (patch) => {
-    setChatBridgeHealth((previous) => ({ ...previous, ...patch }));
-  };
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
-  const youtubeProgressSignalRef = useRef({ videoId: '', lastTime: null, advancing: false });
-  // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
-  // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
-  const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null, volume: 100 });
-  const playbackPositionRef = useRef({ videoId: '', seconds: 0 });
-  const playbackVisibilitySnapshotRef = useRef(null);
-  const pendingPlaybackRestoreRef = useRef(null);
-  const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null, currentTime: 0 });
   const tiktokIframeRef = useRef(null);
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
@@ -648,7 +564,6 @@ function YediHubAppContent() {
 
   // Manual Request Form State
   const [reqUrl, setReqUrl] = useState('');
-  const [reqStartAt, setReqStartAt] = useState('');
   const [reqTitle, setReqTitle] = useState('');
   const [reqCategory, setReqCategory] = useState('Auto');
   const [reqNote, setReqNote] = useState('');
@@ -666,9 +581,6 @@ function YediHubAppContent() {
   // Notifications
   const [toasts, setToasts] = useState([]);
   const addToast = (message, type = 'info') => {
-    // Old local-only queue warning was misleading to viewers; sync status is shown in
-    // Connection details instead, so never surface that copy as a toast.
-    if (shouldSuppressLocalOnlySyncToast(message)) return;
     // Seamless mode: suppress routine informational/success popups.
     if (type === 'info' || type === 'success') return;
     const id = 'toast-' + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -685,30 +597,6 @@ function YediHubAppContent() {
     if (!normalizeRoomName(channelRoom)) return;
     writeStoredValue(roomStorageKey(channelRoom, 'videos'), videos);
   }, [videos, channelRoom]);
-
-  // Keep a local last-known-good snapshot while the queue has waiting items.
-  // If the queue is accidentally emptied, retain the prior snapshot for recovery.
-  useEffect(() => {
-    const room = normalizeRoomName(channelRoom);
-    if (!room) return;
-    const snapshotKey = roomStorageKey(room, 'safety-snapshot');
-    const previous = validateQueueBackup(readStoredValue(snapshotKey, null));
-    const waitingCount = videos.filter((video) => video.status === 'queue').length;
-    const snapshotVideos = waitingCount > 0
-      ? videos
-      : previous.valid
-      ? previous.backup.videos
-      : videos;
-    if (!snapshotVideos.length) return;
-    const snapshot = createQueueBackup({
-      channelRoom: room,
-      videos: snapshotVideos,
-      streamSettings,
-      votedIds,
-      savedAt: Date.now()
-    });
-    if (writeStoredValue(snapshotKey, snapshot)) setSafetySnapshot(snapshot);
-  }, [videos, streamSettings, votedIds, channelRoom]);
 
   useEffect(() => {
     if (!normalizeRoomName(channelRoom)) return;
@@ -784,79 +672,22 @@ function YediHubAppContent() {
     return () => { cancelled = true; };
   }, []);
 
-  // Renew the persistent Twitch refresh cookie while a signed-in dashboard is in use.
-  // This is a cookie-refresh check, not a client-side grant of access; the server still
-  // validates Twitch and the allowlist on every call. Focus handling also covers long sleeps.
-  useEffect(() => {
-    if (!twitchAuth.authenticated) return;
-    let active = true;
-    let requestInFlight = false;
-    const renewRememberedSession = async () => {
-      if (requestInFlight) return;
-      requestInFlight = true;
-      try {
-        const response = await fetch('/api/twitch/session', {
-          credentials: 'same-origin',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(10000)
-        });
-        if (!response.ok) return; // A temporary server issue should not sign the user out.
-        const session = await response.json();
-        if (!active || session.authenticated) return;
-        // A successful response that says the Twitch session is no longer valid is
-        // authoritative. Do not keep a stale moderator/streamer UI active.
-        authorizedLoginRef.current = '';
-        setFirebaseLoginToken('');
-        setFirebaseUser(null);
-        setCloudSynced(false);
-        if (auth) {
-          try { await signOut(auth); } catch { /* Firebase may already be signed out */ }
-        }
-        setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
-      } catch {
-        // Preserve the current UI on transient network errors; retry on focus or interval.
-      } finally {
-        requestInFlight = false;
-      }
-    };
-    const sessionRenewalTimer = window.setInterval(renewRememberedSession, 6 * 60 * 60 * 1000);
-    window.addEventListener('focus', renewRememberedSession);
-    return () => {
-      active = false;
-      window.clearInterval(sessionRenewalTimer);
-      window.removeEventListener('focus', renewRememberedSession);
-    };
-  }, [twitchAuth.authenticated, auth]);
-
   // The chat bot has a separate server-side Twitch session. It does not grant dashboard access.
   useEffect(() => {
     let cancelled = false;
-    let requestInFlight = false;
-    const refreshBotSession = () => {
-      if (requestInFlight) return;
-      requestInFlight = true;
-      fetch('/api/twitch/bot-session', {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(8000)
+    fetch('/api/twitch/bot-session', { credentials: 'same-origin', cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
+      .then((session) => {
+        if (cancelled) return;
+        setChatBotSession({
+          loading: false,
+          connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
+          username: session.connected ? String(session.user?.login || 'gachibot69') : ''
+        });
       })
-        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Chat bot session unavailable')))
-        .then((session) => {
-          if (cancelled) return;
-          setChatBotSession({
-            loading: false,
-            connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
-            username: session.connected ? String(session.user?.login || 'gachibot69') : ''
-          });
-        })
-        .catch(() => {
-          if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
-        })
-        .finally(() => { requestInFlight = false; });
-    };
-    refreshBotSession();
-    const botStatusTimer = window.setInterval(refreshBotSession, 30000);
-    window.addEventListener('focus', refreshBotSession);
+      .catch(() => {
+        if (!cancelled) setChatBotSession({ loading: false, connected: false, username: '' });
+      });
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('bot_connected') === '1') {
@@ -868,7 +699,7 @@ function YediHubAppContent() {
       const explanation = botError === 'wrong_account'
         ? 'Please authorize Twitch account @gachibot69 for chat messages.'
         : botError === 'missing_scope'
-        ? 'Twitch did not grant the required chat permissions. Reconnect the bot and approve all requested permissions.'
+        ? 'Twitch did not grant chat-write permission. Reconnect the bot and approve the requested permission.'
         : 'The chat-bot Twitch login did not complete. Please try again.';
       addToast(explanation, 'warning');
       params.delete('bot_error');
@@ -877,99 +708,8 @@ function YediHubAppContent() {
       const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', nextUrl);
     }
-    return () => {
-      cancelled = true;
-      window.clearInterval(botStatusTimer);
-      window.removeEventListener('focus', refreshBotSession);
-    };
+    return () => { cancelled = true; };
   }, []);
-
-  // Set up Twitch EventSub once from the streamer's authenticated dashboard. After the webhook
-  // is active, Twitch delivers requests straight to the server; neither browser has to stay open.
-  useEffect(() => {
-    if (!twitchAuth.authenticated) {
-      cloudChatListenerReadyRef.current = false;
-      setCloudChatListener({ status: 'signed_out', active: false, code: 'signed_out', message: 'Sign in to check cloud chat capture.' });
-      return undefined;
-    }
-
-    let cancelled = false;
-    let inFlight = false;
-    const canConfigureCloudChat = isModerator;
-
-    const refreshCloudChatListener = async (setup = false) => {
-      if (inFlight || cancelled) return;
-      inFlight = true;
-      try {
-        const response = await fetch('/api/twitch/eventsub-setup', {
-          method: setup ? 'POST' : 'GET',
-          credentials: 'same-origin',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(12000),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (cancelled) return;
-        const active = Boolean(response.ok && result.active === true);
-        // Active subscription alone is NOT proof of working webhook delivery.
-        // Leave the moderator IRC backup enabled until a recent persisted request
-        // has been processed, or chat will silently stop when webhook intake stalls.
-        cloudChatListenerReadyRef.current = hasVerifiedCloudChatIntake(result);
-        setCloudChatListener({
-          status: String(result.status || (response.ok ? 'inactive' : 'error')),
-          active,
-          code: String(result.code || ''),
-          message: String(result.message || (active
-            ? 'Cloud chat listener is active. Requests save even when the dashboard is closed.'
-            : 'Cloud chat listener is not active yet.')),
-          subscriptionStatus: String(result.subscriptionStatus || (result.active === true ? 'enabled' : 'unknown')),
-          healthDiagnosticCode: String(result.healthDiagnosticCode || ''),
-          healthDiagnosticMessage: String(result.healthDiagnosticMessage || ''),
-          firestoreStatus: String(result.firestoreStatus || 'unknown'),
-          firebaseAdminConfigured: typeof result.firebaseAdminConfigured === 'boolean' ? result.firebaseAdminConfigured : null,
-          firebaseWebConfigConfigured: typeof result.firebaseWebConfigConfigured === 'boolean' ? result.firebaseWebConfigConfigured : null,
-          lastWebhookAt: Number(result.lastWebhookAt) || 0,
-          lastWebhookStatus: String(result.lastWebhookStatus || 'unknown'),
-          lastWriteAt: Number(result.lastWriteAt) || 0,
-          lastWriteStatus: String(result.lastWriteStatus || 'unknown'),
-          lastWriteSource: String(result.lastWriteSource || ''),
-          lastProcessingError: String(result.lastProcessingError || ''),
-          lastProcessingErrorAt: Number(result.lastProcessingErrorAt) || 0,
-          lastProcessingStatus: String(result.lastProcessingStatus || 'unknown'),
-          queueVersion: Number(result.queueVersion) || 0,
-          queueUpdatedAt: Number(result.queueUpdatedAt) || 0,
-        });
-      } catch (error) {
-        if (cancelled) return;
-        cloudChatListenerReadyRef.current = false;
-        setCloudChatListener({
-          status: 'unavailable',
-          active: false,
-          code: 'status_unavailable',
-          firestoreStatus: 'unknown',
-          message: 'Could not check the cloud chat listener. Requests may rely on the open streamer dashboard until it is healthy.',
-        });
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    // Let the existing session/bot refresh effects renew their HttpOnly tokens first.
-    const initialTimer = window.setTimeout(() => {
-      void refreshCloudChatListener(canConfigureCloudChat);
-    }, canConfigureCloudChat ? 1200 : 500);
-    const pollTimer = window.setInterval(() => {
-      void refreshCloudChatListener(false);
-    }, 120000);
-    const onFocus = () => void refreshCloudChatListener(false);
-    window.addEventListener('focus', onFocus);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(initialTimer);
-      window.clearInterval(pollTimer);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [twitchAuth.authenticated, twitchAuth.username]);
 
   // Firebase is initialized without anonymous sign-in. Only the server-issued custom token
   // for the currently authenticated allowlisted Twitch account can open the cloud queue.
@@ -1070,7 +810,6 @@ function YediHubAppContent() {
   // ==========================================
   const initializedCloudRoomsRef = useRef(new Set());
   const legacyVoteMigrationRef = useRef(new Set());
-  const historyRequeueInFlightRef = useRef(new Set());
 
   useEffect(() => {
     if (!db || !firebaseUser || !normalizeRoomName(channelRoom)) return;
@@ -1080,20 +819,10 @@ function YediHubAppContent() {
       const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos');
       const unsubscribe = onSnapshot(
         colRef,
-        { includeMetadataChanges: true },
         (snapshot) => {
-          if (!active || restoringBackupRef.current) return;
-          const cloudConfirmed = !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites;
-          setCloudSynced(cloudConfirmed);
-          setSyncStatusText(snapshot.metadata.fromCache
-            ? (networkOnlineRef.current ? 'Checking cloud connection…' : 'Offline cache — local save active')
-            : snapshot.metadata.hasPendingWrites
-            ? 'Syncing queue changes…'
-            : 'Cloud Synced');
-
-          // Cache-only snapshots can be stale. They must never replace the locally persisted
-          // queue; wait for a server-backed snapshot before treating Firestore as authoritative.
-          if (snapshot.metadata.fromCache) return;
+          if (!active) return;
+          setCloudSynced(true);
+          setSyncStatusText('Cloud Synced');
 
           // Normalize legacy seed votes and migrate each Firestore document once. This keeps old
           // requests' displayed vote counts honest and makes voter identity persistence consistent.
@@ -1103,6 +832,7 @@ function YediHubAppContent() {
             const normalized = {
               ...normalizeLegacyVideoVotes(data),
               id: d.id,
+              mediaType: data.mediaType || detectMusicType(data.url, data.title, data.note),
             };
             if (!Array.isArray(data.voters) && !legacyVoteMigrationRef.current.has(d.id)) {
               legacyVoteMigrationRef.current.add(d.id);
@@ -1113,75 +843,21 @@ function YediHubAppContent() {
             }
             return normalized;
           });
-          const rawRoomList = list.filter(
+          const roomList = list.filter(
             (v) => v && typeof v === 'object' && normalizeRoomName(v.channelRoom) === normalizeRoomName(channelRoom) && !String(v.id || '').startsWith('demo-')
           );
-          const dedupedRoomList = dedupeMediaVideos(rawRoomList);
-          // Hydrate confirmed lengths from the browser cache first; older Firestore snapshots
-          // must not erase them when a metadata write is briefly behind.
-          const durationCache = readStoredValue(roomStorageKey(channelRoom, 'duration-cache'), {});
-          const cachedRoomList = applyCachedVideoDurations(dedupedRoomList.videos, durationCache);
-          const roomList = mergeVideoDurationData(cachedRoomList, videosRef.current);
-          const cloudDocumentIds = new Set(rawRoomList.map((video) => String(video.id)));
-          // Only retire an optimistic local addition after Firestore has confirmed that document
-          // on the server (not merely in the local pending-write view).
-          if (cloudConfirmed) {
-            cloudDocumentIds.forEach((id) => {
-              pendingQueueAddsRef.current.delete(id);
-              pendingQueueAddAttemptAtRef.current.delete(id);
-            });
-            persistPendingQueueAdds();
-            // Old locally cached write errors are historical if the backend has
-            // now confirmed every pending request. Don't keep showing a stale
-            // firestore_health_check_failed after a successful sync.
-            const lastDiagnostic = readStoredValue(localQueueWriteHealthKey, null);
-            if (!pendingQueueAddsRef.current.size && ['error', 'pending'].includes(lastDiagnostic?.status)) {
-              recordLocalQueueWriteHealth();
-            }
-          }
-          const pendingRoomAdds = [...pendingQueueAddsRef.current.values()].filter(
-            (video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom)
-          );
 
-          // Retry only a small batch of local-only requests on a server-backed snapshot, and
-          // throttle each ID to once per five minutes. This recovers after transient outages
-          // without hammering Firestore if the project is still over quota.
-          if (cloudConfirmed && db && firebaseUser && networkOnlineRef.current) {
-            const now = Date.now();
-            const retryBatch = pendingRoomAdds
-              .filter((video) => !cloudDocumentIds.has(String(video.id)) &&
-                now - (pendingQueueAddAttemptAtRef.current.get(String(video.id)) || 0) >= 5 * 60 * 1000)
-              .slice(0, 3);
-            retryBatch.forEach((video) => {
-              const id = String(video.id);
-              pendingQueueAddAttemptAtRef.current.set(id, now);
-              void syncAddVideo(video, { retryOnly: true });
-            });
-          }
-
-          const visibleRoomList = mergePendingQueueAdds(roomList, pendingRoomAdds);
-
-          // Do not delete other Firestore documents while handling a live snapshot.
-          // Re-requests from History can coexist with legacy documents using
-          // different IDs. A snapshot deduplication decision must never trigger a
-          // destructive cloud write or erase a newly queued request.
-          if (dedupedRoomList.duplicateIds.length > 0) {
-            console.debug('Older duplicate media documents hidden from queue presentation:', dedupedRoomList.duplicateIds.length);
-          }
-
-          if (visibleRoomList.length > 0) {
-            if (roomList.length > 0) initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
-            setVideos(visibleRoomList);
-            // Keep the one-time migration path below active for an empty cloud queue, even if
-            // this browser has an optimistic local request waiting for cloud confirmation.
-            if (roomList.length > 0) return;
+          if (roomList.length > 0) {
+            initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
+            setVideos(roomList);
+            return;
           }
 
           const normalizedRoom = normalizeRoomName(channelRoom);
           const firstSnapshotForRoom = !initializedCloudRoomsRef.current.has(normalizedRoom);
           if (!firstSnapshotForRoom) {
-            // A confirmed remote clear can clear synchronized items, but never unconfirmed local adds.
-            setVideos(pendingRoomAdds);
+            // A later empty snapshot means the shared queue was cleared remotely.
+            setVideos([]);
             return;
           }
 
@@ -1207,7 +883,7 @@ function YediHubAppContent() {
               }
             });
           } else {
-            setVideos(pendingRoomAdds);
+            setVideos([]);
           }
         },
         (error) => {
@@ -1215,6 +891,7 @@ function YediHubAppContent() {
           if (active) {
             setCloudSynced(false);
             setSyncStatusText('Cloud sync failed — local save is active');
+            addToast('Cloud sync failed. Your browser-local queue is still available.', 'warning');
           }
         }
       );
@@ -1228,7 +905,7 @@ function YediHubAppContent() {
       setCloudSynced(false);
       setSyncStatusText('Cloud unavailable — local save is active');
     }
-  }, [db, firebaseUser, channelRoom, appId, cloudReconnectTick]);
+  }, [db, firebaseUser, channelRoom, appId]);
 
   // Persist the channel's moderation settings in Firestore so they follow the broadcaster
   // across browsers/devices. The room name itself is also carried in the ?channel= URL.
@@ -1247,7 +924,6 @@ function YediHubAppContent() {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
-        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(cloudConfig.queueVersion) || 0);
         if (cloudConfig.streamSettings && typeof cloudConfig.streamSettings === 'object') {
           const merged = { ...DEFAULT_STREAM_SETTINGS, ...cloudConfig.streamSettings };
           // If the user just changed queueOpen locally, don't let a stale cloud snapshot reopen it.
@@ -1299,1013 +975,97 @@ function YediHubAppContent() {
       });
   }, [db, firebaseUser, appId, channelRoom, streamSettings, roomConfigLoadedFor]);
 
-  const persistQueuePatches = async (patches, referenceItems = [], requireCurrentVersion = true) => {
-    if (!db || !firebaseUser) return false;
-    const entries = patches instanceof Map
-      ? Array.from(patches.entries()).map(([id, value]) => [String(id), value || {}])
-      : (Array.isArray(patches) ? patches.map((value) => [String(value.id), { queueOrder: value.queueOrder }]) : []);
-    if (!entries.length) return true;
-    const room = normalizeRoomName(channelRoom);
-    const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', room);
-    const baseById = new Map((referenceItems || []).map((item) => [String(item.id), item]));
-    const expectedVersion = Number(queueVersionRef.current) || 0;
-    let newVersion = expectedVersion + 1;
-
-    try {
-      newVersion = await runTransaction(db, async (transaction) => {
-        const settingsSnapshot = await transaction.get(settingsRef);
-        const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
-        const currentVersion = Number(settings.queueVersion) || 0;
-        if (requireCurrentVersion && currentVersion !== expectedVersion) {
-          const conflict = new Error('QUEUE_VERSION_CONFLICT');
-          conflict.currentVersion = currentVersion;
-          throw conflict;
-        }
-
-        const refs = entries.map(([id]) => doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id));
-        const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
-        const writes = entries.map(([id, patch], index) => {
-          const snapshot = snapshots[index];
-          const base = baseById.get(id) || { id, channelRoom: room };
-          if (snapshot.exists()) {
-            const current = snapshot.data() || {};
-            if (Object.prototype.hasOwnProperty.call(patch, 'queueOrder') && current.status !== 'queue') {
-              const conflict = new Error('QUEUE_VERSION_CONFLICT');
-              conflict.currentVersion = currentVersion;
-              throw conflict;
-            }
-            if (Object.prototype.hasOwnProperty.call(patch, 'status') &&
-                String(current.status || 'queue') !== String(base.status || 'queue')) {
-              const conflict = new Error('QUEUE_VERSION_CONFLICT');
-              conflict.currentVersion = currentVersion;
-              throw conflict;
-            }
-          } else if (!base || !base.id) {
-            throw new Error('Queue item disappeared before its update could be saved.');
-          }
-          return {
-            ref: refs[index],
-            payload: { ...(snapshot.exists() ? {} : base), ...patch, id, channelRoom: room },
-          };
-        });
-
-        writes.forEach(({ ref, payload }) => transaction.set(ref, payload, { merge: true }));
-        const writeAt = Date.now();
-        const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-          ? settings.chatIntakeHealth : {};
-        transaction.set(settingsRef, {
-          queueVersion: currentVersion + 1,
-          queueUpdatedAt: writeAt,
-          chatIntakeHealth: {
-            ...previousHealth,
-            lastWriteAt: writeAt,
-            lastWriteStatus: 'ok',
-            lastWriteSource: 'moderator-browser',
-          },
-        }, { merge: true });
-        return currentVersion + 1;
-      });
-      queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(newVersion) || 0);
-      recordLocalQueueWriteHealth();
-      return true;
-    } catch (error) {
-      recordLocalQueueWriteHealth(error);
-      if (Number.isFinite(Number(error?.currentVersion))) {
-        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(error.currentVersion));
-      }
-      throw error;
-    }
-  };
-
-  // Shared transaction helper. Partial metadata/status changes are merged into the latest cloud row.
+  // Sync Video Changes Helper (updates Firestore if online, updates state locally)
   const syncUpdateVideo = async (videoId, updates) => {
-    const baseItems = [...(videosRef.current || videos)];
-    videosRef.current = videosRef.current.map((v) => (String(v.id) === String(videoId) ? { ...v, ...updates } : v));
-    setVideos((prev) => prev.map((v) => (String(v.id) === String(videoId) ? { ...v, ...updates } : v)));
+    setVideos((prev) =>
+      prev.map((v) => (v.id === videoId ? { ...v, ...updates } : v))
+    );
 
     if (db && firebaseUser) {
       try {
-        await persistQueuePatches(new Map([[String(videoId), updates]]), baseItems, false);
-      } catch (error) {
-        console.warn('Firestore update failed; the change remains in local storage.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Cloud update failed — local save is active');
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
+        await updateDoc(docRef, updates);
+      } catch (e) {
+        // Doc might not exist yet if demo item
+        try {
+          const fullItem = videos.find((v) => v.id === videoId);
+          if (fullItem) {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
+            await setDoc(docRef, { ...fullItem, ...updates, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
+          }
+        } catch (innerErr) {
+          console.warn('Firestore update failed; the change remains in local storage.', innerErr);
+          setCloudSynced(false);
+          setSyncStatusText('Cloud update failed — local save is active');
+        }
       }
     }
   };
-
-  useEffect(() => {
-    const room = normalizeRoomName(channelRoom);
-    if (tiktokMetadataBackfillRef.current.room !== room) {
-      tiktokMetadataBackfillRef.current = { room, attempted: new Set() };
-    }
-    const attempted = tiktokMetadataBackfillRef.current.attempted;
-    const genericTitle = (value) => !String(value || '').trim() ||
-      /^TikTok (?:Short Clip|Video)(?:\s*\(|$)/i.test(String(value || '').trim());
-    const placeholderThumbnail = (value) => !value || /placehold\.co|TikTok\+Video/i.test(String(value));
-    const candidates = videos.filter((video) =>
-      video.platform === 'tiktok' &&
-      /^\d{10,25}$/.test(String(video.videoId || '')) &&
-      (genericTitle(video.title) || placeholderThumbnail(video.thumbnail)) &&
-      !attempted.has(String(video.id))
-    ).slice(0, 3);
-    for (const video of candidates) {
-      const id = String(video.id);
-      attempted.add(id);
-      const lookupUrl = video.metadataUrl ||
-        (/\/player\/v1\//i.test(String(video.url || ''))
-          ? 'https://www.tiktok.com/video/' + encodeURIComponent(video.videoId)
-          : String(video.url || ''));
-      if (!lookupUrl) continue;
-      void fetch('/api/media-metadata?url=' + encodeURIComponent(lookupUrl), { credentials: 'same-origin', cache: 'no-store' })
-        .then(async (response) => response.ok ? response.json().catch(() => null) : null)
-        .then((metadata) => {
-          if (!metadata) return;
-          const liveVideo = videosRef.current.find((item) => String(item.id) === id) || video;
-          const updates = {};
-          if (metadata.title && genericTitle(liveVideo.title)) {
-            updates.title = String(metadata.title).trim().slice(0, 400);
-          }
-          if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://') &&
-              placeholderThumbnail(liveVideo.thumbnail)) {
-            updates.thumbnail = metadata.thumbnailUrl;
-          }
-          if (Object.keys(updates).length) void syncUpdateVideo(id, updates);
-        })
-        .catch((error) => console.debug('TikTok metadata backfill was unavailable.', error));
-    }
-  }, [videos, channelRoom, syncUpdateVideo]);
-
-  const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
-    const seconds = Math.round(Number(rawDurationSeconds));
-    const key = getDurationCacheKey(video);
-    if (!key || !isValidMediaDuration(seconds) || !['metadata', 'player'].includes(source)) return;
-    const cacheKey = roomStorageKey(channelRoom, 'duration-cache');
-    const stored = readStoredValue(cacheKey, {});
-    const cache = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
-    const existing = cache[key];
-    if (existing?.source === 'player' && source !== 'player' && Number(existing.seconds) > 0) return;
-    cache[key] = { seconds, source, updatedAt: Date.now() };
-    const limited = Object.fromEntries(Object.entries(cache)
-      .sort((left, right) => (Number(right[1]?.updatedAt) || 0) - (Number(left[1]?.updatedAt) || 0))
-      .slice(0, 500));
-    writeStoredValue(cacheKey, limited);
-  };
-
-  useEffect(() => {
-    writeStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), durationLookupOutcomes);
-  }, [durationLookupOutcomes, channelRoom]);
-
-  const reportPlayerDuration = (videoId, rawDurationSeconds) => {
-    const seconds = Math.round(Number(rawDurationSeconds));
-    if (!isValidMediaDuration(seconds)) return;
-    const target = videosRef.current.find((video) => String(video.id) === String(videoId));
-    if (!target) return;
-    const id = String(target.id);
-    const platform = String(target.platform || 'external').toLowerCase();
-    const label = formatMediaDuration(seconds);
-    const storedSeconds = Number(target.durationSec) || 0;
-    const durationAlreadyAccurate = Math.abs(storedSeconds - seconds) <= 1 &&
-      String(target.duration || '') === label &&
-      ['metadata', 'player'].includes(String(target.durationSource || ''));
-
-    // A real provider player report is stronger than an earlier failed server lookup.
-    // Clear the stale error even when the value was already saved from metadata.
-    const markPlayerDurationFound = () => setDurationLookupOutcomes((prev) => ({
-      ...prev,
-      [id]: createDurationLookupOutcome({
-        status: 'found',
-        platform,
-        previous: prev[id] || null,
-        provider: platform + '-player',
-        at: Date.now(),
-      })
-    }));
-    if (durationAlreadyAccurate) {
-      markPlayerDurationFound();
-      return;
-    }
-    const source = target.durationSource === 'metadata' && Math.abs(storedSeconds - seconds) <= 1
-      ? 'metadata'
-      : 'player';
-    cacheVideoDuration(target, seconds, source);
-    void syncUpdateVideo(id, {
-      duration: label,
-      durationSec: seconds,
-      durationSource: source,
-      durationProvider: platform + '-player'
-    });
-    markPlayerDurationFound();
-  };
-
-  // Backfill queue/history items. Failed lookups get bounded automatic retries instead of
-  // becoming permanently stuck; in-flight IDs are locked before state updates to prevent races.
-  const durationScanKey = videos.map((video) =>
-    String(video.id) + ':' + String(video.platform || '') + ':' + String(video.url || '') + ':' +
-    String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
-  ).join('|');
-  useEffect(() => {
-    const forceRetry = durationRefreshProcessedRef.current !== durationRefreshCount;
-    durationRefreshProcessedRef.current = durationRefreshCount;
-    const candidates = videosRef.current.filter((video) => {
-      const id = String(video?.id || '');
-      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsDurationLookup(video)) return false;
-      return shouldRetryDurationLookup(durationLookupOutcomes[id], Date.now(), forceRetry);
-    }).slice(0, 160);
-    if (!candidates.length) return undefined;
-
-    const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[String(video.id)] || null]));
-    const startedAt = Date.now();
-    candidates.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
-    setDurationLookupOutcomes((prev) => ({
-      ...prev,
-      ...Object.fromEntries(candidates.map((video) => {
-        const id = String(video.id);
-        return [id, createDurationLookupOutcome({
-          status: 'pending', platform: video.platform, previous: previousOutcomes.get(id), at: startedAt,
-        })];
-      }))
-    }));
-
-    const enrich = async () => {
-      for (let offset = 0; offset < candidates.length; offset += 3) {
-        const batch = candidates.slice(offset, offset + 3);
-        await Promise.all(batch.map(async (video) => {
-          const id = String(video.id);
-          const platform = String(video.platform || 'external').toLowerCase();
-          try {
-            const response = await fetch('/api/media-metadata?url=' + encodeURIComponent(video.url), {
-              credentials: 'same-origin',
-              cache: 'no-store',
-              signal: AbortSignal.timeout(9000)
-            });
-            const metadata = await response.json().catch(() => null);
-            if (!response.ok) {
-              setDurationLookupOutcomes((prev) => ({
-                ...prev,
-                [id]: createDurationLookupOutcome({
-                  status: 'error', platform, previous: previousOutcomes.get(id),
-                  reason: metadata?.error || ('Metadata endpoint returned HTTP ' + response.status + '.'),
-                  at: Date.now(),
-                })
-              }));
-              return;
-            }
-            const seconds = Number(metadata?.durationSec);
-            if (!isValidMediaDuration(seconds)) {
-              setDurationLookupOutcomes((prev) => ({
-                ...prev,
-                [id]: createDurationLookupOutcome({
-                  status: 'unavailable', platform, previous: previousOutcomes.get(id),
-                  reason: metadata?.durationReason || 'The provider did not return a valid duration.',
-                  provider: metadata?.durationProvider || '',
-                  at: Date.now(),
-                })
-              }));
-              return;
-            }
-
-            const current = videosRef.current.find((item) => String(item.id) === id);
-            if (!current) return;
-            cacheVideoDuration(current, seconds, 'metadata');
-            if (!['metadata', 'player'].includes(String(current.durationSource || ''))) {
-              void syncUpdateVideo(id, {
-                duration: formatMediaDuration(seconds),
-                durationSec: seconds,
-                durationSource: 'metadata',
-                durationProvider: String(metadata?.durationProvider || ''),
-              });
-            }
-            setDurationLookupOutcomes((prev) => ({
-              ...prev,
-              [id]: createDurationLookupOutcome({
-                status: 'found', platform, previous: previousOutcomes.get(id),
-                provider: metadata?.durationProvider || '', at: Date.now(),
-              })
-            }));
-          } catch (error) {
-            const reason = error?.name === 'TimeoutError'
-              ? 'Duration lookup timed out while contacting the metadata endpoint.'
-              : String(error?.message || 'Network error during duration lookup.');
-            setDurationLookupOutcomes((prev) => ({
-              ...prev,
-              [id]: createDurationLookupOutcome({
-                status: 'error', platform, previous: previousOutcomes.get(id), reason, at: Date.now(),
-              })
-            }));
-          } finally {
-            durationEnrichmentInFlightRef.current.delete(id);
-          }
-        }));
-      }
-    };
-    void enrich();
-    return undefined;
-  }, [durationScanKey, channelRoom, durationRefreshCount, durationLookupOutcomes]);
-
-  // Retry failed duration lookups even when the dashboard stays open. Persisted retry times
-  // let a reload resume a bounded backoff schedule rather than leaving failed entries stuck.
-  useEffect(() => {
-    const currentIds = new Set(videos.map((video) => String(video.id)));
-    const retryTimes = Object.entries(durationLookupOutcomes)
-      .filter(([id, outcome]) => currentIds.has(String(id)) &&
-        ['unavailable', 'error'].includes(typeof outcome === 'string' ? outcome : outcome?.status))
-      .filter(([id]) => {
-        const video = videosRef.current.find((item) => String(item.id) === String(id));
-        return videoNeedsDurationLookup(video) && !durationEnrichmentInFlightRef.current.has(String(id));
-      })
-      .map(([, outcome]) => Number(typeof outcome === 'object' ? outcome?.nextRetryAt : 0) || 0)
-      .filter((time) => time > Date.now())
-      .sort((a, b) => a - b);
-    if (!retryTimes.length) return undefined;
-    const delay = Math.max(1000, Math.min(2_147_000_000, retryTimes[0] - Date.now()));
-    const timer = window.setTimeout(() => setDurationRefreshCount((count) => count + 1), delay);
-    return () => window.clearTimeout(timer);
-  }, [durationLookupOutcomes, durationScanKey]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setStatsNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const syncIncrementUpvote = async (videoId, voterLogin) => {
-    const room = normalizeRoomName(channelRoom);
-    const itemId = String(videoId);
-    const localItem = (videosRef.current || videos).find((video) => String(video.id) === itemId);
-    if (!localItem) return { ok: false, reason: 'missing' };
-
-    const applyLocalVote = (item) => {
-      let nextResult = null;
-      const nextVideos = (videosRef.current || videos).map((video) => {
-        if (String(video.id) !== itemId) return video;
-        nextResult = { ...video, upvotes: Number(item.upvotes) || 0, voters: Array.isArray(item.voters) ? item.voters : [] };
-        return nextResult;
-      });
-      if (!nextResult) return false;
-      videosRef.current = nextVideos;
-      setVideos(nextVideos);
-      return true;
-    };
+    setVideos((prev) => prev.map((video) => {
+      if (video.id !== videoId) return video;
+      const voters = Array.isArray(video.voters) ? video.voters : [];
+      if (voters.some((item) => normalizeTwitchLogin(item) === voterLogin)) return video;
+      return { ...video, upvotes: (Number(video.upvotes) || 0) + 1, voters: [...voters, voterLogin] };
+    }));
 
     if (db && firebaseUser) {
       try {
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
-        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', room);
-        const result = await runTransaction(db, async (transaction) => {
-          const [settingsSnapshot, itemSnapshot] = await Promise.all([
-            transaction.get(settingsRef),
-            transaction.get(itemRef),
-          ]);
-          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
-          const current = itemSnapshot.exists() ? itemSnapshot.data() || {} : localItem;
-          if (current.status !== 'queue') return { ok: false, reason: 'not-queued' };
-          if (normalizeTwitchLogin(current.requestedBy) === voterLogin) return { ok: false, reason: 'own-request' };
-          const voters = Array.isArray(current.voters)
-            ? current.voters.map(normalizeTwitchLogin).filter(Boolean)
-            : [];
-          if (voters.includes(voterLogin)) return { ok: false, reason: 'already-voted' };
-          const nextVoters = [...voters, voterLogin];
-          const upvotes = Math.max(0, Number(current.upvotes) || 0) + 1;
-          if (itemSnapshot.exists()) {
-            transaction.update(itemRef, { upvotes, voters: nextVoters });
-          } else {
-            transaction.set(itemRef, {
-              ...current, id: itemId, channelRoom: room, upvotes, voters: nextVoters,
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
+        await updateDoc(itemRef, { upvotes: increment(1), voters: arrayUnion(voterLogin) });
+      } catch (error) {
+        // A legacy/local-only item may not exist in Firestore yet; preserve the vote and voter list.
+        try {
+          const fullItem = videos.find((video) => video.id === videoId);
+          if (fullItem) {
+            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
+            const voters = Array.isArray(fullItem.voters) ? fullItem.voters : [];
+            await setDoc(itemRef, {
+              ...fullItem,
+              upvotes: (Number(fullItem.upvotes) || 0) + 1,
+              voters: [...voters.filter((item) => normalizeTwitchLogin(item) !== voterLogin), voterLogin],
+              channelRoom: normalizeRoomName(channelRoom),
             }, { merge: true });
           }
-          const version = Number(settings.queueVersion) || 0;
-          const writeAt = Date.now();
-          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-            ? settings.chatIntakeHealth : {};
-          transaction.set(settingsRef, {
-            queueVersion: version + 1,
-            queueUpdatedAt: writeAt,
-            chatIntakeHealth: {
-              ...previousHealth,
-              lastWriteAt: writeAt,
-              lastWriteStatus: 'ok',
-              lastWriteSource: 'moderator-browser',
-            },
-          }, { merge: true });
-          return { ok: true, upvotes, voters: nextVoters, version: version + 1 };
-        });
-        if (!result.ok) return result;
-        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(result.version) || 0);
-        recordLocalQueueWriteHealth();
-        applyLocalVote({ upvotes: result.upvotes, voters: result.voters });
-        return { ok: true };
-      } catch (error) {
-        recordLocalQueueWriteHealth(error);
-        console.warn('Transactional vote could not reach Firestore; retaining the vote locally.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Vote saved locally — cloud update failed');
+        } catch (fallbackError) {
+          console.warn('Could not sync vote; the local vote is saved.', fallbackError);
+          setCloudSynced(false);
+          setSyncStatusText('Vote saved locally — cloud update failed');
+        }
       }
     }
-
-    const current = (videosRef.current || videos).find((video) => String(video.id) === itemId);
-    if (!current || current.status !== 'queue') return { ok: false, reason: 'not-queued' };
-    const currentVoters = Array.isArray(current.voters) ? current.voters.map(normalizeTwitchLogin) : [];
-    if (currentVoters.includes(voterLogin)) return { ok: false, reason: 'already-voted' };
-    if (normalizeTwitchLogin(current.requestedBy) === voterLogin) return { ok: false, reason: 'own-request' };
-    applyLocalVote({
-      upvotes: (Number(current.upvotes) || 0) + 1,
-      voters: [...currentVoters, voterLogin],
-    });
-    return { ok: true, localOnly: true };
   };
 
-  const syncActivityEventToCloud = async (event) => {
-    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !event?.id ||
-        activityCloudIdsRef.current.has(String(event.id)) ||
-        activitySyncInFlightRef.current.has(String(event.id)) || !networkOnline) return false;
-    const eventId = String(event.id);
-    activitySyncInFlightRef.current.add(eventId);
-    try {
-      const response = await fetch('/api/activity-log', {
-        method: 'POST',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appId, event })
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || 'Activity event could not be saved'}${result.diagnostic ? ' (' + result.diagnostic + ')' : ''}`);
-      activityCloudIdsRef.current.add(eventId);
-      const pendingKey = roomStorageKey(channelRoom, 'activity-pending-ids');
-      const pendingValues = readStoredValue(pendingKey, []);
-      const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
-      pendingIds.delete(eventId);
-      writeStoredValue(pendingKey, [...pendingIds]);
-      setActivitySyncError(false);
-      setActivitySyncErrorMessage('');
-      return true;
-    } catch (error) {
-      const message = String(error?.message || 'Activity event could not be saved').slice(0, 220);
-      const pendingKey = roomStorageKey(channelRoom, 'activity-pending-ids');
-      const pendingValues = readStoredValue(pendingKey, []);
-      const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
-      pendingIds.add(eventId);
-      writeStoredValue(pendingKey, [...pendingIds].slice(-5000));
-      console.warn('Activity event remains saved locally; cloud retry is pending.', error);
-      setActivitySyncError(true);
-      setActivitySyncErrorMessage(message);
-      return false;
-    } finally {
-      activitySyncInFlightRef.current.delete(eventId);
-    }
-  };
+  const syncAddVideo = async (videoObj) => {
+    const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
+    setVideos((prev) => [localItem, ...prev]);
 
-  const recordActivity = (type, video = {}, options = {}) => {
-    const source = options.source || (String(video?.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard');
-    const event = createActivityEvent({
-      id: options.id,
-      type,
-      room: normalizeRoomName(channelRoom) || PRIVATE_CHANNEL,
-      at: options.at || Date.now(),
-      sessionId: activitySessionIdRef.current,
-      video,
-      actor: options.actor || video?.requestedBy || twitchAuth.username || '',
-      source
-    });
-    if (!event) return null;
-    const merged = mergeActivityEvents(activityEventsRef.current, [event]);
-    activityEventsRef.current = merged;
-    setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-    if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
-    return event;
-  };
-
-  const flushPendingActivityEvents = () => {
-    if (!twitchAuth.authenticated || !activityCloudReadyRef.current || !networkOnline) return;
-    const pendingValues = readStoredValue(roomStorageKey(channelRoom, 'activity-pending-ids'), []);
-    const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
-    const hasFullBaseline = readStoredValue(roomStorageKey(channelRoom, 'activity-cloud-baseline'), false) === true;
-    const candidates = activityEventsRef.current.filter((event) => {
-      const id = String(event.id);
-      if (activityCloudIdsRef.current.has(id)) return false;
-      return pendingIds.has(id) || !hasFullBaseline;
-    });
-    void (async () => {
-      for (let offset = 0; offset < candidates.length; offset += 3) {
-        if (!networkOnline) break;
-        await Promise.all(candidates.slice(offset, offset + 3).map((event) => syncActivityEventToCloud(event)));
-      }
-    })();
-  };
-
-  const syncAddVideo = async (videoObj, options = {}) => {
-    const retryOnly = options.retryOnly === true;
-    const pendingItem = retryOnly ? pendingQueueAddsRef.current.get(String(videoObj.id)) : null;
-    const localItem = { ...(pendingItem || videoObj), channelRoom: normalizeRoomName(channelRoom) };
-    if (!retryOnly) {
-      // Persist an optimistic-add journal before starting the cloud write. If Firestore denies
-      // the write (for example after quota exhaustion), later snapshots and page reloads retain it.
-      pendingQueueAddsRef.current.set(String(localItem.id), localItem);
-      persistPendingQueueAdds();
-
-      // Update the ref synchronously so back-to-back chat messages see the new item immediately.
-      videosRef.current = [localItem, ...videosRef.current.filter((video) => String(video.id) !== String(localItem.id))];
-      setVideos((prev) => [localItem, ...prev.filter((video) => String(video.id) !== String(localItem.id))]);
-      recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
-    }
-
-    if (twitchAuth.authenticated) {
-      const itemId = String(localItem.id);
-      pendingQueueAddAttemptAtRef.current.set(itemId, Date.now());
+    if (db && firebaseUser) {
       try {
-        const source = String(localItem.note || '').toLowerCase().includes('twitch chat')
-          ? 'twitch-chat-bridge'
-          : 'dashboard';
-        const response = await fetch('/api/public-request', {
-          method: 'POST',
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: localItem.url,
-            title: localItem.title,
-            requestedBy: localItem.requestedBy,
-            note: localItem.note,
-            category: localItem.category,
-            startSeconds: localItem.startSeconds,
-            source,
-          }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          if (response.status === 409 && ['duplicate', 'queue_closed'].includes(String(result.code || ''))) {
-            pendingQueueAddsRef.current.delete(itemId);
-            pendingQueueAddAttemptAtRef.current.delete(itemId);
-            persistPendingQueueAdds();
-            videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
-            setVideos((prev) => prev.filter((video) => String(video.id) !== itemId));
-            recordLocalQueueWriteHealth();
-            return;
-          }
-          const error = new Error(String(result.message || 'The shared queue server could not confirm this request.'));
-          error.publicCode = String(result.code || 'queue_server_write_failed');
-          error.publicMessage = String(result.message || 'The server rejected this request.');
-          throw error;
-        }
-        pendingQueueAddsRef.current.delete(itemId);
-        pendingQueueAddAttemptAtRef.current.delete(itemId);
-        persistPendingQueueAdds();
-        recordLocalQueueWriteHealth();
-        setCloudSynced(true);
-        setSyncStatusText('Cloud Synced');
-        if (source === 'twitch-chat-bridge') updateChatBridgeHealth({ lastRequestResult: 'confirmed_in_shared_queue' });
-        return true;
+        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
+        await setDoc(itemRef, { ...localItem, createdAt: Date.now() }, { merge: true });
       } catch (error) {
-        // The backend can fail independently of a healthy authenticated Firestore
-        // listener. Restore the previous moderator-browser transaction as a
-        // controlled fallback, but only for the two approved Twitch staff sessions.
-        if (db && firebaseUser && ALLOWED_TWITCH_USERS.has(normalizeTwitchLogin(twitchAuth.username))) {
-          try {
-            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
-            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', itemId);
-            const committedVersion = await runTransaction(db, async (transaction) => {
-              const [settingsSnapshot, itemSnapshot] = await Promise.all([
-                transaction.get(settingsRef),
-                transaction.get(itemRef),
-              ]);
-              const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
-              const existing = itemSnapshot.exists() ? itemSnapshot.data() || {} : null;
-              if (settings.streamSettings?.queueOpen === false) {
-                const failure = new Error('The request queue is closed.');
-                failure.publicCode = 'queue_closed';
-                throw failure;
-              }
-              if (existing && !isMediaHistoryCooldownExpired(existing, Date.now())) {
-                // An earlier server attempt may actually have succeeded before a
-                // network timeout. The stable media ID makes this a safe confirmation.
-                return Number(settings.queueVersion) || 0;
-              }
-              const at = Date.now();
-              const version = (Number(settings.queueVersion) || 0) + 1;
-              const lastHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-                ? settings.chatIntakeHealth : {};
-              // Firestore Web SDK rejects undefined values (for example when
-              // duration metadata is not available yet).
-              const sanitizedItem = JSON.parse(JSON.stringify({ ...localItem, createdAt: at }));
-              transaction.set(itemRef, sanitizedItem);
-              transaction.set(settingsRef, {
-                queueVersion: version,
-                queueUpdatedAt: at,
-                chatIntakeHealth: {
-                  ...lastHealth,
-                  lastWriteAt: at,
-                  lastWriteStatus: 'ok',
-                  lastWriteSource: 'moderator-browser-backup',
-                  lastWrittenMediaId: itemId,
-                  lastProcessingError: null,
-                },
-              }, { merge: true });
-              return version;
-            });
-            queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
-            pendingQueueAddsRef.current.delete(itemId);
-            pendingQueueAddAttemptAtRef.current.delete(itemId);
-            persistPendingQueueAdds();
-            recordLocalQueueWriteHealth();
-            setCloudSynced(true);
-            setSyncStatusText('Cloud Synced · moderator backup');
-            if (source === 'twitch-chat-bridge') updateChatBridgeHealth({ lastRequestResult: 'confirmed_by_moderator_backup' });
-            console.info('Backend queue request failed, but Firestore moderator backup confirmed the request.', {
-              backendCode: String(error.publicCode || 'unknown'),
-            });
-            return true;
-          } catch (backupError) {
-            // Preserve BOTH errors in the console; the diagnostic shows the
-            // actual Firestore failure if the browser fallback also fails.
-            console.warn('Moderator Firestore backup could not confirm queue request:', {
-              backendCode: String(error.publicCode || 'unknown'),
-              fallbackCode: String(backupError?.code || 'unknown'),
-              fallbackMessage: String(backupError?.message || 'unknown').slice(0, 220),
-            });
-            if (backupError?.publicCode === 'queue_closed') {
-              pendingQueueAddsRef.current.delete(itemId);
-              pendingQueueAddAttemptAtRef.current.delete(itemId);
-              persistPendingQueueAdds();
-              videosRef.current = videosRef.current.filter((video) => String(video.id) !== itemId);
-              setVideos((previous) => previous.filter((video) => String(video.id) !== itemId));
-              recordLocalQueueWriteHealth();
-              return;
-            }
-            // Use a genuine Firebase failure code when the browser failed too;
-            // server errors remain available in developer console.
-            error = backupError;
-          }
-        }
-        recordLocalQueueWriteHealth(error);
-        if (source === 'twitch-chat-bridge') {
-          updateChatBridgeHealth({ lastRequestResult: 'queue_write_failed', code: String(error?.publicCode || error?.code || 'queue_write_failed').slice(0, 80) });
-        }
-        console.warn('Both queue request routes failed; keeping it in the pending journal.', error);
+        console.warn('Firestore add failed; the request is still saved locally.', error);
         setCloudSynced(false);
-        setSyncStatusText('Cloud queue write failed — retry pending');
-        return false;
+        setSyncStatusText('Cloud write failed — local save is active');
       }
     }
-    return false;
   };
 
-  // A quota outage may produce no later Firestore snapshot to trigger the existing recovery
-  // path. Retry a few pending rows at a five-minute per-item interval while the moderator view
-  // stays open, so recovery after a quota reset does not require a page refresh.
-  useEffect(() => {
-    if (!db || !firebaseUser) return undefined;
-    const retryTimer = window.setInterval(() => {
-      if (!networkOnlineRef.current) return;
-      const now = Date.now();
-      const retryBatch = [...pendingQueueAddsRef.current.values()]
-        .filter((video) => normalizeRoomName(video.channelRoom || channelRoom) === normalizeRoomName(channelRoom))
-        .filter((video) => now - (pendingQueueAddAttemptAtRef.current.get(String(video.id)) || 0) >= 5 * 60 * 1000)
-        .slice(0, 3);
-      retryBatch.forEach((video) => {
-        pendingQueueAddAttemptAtRef.current.set(String(video.id), now);
-        void syncAddVideo(video, { retryOnly: true });
-      });
-    }, 60 * 1000);
-    return () => window.clearInterval(retryTimer);
-  }, [db, firebaseUser, channelRoom]);
-
-  const syncDeleteVideo = async (videoId, options = {}) => {
-    const removedItem = videosRef.current.find((video) => String(video.id) === String(videoId));
-    if (removedItem) recordActivity('request_removed', removedItem, {
-      actor: options.actor || twitchAuth.username || removedItem.requestedBy,
-      source: options.source || 'dashboard'
-    });
-    // A viewer/mod deleting an unconfirmed local add must also remove it from the
-    // optimistic-write journal, otherwise the next cloud snapshot could resurrect it.
-    pendingQueueAddsRef.current.delete(String(videoId));
-    pendingQueueAddAttemptAtRef.current.delete(String(videoId));
-    persistPendingQueueAdds();
-    videosRef.current = videosRef.current.filter((v) => String(v.id) !== String(videoId));
+  const syncDeleteVideo = async (videoId) => {
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
 
     if (db && firebaseUser) {
       try {
         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
-        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', normalizeRoomName(channelRoom));
-        const committedVersion = await runTransaction(db, async (transaction) => {
-          const [settingsSnapshot, itemSnapshot] = await Promise.all([
-            transaction.get(settingsRef), transaction.get(docRef),
-          ]);
-          const settings = settingsSnapshot.exists() ? settingsSnapshot.data() || {} : {};
-          const version = Number(settings.queueVersion) || 0;
-          if (itemSnapshot.exists()) transaction.delete(docRef);
-          const writeAt = Date.now();
-          const previousHealth = settings.chatIntakeHealth && typeof settings.chatIntakeHealth === 'object'
-            ? settings.chatIntakeHealth : {};
-          transaction.set(settingsRef, {
-            queueVersion: version + 1,
-            queueUpdatedAt: writeAt,
-            chatIntakeHealth: {
-              ...previousHealth,
-              lastWriteAt: writeAt,
-              lastWriteStatus: 'ok',
-              lastWriteSource: 'moderator-browser',
-            },
-          }, { merge: true });
-          return version + 1;
-        });
-        queueVersionRef.current = Math.max(Number(queueVersionRef.current) || 0, Number(committedVersion) || 0);
-        recordLocalQueueWriteHealth();
+        await deleteDoc(docRef);
       } catch (error) {
-        recordLocalQueueWriteHealth(error);
         console.warn('Firestore delete failed; the item was removed locally.', error);
         setCloudSynced(false);
         setSyncStatusText('Cloud delete failed — local save is active');
       }
     }
-  };
-
-  useEffect(() => {
-    if (!twitchAuth.authenticated) {
-      activityCloudReadyRef.current = false;
-      activityCloudIdsRef.current = new Set();
-      setActivityCloudReady(false);
-      setActivitySyncLoading(false);
-      return undefined;
-    }
-
-    let active = true;
-    let loading = false;
-    const baselineKey = roomStorageKey(channelRoom, 'activity-cloud-baseline');
-    const watermarkKey = roomStorageKey(channelRoom, 'activity-cloud-watermark');
-    let fullCloudBaselineLoaded = readStoredValue(baselineKey, false) === true;
-    activityCloudReadyRef.current = false;
-    setActivityCloudReady(false);
-    const loadActivityEvents = async () => {
-      if (!active || loading) return;
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        setActivitySyncLoading(false);
-        return;
-      }
-      loading = true;
-      setActivitySyncLoading(true);
-      try {
-        const previousWatermark = Number(readStoredValue(watermarkKey, 0)) || 0;
-        const useIncrementalRead = fullCloudBaselineLoaded &&
-          previousWatermark > 0 && activityEventsRef.current.length > 0;
-        const since = useIncrementalRead ? Math.max(1, previousWatermark - 60_000) : 0;
-        const query = 'appId=' + encodeURIComponent(appId) + (since ? '&since=' + encodeURIComponent(String(since)) : '');
-        const response = await fetch('/api/activity-log?' + query, {
-          credentials: 'same-origin',
-          cache: 'no-store'
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !Array.isArray(result.events)) {
-          const details = [result.diagnostic, result.operation].filter(Boolean).join('; ');
-          throw new Error(`HTTP ${response.status}: ${result.error || 'Activity log sync is unavailable'}${details ? ' (' + details + ')' : ''}`);
-        }
-        const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
-        const fullSnapshot = !useIncrementalRead;
-        if (fullSnapshot) {
-          activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
-          fullCloudBaselineLoaded = true;
-          writeStoredValue(baselineKey, true);
-        } else {
-          cloudEvents.forEach((event) => activityCloudIdsRef.current.add(String(event.id)));
-        }
-        const newestCloudAt = cloudEvents.reduce((latest, event) => Math.max(latest, Number(event.at) || 0), 0);
-        writeStoredValue(watermarkKey, Math.max(previousWatermark, newestCloudAt, Date.now()));
-        activityCloudReadyRef.current = true;
-        setActivityCloudReady(true);
-        setActivitySyncError(false);
-        setActivitySyncErrorMessage('');
-        const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
-        activityEventsRef.current = merged;
-        setActivityEvents(merged);
-        writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-        // A full baseline can find every old unsynced event. Incremental reads only
-        // reconcile the recent overlap; do not misclassify all historical local rows
-        // as missing just because they were not part of this small delta response.
-        const pendingValues = readStoredValue(roomStorageKey(channelRoom, 'activity-pending-ids'), []);
-        const pendingIds = new Set(Array.isArray(pendingValues) ? pendingValues.map(String) : []);
-        const candidates = (fullSnapshot
-          ? merged
-          : merged.filter((event) => Number(event.at) >= since || pendingIds.has(String(event.id))))
-          .filter((event) => !activityCloudIdsRef.current.has(String(event.id)));
-        for (let offset = 0; offset < candidates.length; offset += 3) {
-          if (!active) break;
-          await Promise.all(candidates.slice(offset, offset + 3).map((event) => syncActivityEventToCloud(event)));
-        }
-      } catch (error) {
-        if (active) {
-          console.warn('Activity log sync will retry automatically:', error);
-          setActivityCloudReady(false);
-          activityCloudReadyRef.current = false;
-          setActivitySyncError(true);
-          setActivitySyncErrorMessage(String(error?.message || 'Activity log sync is unavailable').slice(0, 220));
-        }
-      } finally {
-        loading = false;
-        if (active) setActivitySyncLoading(false);
-      }
-    };
-    void loadActivityEvents();
-    // Activity is synced incrementally; avoid repeatedly scanning the lifetime log.
-    const interval = window.setInterval(loadActivityEvents, 120000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, [twitchAuth.authenticated, appId, channelRoom, activityReconnectTick]);
-
-  // Import records for existing saved items which pre-date the event stream.
-  // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
-  useEffect(() => {
-    const normalizedRoom = normalizeRoomName(channelRoom);
-    const localOnlyReady = !db || !firebaseUser;
-    const cloudReady = Boolean(db && firebaseUser && cloudSynced && initializedCloudRoomsRef.current.has(normalizedRoom));
-    if (!localOnlyReady && !cloudReady) return;
-    const existingIds = new Set(activityEventsRef.current
-      .filter((event) => event.type === 'request_added' && event.mediaId)
-      .map((event) => String(event.mediaId)));
-    const missing = videosRef.current.filter((video) =>
-      video && typeof video === 'object' && !String(video.id || '').startsWith('demo-') &&
-      !existingIds.has(String(video.id)));
-    if (!missing.length) return;
-    const legacyEvents = missing.map((video) => {
-      const safeId = String(video.id || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 90);
-      return createActivityEvent({
-        id: 'legacy-request-' + safeId,
-        type: 'request_added',
-        at: Number(video.timestamp) > 0 ? Number(video.timestamp) : Date.now(),
-        room: normalizedRoom || PRIVATE_CHANNEL,
-        sessionId: 'legacy-import',
-        video,
-        actor: video.requestedBy || 'unknown',
-        source: 'legacy_import'
-      });
-    }).filter(Boolean);
-    if (!legacyEvents.length) return;
-    const merged = mergeActivityEvents(activityEventsRef.current, legacyEvents);
-    activityEventsRef.current = merged;
-    setActivityEvents(merged);
-    writeStoredValue(roomStorageKey(channelRoom, 'activity-events'), merged);
-    if (activityCloudReadyRef.current) legacyEvents.forEach((event) => void syncActivityEventToCloud(event));
-  }, [db, firebaseUser, cloudSynced, activityCloudReady, videos, activityEvents, channelRoom]);
-
-  const getSafeBackupSettings = (rawSettings = {}) => {
-    const safe = { ...DEFAULT_STREAM_SETTINGS };
-    Object.entries(DEFAULT_STREAM_SETTINGS).forEach(([key, defaultValue]) => {
-      const value = rawSettings?.[key];
-      if (typeof defaultValue === 'boolean' && typeof value === 'boolean') {
-        safe[key] = value;
-      } else if (typeof defaultValue === 'number' && Number.isFinite(Number(value))) {
-        safe[key] = Math.max(1, Math.min(180, Number(value)));
-      } else if (typeof defaultValue === 'string' && typeof value === 'string') {
-        safe[key] = value.slice(0, 40);
-      }
-    });
-    return safe;
-  };
-
-  const handleDownloadBackup = () => {
-    const backup = createQueueBackup({
-      channelRoom: normalizeRoomName(channelRoom),
-      videos,
-      streamSettings,
-      votedIds,
-      savedAt: Date.now()
-    });
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = 'whale-cum-' + normalizeRoomName(channelRoom) + '-backup-' + new Date().toISOString().slice(0, 10) + '.json';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    setBackupMessage('Backup downloaded: ' + videos.length + ' queue/history items. Twitch login credentials are not included.');
-  };
-
-  const performQueueBackupRestore = async (candidate, sourceLabel = 'backup file') => {
-    const validation = validateQueueBackup(candidate);
-    if (!validation.valid) {
-      setBackupMessage(validation.error);
-      return false;
-    }
-    const backup = validation.backup;
-    const targetRoom = normalizeRoomName(channelRoom);
-    if (normalizeRoomName(backup.channelRoom) !== targetRoom) {
-      setBackupMessage('This backup belongs to #' + backup.channelRoom + ', not #' + targetRoom + '.');
-      return false;
-    }
-    const snapshotDate = backup.savedAt ? new Date(backup.savedAt).toLocaleString() : 'an unknown date';
-    const confirmed = window.confirm(
-      'Restore ' + backup.videos.length + ' queue/history items and settings from ' + sourceLabel +
-      ' (' + snapshotDate + ')? This replaces the current queue and history for #' + targetRoom + '.'
-    );
-    if (!confirmed) return false;
-
-    setBackupBusy(true);
-    setBackupMessage('Restoring queue and settings…');
-    restoringBackupRef.current = true;
-    const restoredSettings = getSafeBackupSettings(backup.streamSettings);
-    const restoredVideos = dedupeMediaVideos(backup.videos.map((video) =>
-      normalizeLegacyVideoVotes({ ...video, channelRoom: targetRoom })
-    )).videos;
-    const restoredVoteIds = Object.fromEntries(
-      Object.entries(backup.votedIds || {})
-        .filter(([key, value]) => typeof key === 'string' && key.length <= 300 && value === true)
-        .slice(0, 20000)
-    );
-    queueOpenRef.current = Boolean(restoredSettings.queueOpen);
-    queueOpenCloudOverrideRef.current = { value: queueOpenRef.current, changedAt: Date.now() };
-    setStreamSettings(restoredSettings);
-    setVotedIds(restoredVoteIds);
-    videosRef.current = restoredVideos;
-    setVideos(restoredVideos);
-
-    try {
-      if (db && firebaseUser) {
-        setSyncStatusText('Restoring backup to cloud…');
-        const cloudSnapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
-        const cloudRoomRows = cloudSnapshot.docs
-          .map((entry) => ({ id: entry.id, ...entry.data() }))
-          .filter((video) => normalizeRoomName(video.channelRoom) === targetRoom);
-        const restoredIds = new Set(restoredVideos.map((video) => String(video.id)));
-        const operations = [
-          ...cloudRoomRows.filter((video) => !restoredIds.has(String(video.id)))
-            .map((video) => ({ type: 'delete', id: String(video.id) })),
-          ...restoredVideos.map((video) => ({ type: 'set', id: String(video.id), video }))
-        ];
-        // Firestore caps a batch at 500 writes; keep each restore batch comfortably below that.
-        for (let offset = 0; offset < operations.length; offset += 400) {
-          const batch = writeBatch(db);
-          operations.slice(offset, offset + 400).forEach((operation) => {
-            const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', operation.id);
-            if (operation.type === 'delete') batch.delete(itemRef);
-            else batch.set(itemRef, { ...operation.video, channelRoom: targetRoom });
-          });
-          await batch.commit();
-        }
-        await setDoc(
-          doc(db, 'artifacts', appId, 'public', 'data', 'room_settings', targetRoom),
-          { channelRoom: targetRoom, streamSettings: restoredSettings, bridgeAutoConnect: true, updatedAt: Date.now() },
-          { merge: true }
-        );
-        setCloudSynced(true);
-        setSyncStatusText('Backup restored to cloud');
-        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings to cloud sync.');
-      } else {
-        setCloudSynced(false);
-        setSyncStatusText('Backup restored locally — cloud sync unavailable');
-        setBackupMessage('Restored ' + restoredVideos.length + ' items and settings locally. Cloud sync is unavailable.');
-      }
-    } catch (error) {
-      console.error('Queue backup restore could not fully sync to Firestore.', error);
-      setCloudSynced(false);
-      setSyncStatusText('Backup restored locally — cloud restore failed');
-      setBackupMessage('Restored locally, but the cloud update failed. Check the sync status before using another device.');
-      addToast('Backup restored locally; cloud sync failed.', 'warning');
-    } finally {
-      restoringBackupRef.current = false;
-      videosRef.current = restoredVideos;
-      setVideos(restoredVideos);
-      writeStoredValue(roomStorageKey(targetRoom, 'videos'), restoredVideos);
-      writeStoredValue(roomStorageKey(targetRoom, 'settings'), restoredSettings);
-      writeStoredValue(roomStorageKey(targetRoom, 'votes'), restoredVoteIds);
-      setBackupBusy(false);
-    }
-    return true;
-  };
-
-  const handleImportBackupFile = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      setBackupMessage('Backup is too large (10 MB maximum).');
-      return;
-    }
-    try {
-      const parsed = JSON.parse(await file.text());
-      const validation = validateQueueBackup(parsed);
-      if (!validation.valid) {
-        setBackupMessage(validation.error);
-        return;
-      }
-      await performQueueBackupRestore(validation.backup, 'backup file');
-    } catch (error) {
-      console.warn('Could not read queue backup.', error);
-      setBackupMessage('Could not read that JSON backup file.');
-    }
-  };
-
-  const handleRecoverSafetySnapshot = () => {
-    const stored = readStoredValue(roomStorageKey(channelRoom, 'safety-snapshot'), null);
-    const validation = validateQueueBackup(stored);
-    if (!validation.valid || !validation.backup.videos.length) {
-      setBackupMessage('No recoverable queue snapshot is saved in this browser yet.');
-      return;
-    }
-    void performQueueBackupRestore(validation.backup, 'the last local safety snapshot');
   };
 
   // ==========================================
@@ -2377,312 +1137,6 @@ function YediHubAppContent() {
     const queued = videos.filter((v) => v.status === 'queue').sort(compareQueueOrder);
     return queued[0] || null;
   }, [videos]);
-
-  // Do not infer autoplay failure from a timer: cross-origin YouTube can play
-  // while its IFrame API is still connecting, which produced a false black overlay.
-  // Prompt only when YouTube explicitly reports onAutoplayBlocked and playback
-  // has not been observed. The iframe remains directly clickable at all times.
-  useEffect(() => {
-    setYoutubeNeedsGesture('');
-    setYoutubeHasRenderedFrameId('');
-    youtubeProgressSignalRef.current = {
-      videoId: String(currentVideo?.id || ''), lastTime: null, advancing: false,
-    };
-    youtubeStartupMuteRef.current = { videoId: String(currentVideo?.id || ''), pending: false };
-  }, [currentVideo?.id, currentVideo?.platform]);
-
-  const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
-    const id = String(videoId || '');
-    const matchingVideo = videosRef.current.find((video) => String(video.id) === id);
-    const platform = platformOverride ||
-      matchingVideo?.platform ||
-      (String(currentVideoRef.current?.id || '') === id ? currentVideoRef.current?.platform : '');
-    const isTikTok = platform === 'tiktok';
-    // v3 drops pause state accidentally saved by older autoplay initialization.
-    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v3-' + id);
-    // Older builds accidentally saved autoplay mute as a deliberate preference.
-    // Keep the old pause intent, but read TikTok audio preference from a clean separate key.
-    const tiktokMuteStorageKey = isTikTok
-      ? roomStorageKey(channelRoom, 'player-tiktok-mute-intent-v1-' + id)
-      : '';
-    const current = playbackIntentRef.current;
-    if (current.videoId === id && current.storageKey === storageKey &&
-        (!isTikTok || current.tiktokMuteStorageKey === tiktokMuteStorageKey) &&
-        (isTikTok || !current.tiktokMuteStorageKey)) return current;
-
-    let saved = null;
-    let savedTikTokAudio = null;
-    try {
-      const raw = window.sessionStorage.getItem(storageKey);
-      saved = raw ? JSON.parse(raw) : null;
-      if (isTikTok) {
-        const audioRaw = window.sessionStorage.getItem(tiktokMuteStorageKey);
-        savedTikTokAudio = audioRaw ? JSON.parse(audioRaw) : null;
-      }
-    } catch { /* A blocked session store should not break player controls. */ }
-    const sharedAudio = readStoredValue(roomStorageKey(channelRoom, 'player-audio-preferences-v1'), {});
-    const savedMute = isTikTok
-      ? (typeof savedTikTokAudio?.muted === 'boolean' ? savedTikTokAudio.muted : null)
-      : (typeof saved?.muted === 'boolean' ? saved.muted : null);
-    return {
-      videoId: id,
-      storageKey,
-      tiktokMuteStorageKey,
-      paused: saved?.paused === true,
-      muted: typeof sharedAudio?.muted === 'boolean' ? sharedAudio.muted : savedMute,
-      volume: sharedAudio?.volume == null ? 100 : clampPlayerVolume(sharedAudio.volume),
-    };
-  };
-
-  const updatePlaybackIntent = (videoId, updates, platformOverride = '') => {
-    const previous = getPlaybackIntentForVideo(videoId, platformOverride);
-    const isTikTok = Boolean(previous.tiktokMuteStorageKey);
-    const next = { ...previous, ...updates, videoId: String(videoId || '') };
-    playbackIntentRef.current = next;
-    setPlayerControlState((current) => {
-      const sameVideo = current.videoId === next.videoId;
-      return {
-        videoId: next.videoId,
-        paused: typeof updates?.paused === 'boolean' ? updates.paused : sameVideo ? current.paused : Boolean(next.paused),
-        muted: typeof updates?.muted === 'boolean' ? updates.muted : sameVideo ? current.muted : next.muted === true,
-        volume: typeof updates?.volume === 'number'
-          ? clampPlayerVolume(updates.volume)
-          : sameVideo ? current.volume : clampPlayerVolume(next.volume),
-      };
-    });
-    try {
-      // Keep TikTok's per-video mute key isolated from legacy autoplay mute reports.
-      window.sessionStorage.setItem(next.storageKey, JSON.stringify({
-        paused: next.paused,
-        muted: isTikTok ? null : next.muted,
-      }));
-      if (isTikTok && typeof updates?.muted === 'boolean') {
-        window.sessionStorage.setItem(next.tiktokMuteStorageKey, JSON.stringify({ muted: updates.muted }));
-      }
-    } catch { /* Playback state remains available in memory if storage is unavailable. */ }
-    if (typeof updates?.muted === 'boolean' || typeof updates?.volume === 'number') {
-      const key = roomStorageKey(channelRoom, 'player-audio-preferences-v1');
-      const previousAudio = readStoredValue(key, {});
-      writeStoredValue(key, {
-        ...previousAudio,
-        ...(typeof updates?.muted === 'boolean' ? { muted: updates.muted } : {}),
-        ...(typeof updates?.volume === 'number' ? { volume: clampPlayerVolume(updates.volume) } : {}),
-      });
-    }
-    return next;
-  };
-
-  const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
-
-  useEffect(() => {
-    if (!currentVideo) {
-      setPlayerControlState({ videoId: '', paused: false, muted: false, volume: 100 });
-      return;
-    }
-    const intent = getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform);
-    setPlayerControlState({
-      videoId: String(currentVideo.id),
-      paused: Boolean(intent.paused),
-      muted: intent.muted === true,
-      volume: clampPlayerVolume(intent.volume),
-    });
-  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
-
-  // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
-  // Its autoplay query is only an initial-load setting; deriving it on every render
-  // changes src when pause intent changes and makes React reload the embed mid-video.
-  const youtubePlayerSrc = useMemo(() => {
-    if (currentVideo?.platform !== 'youtube' || !currentVideo?.videoId) return '';
-    const initialMute = getPlaybackIntentForVideo(currentVideo.id, 'youtube').muted === true;
-    const params = new URLSearchParams({
-      autoplay: '1',
-      mute: initialMute ? '1' : '0',
-      controls: '1',
-      playsinline: '1',
-      rel: '0',
-      modestbranding: '1',
-      enablejsapi: '1',
-      origin: window.location.origin,
-    });
-    if (Number(currentVideo.startSeconds) > 0) params.set('start', String(Math.floor(Number(currentVideo.startSeconds))));
-    return `https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?${params.toString()}`;
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, currentVideo?.startSeconds, channelRoom]);
-
-  const tiktokPlayerSrc = useMemo(() => (
-    currentVideo?.platform === 'tiktok'
-      ? buildTikTokPlayerUrl(currentVideo.videoId, {
-          paused: getPlaybackIntentForVideo(currentVideo.id, 'tiktok').paused,
-        })
-      : ''
-  ), [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
-
-  useEffect(() => {
-    const video = currentVideo;
-    if (!video || video.platform !== 'twitch' || !video.videoId) {
-      setTwitchClipPlayback({ requestId: '', status: 'idle', videoId: '', vodOffset: 0, durationSec: 0 });
-      setTwitchPlayerReadyId('');
-      setTwitchNeedsGestureId('');
-      return undefined;
-    }
-    const requestId = String(video.id);
-    const cachedPlayback = video.twitchClipPlayback;
-    const cachedVideoId = String(cachedPlayback?.videoId || '');
-    const cachedVodOffset = Number(cachedPlayback?.vodOffset);
-    const cachedDurationSec = Number(cachedPlayback?.durationSec);
-    if (/^\d+$/.test(cachedVideoId) && Number.isFinite(cachedVodOffset) && cachedVodOffset >= 0 &&
-        Number.isFinite(cachedDurationSec) && cachedDurationSec > 0) {
-      setTwitchClipPlayback({
-        requestId, status: 'vod', videoId: cachedVideoId,
-        vodOffset: cachedVodOffset, durationSec: cachedDurationSec,
-      });
-      return undefined;
-    }
-    let cancelled = false;
-    setTwitchClipPlayback({ requestId, status: 'loading', videoId: '', vodOffset: 0, durationSec: 0 });
-    setTwitchPlayerReadyId('');
-    setTwitchNeedsGestureId('');
-    fetch('/api/media-metadata?url=' + encodeURIComponent(String(video.url || '')), {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(9000),
-    })
-      .then(async (response) => response.ok ? response.json().catch(() => null) : null)
-      .then((metadata) => {
-        if (cancelled || String(currentVideoRef.current?.id || '') !== requestId) return;
-        const playback = metadata?.twitchClipPlayback;
-        const vodOffset = Number(playback?.vodOffset);
-        const durationSec = Number(playback?.durationSec);
-        const sourceVideoId = String(playback?.videoId || '');
-        if (/^\d+$/.test(sourceVideoId) && Number.isFinite(vodOffset) && vodOffset >= 0 &&
-            Number.isFinite(durationSec) && durationSec > 0) {
-          setTwitchClipPlayback({ requestId, status: 'vod', videoId: sourceVideoId, vodOffset, durationSec });
-        } else {
-          setTwitchClipPlayback({ requestId, status: 'native', videoId: '', vodOffset: 0, durationSec: 0 });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setTwitchClipPlayback({ requestId, status: 'native', videoId: '', vodOffset: 0, durationSec: 0 });
-      });
-    return () => { cancelled = true; };
-  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.videoId, currentVideo?.url]);
-
-  const recordPlaybackPosition = (videoId, seconds) => {
-    const id = String(videoId || '');
-    const value = Number(seconds);
-    if (!id || !Number.isFinite(value) || value < 0) return;
-    const pending = pendingPlaybackRestoreRef.current;
-    if (pending?.videoId === id && Date.now() < pending.expiresAt && pending.currentTime > 0.5) {
-      // A recreated iframe may report 0 before its seek completes; do not overwrite
-      // the timestamp we are actively trying to restore.
-      if (value < pending.currentTime - 2) return;
-      if (Math.abs(value - pending.currentTime) <= 2) pendingPlaybackRestoreRef.current = null;
-    }
-    playbackPositionRef.current = { videoId: id, seconds: value };
-  };
-
-  // On a new queue item, restore only this tab's previous intent for that exact video.
-  useEffect(() => {
-    if (!currentVideo) {
-      playbackIntentRef.current = { videoId: '', storageKey: '', paused: false, muted: null };
-      playbackVisibilitySnapshotRef.current = null;
-      pendingPlaybackRestoreRef.current = null;
-      playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null, currentTime: 0 };
-      return;
-    }
-    const videoId = String(currentVideo.id);
-    if (playbackPositionRef.current.videoId !== videoId) {
-      playbackPositionRef.current = { videoId, seconds: 0 };
-      pendingPlaybackRestoreRef.current = null;
-    }
-    const intent = getPlaybackIntentForVideo(videoId, currentVideo.platform);
-    playbackIntentRef.current = intent;
-    playbackVisibilitySnapshotRef.current = null;
-    playbackRestoreGuardRef.current = intent.paused
-      ? { videoId, until: Date.now() + 2500, paused: true, muted: intent.muted }
-      : { videoId: '', until: 0, paused: false, muted: null };
-    keyboardPausedRef.current = { videoId, paused: intent.paused };
-  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
-
-  // A hidden tab may suspend/recreate provider iframes. Preserve deliberate pauses,
-  // but resume media that was playing before the tab was hidden.
-  useEffect(() => {
-    if (!currentVideo) return undefined;
-    const videoId = String(currentVideo.id);
-    const platform = currentVideo.platform;
-    const restoreOnReturn = () => {
-      if (document.visibilityState === 'hidden') {
-        const intent = getPlaybackIntentForVideo(videoId, platform);
-        const tiktokPreference = tiktokMutePreferenceRef.current.requestId === videoId
-          ? tiktokMutePreferenceRef.current.preference
-          : 'auto';
-        const muted = platform === 'youtube'
-          ? (typeof youtubePlaybackInfoRef.current.muted === 'boolean' ? youtubePlaybackInfoRef.current.muted : intent.muted)
-          : platform === 'tiktok'
-            ? (tiktokPreference === 'muted' ? true : intent.muted === true ? true : false)
-            : intent.muted;
-        const knownPosition = playbackPositionRef.current.videoId === videoId
-          ? Number(playbackPositionRef.current.seconds) || 0
-          : 0;
-        const reportedPosition = platform === 'youtube'
-          ? Number(youtubePlaybackInfoRef.current.currentTime)
-          : knownPosition;
-        // Keep the last useful timestamp if the browser/provider has already reset an
-        // iframe while backgrounding the tab.
-        const currentTime = Number.isFinite(reportedPosition) && reportedPosition > 0.5
-          ? reportedPosition
-          : knownPosition;
-        recordPlaybackPosition(videoId, currentTime);
-        const paused = intent.paused ||
-          (platform === 'tiktok' && keyboardPausedRef.current.videoId === videoId && keyboardPausedRef.current.paused);
-        playbackVisibilitySnapshotRef.current = { videoId, platform, paused, muted, currentTime };
-        if (paused) updatePlaybackIntent(videoId, { paused: true });
-        return;
-      }
-
-      const snapshot = playbackVisibilitySnapshotRef.current;
-      if (!snapshot || snapshot.videoId !== videoId || snapshot.platform !== platform) return;
-      const intent = getPlaybackIntentForVideo(videoId, platform);
-      const paused = snapshot.paused || intent.paused;
-      const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
-      const currentTime = Math.max(0, Number(snapshot.currentTime) || 0);
-      // Only guard the iframe's immediate restoration blip; a multi-second guard blocks real user clicks.
-      const expiresAt = Date.now() + 350;
-      playbackRestoreGuardRef.current = {
-        videoId,
-        until: expiresAt,
-        paused,
-        muted: typeof muted === 'boolean' ? muted : null,
-        currentTime,
-      };
-      if (currentTime > 0.5) {
-        pendingPlaybackRestoreRef.current = { videoId, platform, currentTime, paused, muted, expiresAt };
-        // Do not mark restoration complete before the player has actually sought there.
-        playbackPositionRef.current = { videoId, seconds: currentTime };
-      }
-      if (paused) updatePlaybackIntent(videoId, { paused: true });
-      if (typeof muted === 'boolean') updatePlaybackIntent(videoId, { muted });
-
-      const actions = getVisibilityRestoreActions(platform, {
-        paused, muted, currentTime, volume: intent.volume,
-      });
-      for (const action of actions) {
-        if (platform === 'youtube') youtubePlayerRef.current?.[action.command]?.(...(action.args || []));
-        else if (platform === 'tiktok') postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, action.command, action.value ?? null);
-        else if (platform === 'twitch') twitchPlayerRef.current?.[action.command]?.(...(action.args || []));
-      }
-      playbackVisibilitySnapshotRef.current = null;
-    };
-
-    document.addEventListener('visibilitychange', restoreOnReturn);
-    window.addEventListener('pageshow', restoreOnReturn);
-    window.addEventListener('focus', restoreOnReturn);
-    return () => {
-      document.removeEventListener('visibilitychange', restoreOnReturn);
-      window.removeEventListener('pageshow', restoreOnReturn);
-      window.removeEventListener('focus', restoreOnReturn);
-    };
-  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
-
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
   // Older saved queues may have no explicit "playing" status even though their top item is visible.
@@ -2695,53 +1149,17 @@ function YediHubAppContent() {
     }
     if (activeItems.length === 1) return;
     const firstQueued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0];
-    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false, playedAt: Date.now() });
+    if (firstQueued) syncUpdateVideo(firstQueued.id, { status: 'playing', pinned: false });
   }, [videos]);
 
-  // Native Twitch Clip embeds do not expose an ended event. The interactive VOD
-  // fallback advances from its actual playback position at the Clip boundary.
+  const counts = useMemo(() => {
+    return {
+      queue: videos.filter((v) => v.status === 'queue').length,
+      watch_later: videos.filter((v) => v.status === 'watch_later').length,
+      watched: videos.filter((v) => v.status === 'watched').length,
 
-  const counts = useMemo(() => ({
-    ...getQueueMediaCounts(videos, getVideoMediaType),
-    watch_later: videos.filter((video) => video.status === 'watch_later').length,
-    watched: videos.filter((video) => video.status === 'watched').length,
-  }), [videos]);
-
-  const queueStats = useMemo(
-    () => buildQueueStatistics(videos, statsNow),
-    [videos, statsNow]
-  );
-  const nextQueuedVideo = useMemo(
-    () => videos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] || null,
-    [videos]
-  );
-
-  const categoryCounts = useMemo(
-    () => buildCategoryCounts(videos, activeTab, mediaTypeFilter, getVideoCategory, getVideoMediaType),
-    [videos, activeTab, mediaTypeFilter]
-  );
-  const syncIndicatorLabel = cloudSynced
-    ? 'Cloud synced'
-    : !networkOnline
-    ? 'Local save'
-    : /failed|unavailable|error/i.test(syncStatusText)
-    ? 'Cloud issue'
-    : /not configured|saved in this browser|local save/i.test(syncStatusText)
-    ? 'Local save'
-    : 'Syncing';
-  const syncIndicatorClass = cloudSynced
-    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-    : syncIndicatorLabel === 'Cloud issue'
-    ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
-    : 'bg-amber-500/10 border-amber-500/30 text-amber-200';
-  const headerStatusClass = isModerator
-    ? syncIndicatorClass
-    : streamSettings.queueOpen
-    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-    : 'bg-rose-500/10 border-rose-500/30 text-rose-200';
-  const headerStatusDotClass = isModerator
-    ? (cloudSynced ? 'bg-emerald-400 animate-pulse' : syncIndicatorLabel === 'Cloud issue' ? 'bg-rose-400' : 'bg-amber-400')
-    : (streamSettings.queueOpen ? 'bg-emerald-400' : 'bg-rose-400');
+    };
+  }, [videos]);
 
   // Rank queued items from the same persisted order used by playback.
   // Keep this map derived from the current queue so cards never reference an undefined variable.
@@ -2752,12 +1170,26 @@ function YediHubAppContent() {
     return new Map(orderedQueue.map((video, index): [string, number] => [String(video.id), index + 1]));
   }, [videos]);
 
-  const filteredVideos = useMemo(
-    () => filterVideosForView(videos, {
-      activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy
-    }, { getVideoCategory, getVideoMediaType, compareQueueOrder }),
-    [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]
-  );
+  const filteredVideos = useMemo(() => {
+    return videos
+      .filter((v) => v.status === activeTab)
+      .filter((v) => (selectedCategory === 'All' ? true : v.category === selectedCategory))
+      .filter((v) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return String(v.title || '').toLowerCase().includes(q) ||
+          String(v.requestedBy || '').toLowerCase().includes(q) ||
+          String(v.category || '').toLowerCase().includes(q) ||
+          String(v.note || '').toLowerCase().includes(q);
+      })
+      .sort((a, b) => {
+        // Active Queue always shows actual playback order. Other tabs may use their selected sort.
+        if (activeTab === 'queue') return compareQueueOrder(a, b);
+        if (sortBy === 'upvotes') return (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0) || compareQueueOrder(a, b);
+        if (sortBy === 'newest') return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0) || compareQueueOrder(a, b);
+        return compareQueueOrder(a, b);
+      });
+  }, [videos, activeTab, selectedCategory, searchQuery, sortBy]);
 
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
@@ -2766,137 +1198,122 @@ function YediHubAppContent() {
   // Connects anonymously to the selected channel's Twitch IRC for commands only
   // ==========================================
   const connectTwitchIrc = (targetChan, options = {}) => {
-    // Twitch IRC no longer documents anonymous chat access. Use the bot's
-    // existing authorized token with EventSub WebSocket from moderator browser.
-    if (!isCommandBridgeOwner || !chatBotSession.connected) {
-      shouldReconnectIrcRef.current = false;
-      setIrcConnected(false);
-      updateChatBridgeHealth({ status: 'inactive', code: chatBotSession.connected ? 'moderator_only' : 'bot_login_required' });
+    const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
+    if (!cleanChan) {
+      addToast('Please enter a valid Twitch channel name.', 'warning');
       return;
     }
-    const channel = normalizeRoomName(targetChan || PRIVATE_CHANNEL);
-    if (channel !== PRIVATE_CHANNEL) return;
+
     shouldReconnectIrcRef.current = true;
-    ircTargetRef.current = channel;
-    if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
-    reconnectTimerRef.current = null;
-    const oldSocket = ircSocketRef.current;
-    ircSocketRef.current = null;
-    try { oldSocket?.close(); } catch { /* Expired socket. */ }
-    let socket;
-    try {
-      const url = String(options.reconnectUrl || '');
-      socket = new WebSocket(url.startsWith('wss://eventsub.wss.twitch.tv/')
-        ? url : 'wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=40');
-    } catch (error) {
-      console.warn('Could not open Twitch EventSub WebSocket:', error);
-      setIrcConnected(false);
-      return;
+    ircTargetRef.current = cleanChan;
+    writeStoredValue(`${STORAGE_PREFIX}:active-room`, cleanChan);
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
-    ircSocketRef.current = socket;
-    setIrcConnected(false);
-    updateChatBridgeHealth({ status: 'connecting' });
-    let subscribed = Boolean(options.reconnectUrl);
-    const seen = new Set();
-    socket.onmessage = async (message) => {
-      if (ircSocketRef.current !== socket) return;
-      let frame;
-      try { frame = JSON.parse(String(message.data || '')); } catch { return; }
-      const type = String(frame?.metadata?.message_type || '');
-      if (type === 'session_welcome') {
-        if (subscribed) {
-          setIrcConnected(true);
-          updateChatBridgeHealth({ status: 'subscribed', code: '' });
+
+    const previousSocket = ircSocketRef.current;
+    if (previousSocket) {
+      ircSocketRef.current = null;
+      try { previousSocket.close(); } catch { /* Socket may already be closed. */ }
+    }
+
+    try {
+      const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+      ircSocketRef.current = ws;
+
+      ws.onopen = () => {
+        if (ircSocketRef.current !== ws) return;
+        ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+        ws.send(`NICK justinfan${Math.floor(10000 + Math.random() * 89999)}`);
+        ws.send(`JOIN #${cleanChan}`);
+        reconnectAttemptsRef.current = 0;
+        setIrcConnected(true);
+        if (!options.silent) addToast(`Twitch command bridge connected to #${cleanChan}.`, 'success');
+      };
+
+      ws.onmessage = (event) => {
+        if (ircSocketRef.current !== ws) return;
+        const raw = String(event.data || '');
+        if (raw.startsWith('PING')) {
+          ws.send('PONG :tmi.twitch.tv');
           return;
         }
-        const sessionId = String(frame?.payload?.session?.id || '');
-        if (!sessionId) { socket.close(); return; }
-        try {
-          updateChatBridgeHealth({ status: 'subscribing' });
-          const response = await fetch('/api/twitch/auth?action=ws-subscribe', {
-            method: 'POST', credentials: 'same-origin', cache: 'no-store',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId }), signal: AbortSignal.timeout(7500),
-          });
-          const result = await response.json().catch(() => ({}));
-          if (ircSocketRef.current !== socket) return;
-          if (!response.ok || result.ok !== true) {
-            const code = String(result.code || 'subscribe_http_' + response.status);
-            console.warn('Twitch chat WebSocket subscription failed:', code);
-            updateChatBridgeHealth({ status: 'error', code });
-            socket.close();
-            return;
-          }
-          subscribed = true;
-          reconnectAttemptsRef.current = 0;
-          setIrcConnected(true);
-          updateChatBridgeHealth({ status: 'subscribed', code: '' });
-        } catch (error) {
-          console.warn('Moderator chat subscription request failed:', error);
-          updateChatBridgeHealth({ status: 'error', code: 'subscription_request_failed' });
-          if (ircSocketRef.current === socket) socket.close();
+
+        if (!raw.includes('PRIVMSG')) return;
+        const msgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
+        const badgesMatch = raw.match(/badges=([^;]*)/);
+        const moderatorMatch = raw.match(/(?:^|;)mod=([01])/);
+        const tagsMatch = raw.match(/^@([^ ]+) /);
+        const tagMap = Object.fromEntries((tagsMatch?.[1] || '').split(';').filter(Boolean).map((tag) => {
+          const separator = tag.indexOf('=');
+          return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
+        }));
+        const prefixLogin = raw.match(/^@[^ ]+ :([^!]+)/)?.[1] || raw.match(/^:([^!]+)/)?.[1] || '';
+        const username = String(tagMap['display-name'] || prefixLogin || 'Viewer');
+        const voterLogin = normalizeTwitchLogin(prefixLogin || username);
+        const text = msgMatch ? msgMatch[1].trim() : '';
+        const usernameKey = voterLogin || normalizeTwitchLogin(username);
+        const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
+        if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
+
+        const badges = (badgesMatch?.[1] || '').split(',').map((badge) => badge.split('/')[0]);
+        const role = badges.includes('broadcaster')
+          ? 'streamer'
+          : (moderatorMatch?.[1] === '1' || badges.includes('moderator'))
+          ? 'moderator'
+          : badges.includes('vip')
+          ? 'vip'
+          : badges.includes('subscriber')
+          ? 'subscriber'
+          : 'viewer';
+        const lowerText = text.toLowerCase();
+        const isRequestCommand = lowerText.startsWith('!assr ');
+        const volumeCommand = parseModVolumeCommand(lowerText);
+        if (isRequestCommand) {
+          handleIncomingChatCommandRef.current?.(voterLogin || username, role, text);
+        } else if (lowerText === '!remove' || lowerText === '!unrequest') {
+          handleRemoveOwnRequestRef.current?.(voterLogin || username);
+        } else if (lowerText === '!queue') {
+          handleQueueSummaryRef.current?.(voterLogin || username);
+        } else if (/^!bigcock(?:\s+\d+)?$/.test(lowerText)) {
+          handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
+        } else if (lowerText === '!help') {
+          sendTwitchChatReply('Yedi Hub: !assr <URL or search words> adds a video (example: !assr daft punk harder better faster stronger). !remove deletes your most recent waiting request. !position / !when shows your request spots and estimated waits; !queue shows the full queue summary. !bigcock [number] upvotes a waiting video; you cannot vote for your own request.');
+          sendTwitchChatReply('Mods/broadcaster: !skip skips to the next track. Volume controls: !volume up, !volume down, !volume 50, !mute, !unmute (aliases !volup / !voldown / !vol 50). Some embedded players restrict remote volume control.');
+          sendTwitchChatReply('Queue spots and play times are estimates and can change when new requests or votes arrive. Use !help any time to see these commands.');
+        } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
+          handleQueuePositionRef.current?.(voterLogin || usernameKey);
+        } else if (lowerText === '!skip' && isStaffRole(role)) {
+          handleSkipNextRef.current?.();
+        } else if (volumeCommand && isStaffRole(role)) {
+          handleVolumeCommandRef.current?.(volumeCommand, role);
         }
-        return;
-      }
-      if (type === 'session_reconnect') {
-        const url = String(frame?.payload?.session?.reconnect_url || '');
-        if (url.startsWith('wss://eventsub.wss.twitch.tv/')) connectTwitchIrc(channel, { reconnectUrl: url, silent: true });
-        return;
-      }
-      if (type === 'revocation') {
-        updateChatBridgeHealth({ status: 'error', code: 'twitch_subscription_revoked' });
-        socket.close();
-        return;
-      }
-      if (type !== 'notification' || !subscribed ||
-        String(frame?.payload?.subscription?.type || '') !== 'channel.chat.message') return;
-      const event = frame.payload.event, id = String(frame.metadata?.message_id || '');
-      if (!event || !id || seen.has(id)) return;
-      seen.add(id);
-      if (seen.size > 300) seen.clear();
-      const login = normalizeTwitchLogin(event.chatter_user_login);
-      // Twitch may send rich chat links through message.fragments.
-      const text = getTwitchMessageText(event.message);
-      const allowedSender = normalizeTwitchLogin(event.broadcaster_user_login) === PRIVATE_CHANNEL &&
-        Boolean(login) && !KNOWN_CHAT_BOTS.has(login);
-      const links = allowedSender ? extractSupportedMediaUrls(text) : [];
-      const assr = allowedSender && /^!assr(?:\s|$)/i.test(text);
-      updateChatBridgeHealth({
-        lastMessageAt: Date.now(),
-        lastMessageKind: allowedSender ? (links.length ? 'video_links' : assr ? 'title_request' : 'ordinary_chat') : 'ignored_sender',
-      });
-      if (!allowedSender || !text || (!links.length && !assr)) return;
-      // Each distinct link is processed independently, including when two
-      // URLs arrive in a single Twitch message. Twitch itself decides whether
-      // chat messages held by AutoMod are delivered at all.
-      updateChatBridgeHealth({ lastRequestAt: Date.now(), lastRequestResult: 'received_from_twitch' });
-      const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
-      for (const requestedUrl of links.length ? links : [text]) {
-        void handleIncomingChatCommandRef.current?.(login, role, requestedUrl);
-      }
-    };
-    socket.onerror = () => {
-      if (ircSocketRef.current === socket) {
+      };
+
+      ws.onerror = () => {
+        if (ircSocketRef.current === ws) setIrcConnected(false);
+      };
+
+      ws.onclose = () => {
+        if (ircSocketRef.current !== ws) return;
+        ircSocketRef.current = null;
         setIrcConnected(false);
-        updateChatBridgeHealth({ status: 'error', code: 'twitch_socket_error' });
-      }
-    };
-    socket.onclose = () => {
-      if (ircSocketRef.current !== socket) return;
-      ircSocketRef.current = null;
+        if (shouldReconnectIrcRef.current) {
+          reconnectAttemptsRef.current += 1;
+          const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
+          if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = window.setTimeout(() => {
+            connectTwitchIrc(ircTargetRef.current, { silent: true });
+          }, delay);
+        }
+      };
+    } catch (error) {
       setIrcConnected(false);
-      setChatBridgeHealth((previous) => ({
-        ...previous,
-        status: 'reconnecting',
-        code: previous.code || 'websocket_disconnected',
-      }));
-      if (shouldReconnectIrcRef.current) {
-        reconnectAttemptsRef.current += 1;
-        const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
-        reconnectTimerRef.current = window.setTimeout(() => connectTwitchIrc(channel, { silent: true }), delay);
-      }
-    };
+      if (!options.silent) addToast('Could not start the Twitch bridge. It will retry automatically.', 'warning');
+    }
   };
+
   const disconnectTwitchIrc = (manual = true) => {
     if (manual) shouldReconnectIrcRef.current = false;
     if (reconnectTimerRef.current) {
@@ -2909,14 +1326,13 @@ function YediHubAppContent() {
     setIrcConnected(false);
   };
 
-  // Only the moderator browser owns the local IRC fallback. The streamer keeps playback
-  // controls independent, while EventSub remains the durable request path when active.
+  // Persisted channel room => the browser/OBS source automatically reconnects the bridge.
+  // This still requires the app page to be open; Vercel does not keep a browser WebSocket alive.
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    const isBridgeOwner = canHostLocalChatBridge(twitchAuth) && chatBotSession.connected;
-    shouldReconnectIrcRef.current = Boolean(isBridgeOwner);
-    if (!isBridgeOwner) {
+    shouldReconnectIrcRef.current = Boolean(twitchAuth.authenticated);
+    if (!twitchAuth.authenticated) {
       disconnectTwitchIrc(false);
       return undefined;
     }
@@ -2925,49 +1341,9 @@ function YediHubAppContent() {
       window.clearTimeout(startTimer);
       disconnectTwitchIrc(false);
     };
-    // The bridge always joins 2o3a and only runs in the moderator's authenticated browser.
+    // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated, twitchAuth.username, twitchAuth.role, chatBotSession.connected]);
-
-  useEffect(() => {
-    // Only rebuild Firestore/activity listeners when connectivity actually returns.
-    // Reconnecting on every tab focus causes a cache-only snapshot, a false "Cloud issue"
-    // flash, extra activity fetches, and needless work when switching back to the dashboard.
-    const reconnectWhenAvailable = (force = false) => {
-      const online = typeof navigator === 'undefined' ? true : navigator.onLine;
-      const wasOffline = !networkOnlineRef.current;
-      networkOnlineRef.current = online;
-      setNetworkOnline(online);
-      if (!online || (!wasOffline && !force)) return;
-      setCloudReconnectTick((tick) => tick + 1);
-      setActivityReconnectTick((tick) => tick + 1);
-      if (isCommandBridgeOwner && shouldReconnectIrcRef.current) {
-        const socket = ircSocketRef.current;
-        if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
-          connectTwitchIrc(ircTargetRef.current || PRIVATE_CHANNEL, { silent: true });
-        }
-      }
-    };
-    const onOnline = () => reconnectWhenAvailable(true);
-    const onOffline = () => {
-      networkOnlineRef.current = false;
-      setNetworkOnline(false);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible' &&
-          (!networkOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine))) {
-        reconnectWhenAvailable();
-      }
-    };
-    window.addEventListener('online', onOnline);
-    window.addEventListener('offline', onOffline);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('online', onOnline);
-      window.removeEventListener('offline', onOffline);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [twitchAuth.authenticated, twitchAuth.username]);
+  }, [twitchAuth.authenticated]);
 
     // ==========================================
   // REQUEST CREATION & DISPATCH
@@ -2975,52 +1351,43 @@ function YediHubAppContent() {
   const handleIncomingChatCommand = async (username, role, rawText) => {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
-    const requestTextWithoutTimestamp = stripMediaTimestampSuffix(requestText).text;
-    const startSeconds = parseMediaStartSeconds(rawText);
     if (!requestText) {
-      addToast(`Ignored an empty !assr request from @${requester}.`, 'warning');
+      sendTwitchChatReply(`@${requester} use !assr <video URL or search words>, e.g. !assr daft punk one more time.`);
       return;
     }
     if (!queueOpenRef.current) {
-      addToast(`Ignored @${requester}'s request because the queue is closed.`, 'warning');
+      sendTwitchChatReply(`@${requester} requests are currently closed. Try again when the streamer reopens the queue.`);
       return;
     }
 
-    // Prefer any supported URL found in the command/message, even when the viewer
-    // wraps it in text like "this one: https://youtu.be/...". Bare host/path links
-    // are normalized to https by the shared extractor.
-    const extractedUrl = extractSupportedMediaUrl(requestText) || linkFreeYouTubeRequestUrl(rawText);
-    const looksLikeUrl = Boolean(extractedUrl);
-    let url = extractedUrl || requestText;
+    const looksLikeUrl = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\//i.test(requestText);
+    let url = requestText;
     let title = '';
     if (!looksLikeUrl) {
       try {
-        const searchTitle = requestTextWithoutTimestamp || requestText;
-        const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(searchTitle.slice(0, 180))}`, { credentials: 'same-origin' });
+        const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
-          addToast(`No YouTube match for @${requester}'s chat request.`, 'warning');
+          sendTwitchChatReply(`@${requester} couldn't find "${requestText.slice(0, 45)}". Try a more specific title or paste a URL.`);
           return;
         }
         url = result.results[0].url;
         title = result.results[0].title || '';
       } catch (error) {
         console.warn('Chat title search failed:', error);
-        addToast(`Title search failed for @${requester}'s chat request.`, 'warning');
+        sendTwitchChatReply(`@${requester} title search is temporarily unavailable. Please try a direct video URL.`);
         return;
       }
     }
     if (!queueOpenRef.current) {
-      addToast(`Ignored @${requester}'s request because the queue closed during title search.`, 'warning');
+      sendTwitchChatReply(`@${requester} requests are currently closed. Your video was not added; try again when the streamer reopens the queue.`);
       return;
     }
-    // Timestamp may be in the YouTube URL (t= / start= / #t=) or written after it (1:23).
-    const resolvedStartSeconds = startSeconds || parseMediaStartSeconds(url);
-    // Keep media requests quiet in Twitch chat; the moderator dashboard shows request failures.
-    await processAndQueueRequest({
-      url, title, requestedBy: username, userRole: role, startSeconds: resolvedStartSeconds,
-      note: 'Requested via Twitch chat', manualCategory: null,
+    const ok = await processAndQueueRequest({
+      url, title, requestedBy: username, userRole: role,
+      note: 'Requested via Twitch chat', manualCategory: null
     });
+    if (ok) sendTwitchChatReply(`@${requester} added "${String(title || requestText).slice(0, 75)}". Use !position to check its spot, or !remove to remove your latest waiting request.`);
   };
 
   handleIncomingChatCommandRef.current = handleIncomingChatCommand;
@@ -3034,8 +1401,7 @@ function YediHubAppContent() {
     note = '',
     requestedBy,
     userRole = 'viewer',
-    manualCategory = null,
-    startSeconds = null
+    manualCategory = null
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
@@ -3052,7 +1418,6 @@ function YediHubAppContent() {
     // All platforms and categories are accepted without filtering. Category detection is metadata only.
     let normalizedUrl = String(url || '').trim();
     let parsed = parseMediaUrl(normalizedUrl);
-    let metadataLookupUrl = normalizedUrl;
 
     // TikTok short share links (vm.tiktok.com / vt.tiktok.com / tiktok.com/t/...) do not
     // contain the numeric post ID needed by the embed. Resolve them through a small,
@@ -3065,9 +1430,6 @@ function YediHubAppContent() {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
           return false;
         }
-        if (typeof result.metadataUrl === 'string' && result.metadataUrl.startsWith('https://')) {
-          metadataLookupUrl = result.metadataUrl;
-        }
         normalizedUrl = result.url;
         parsed = parseMediaUrl(normalizedUrl);
         if (!parsed.videoId) parsed.videoId = result.videoId;
@@ -3078,78 +1440,23 @@ function YediHubAppContent() {
       }
     }
 
-    // Watched videos can be requested again immediately. Prevent duplicates only
-    // while a copy is queued, playing, awaiting playback, or being submitted.
-    const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
-    const matchingItems = videosRef.current.filter((video) =>
-      getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
-    );
-    const existingItem = matchingItems.find((video) =>
-      ['queue', 'playing', 'watch_later'].includes(String(video?.status || '').toLowerCase())
-    ) || matchingItems.sort((a, b) => (Number(b.playedAt) || Date.parse(b.watchedAt || '') || 0) -
-      (Number(a.playedAt) || Date.parse(a.watchedAt || '') || 0))[0] || null;
-    const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
-    // An optimistic item can be visible only in this browser after a failed cloud
-    // write. It is NOT a confirmed queue duplicate. A repeated chat request
-    // should retry the same stable document ID immediately, not block the viewer.
-    const strandedItem = existingItem && existingItem.status !== 'watched'
-      ? pendingQueueAddsRef.current.get(String(existingItem.id))
-      : null;
-    if (strandedItem && !requestAlreadyPending) {
-      pendingMediaRequestKeysRef.current.add(identityKey);
-      let recovered = false;
-      try {
-        recovered = await syncAddVideo(strandedItem, { retryOnly: true });
-      } finally {
-        pendingMediaRequestKeysRef.current.delete(identityKey);
-      }
-      if (String(note).toLowerCase().includes('twitch chat')) {
-        updateChatBridgeHealth({ lastRequestResult: recovered ? 'recovered_pending_request' : 'pending_cloud_confirmation' });
-      }
-      if (!recovered) addToast('Retrying this request in the shared queue; cloud confirmation is still pending.', 'warning');
-      return recovered;
-    }
-    if ((existingItem && existingItem.status !== 'watched') || requestAlreadyPending) {
-      addToast('That video is already queued or playing. Duplicate request ignored.', 'warning');
-      return false;
-    }
-    // Lock the identity before any more asynchronous work so two requesters cannot race.
-    pendingMediaRequestKeysRef.current.add(identityKey);
-
-    // Fetch title/thumbnail and duration metadata. If title and thumbnail are already known,
-    // duration enrichment continues in the background so chat requests don't wait for scraping.
+    // Fetch public oEmbed titles for URL-only submissions so Music/Non-Music classification
+    // has real title text rather than only a video ID. Failure is non-fatal.
     let resolvedTitle = String(title || '').trim();
-    let resolvedThumbnail = parsed.thumbnail || '';
-    let resolvedDurationSec = null;
-    let resolvedTwitchClipPlayback = null;
-    const needsBasicMetadata = !resolvedTitle || !resolvedThumbnail || String(resolvedThumbnail).includes('placehold.co');
-    const mediaMetadataPromise = fetch(`/api/media-metadata?url=${encodeURIComponent(metadataLookupUrl || normalizedUrl)}`, {
-      credentials: 'same-origin',
-      cache: 'no-store'
-    }).then(async (response) => {
-      if (!response.ok) return null;
-      return response.json().catch(() => null);
-    }).catch((error) => {
-      console.warn('Media metadata lookup failed; using URL-based category detection.', error);
-      return null;
-    });
-    let deferredMetadataPromise = mediaMetadataPromise;
-    if (needsBasicMetadata) {
-      const metadata = await mediaMetadataPromise;
-      if (metadata) {
-        resolvedTwitchClipPlayback = metadata.twitchClipPlayback || null;
-        if (!resolvedTitle && typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
-        if (typeof metadata.thumbnailUrl === 'string' && metadata.thumbnailUrl.startsWith('https://')) {
-          resolvedThumbnail = metadata.thumbnailUrl;
+    if (!resolvedTitle) {
+      try {
+        const metadataResponse = await fetch(`/api/media-metadata?url=${encodeURIComponent(normalizedUrl)}`);
+        if (metadataResponse.ok) {
+          const metadata = await metadataResponse.json().catch(() => ({}));
+          if (typeof metadata.title === 'string' && metadata.title.trim()) resolvedTitle = metadata.title.trim();
         }
-        const candidateDuration = Number(metadata.durationSec);
-        if (Number.isFinite(candidateDuration) && candidateDuration > 0) resolvedDurationSec = candidateDuration;
+      } catch (error) {
+        console.warn('Media metadata lookup failed; using URL-based category detection.', error);
       }
     }
 
     // Re-check after async URL/title resolution in case the streamer closed the queue mid-request.
     if (!queueOpenRef.current) {
-      pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
       return false;
     }
@@ -3164,142 +1471,37 @@ function YediHubAppContent() {
         : parsed.platform === 'kick'
           ? `Kick Clip (${parsed.videoId})`
         : 'Community Requested Media');
-    const categoryManuallySet = Boolean(manualCategory && manualCategory !== 'Auto');
-    const detectedCategory = categoryManuallySet
-      ? manualCategory
-      : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
-    const mediaType = categoryManuallySet
-      ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
-      : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
-    const finalCategory = !categoryManuallySet && mediaType === 'Music' ? 'Music' : detectedCategory;
-    const requestedAt = Date.now();
+    const finalCategory =
+      manualCategory && manualCategory !== 'Auto'
+        ? manualCategory
+        : detectVideoCategory(normalizedUrl, cleanTitle, note, 'all');
+    const mediaType = detectMusicType(normalizedUrl, cleanTitle, note);
 
     const newVideo = {
-      id: getStableMediaDocumentId(normalizeRoomName(channelRoom) + '|' + identityKey),
-      identityKey,
+      id: 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
       channelRoom,
       title: cleanTitle,
       url: normalizedUrl,
-      metadataUrl: metadataLookupUrl || normalizedUrl,
       platform: parsed.platform,
       videoId: parsed.videoId,
       category: finalCategory,
-      categoryManuallySet,
       mediaType,
-      duration: resolvedDurationSec ? formatMediaDuration(resolvedDurationSec) : '',
-      durationSec: resolvedDurationSec || undefined,
-      durationSource: resolvedDurationSec ? 'metadata' : 'unknown',
-      ...(resolvedTwitchClipPlayback ? { twitchClipPlayback: resolvedTwitchClipPlayback } : {}),
+      duration: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? '00:45' : '03:45',
+      durationSec: parsed.platform === 'tiktok' || parsed.platform === 'twitch' || parsed.platform === 'kick' ? 45 : 225,
       requestedBy: normalizeTwitchLogin(requestedBy || twitchAuth.username || 'Viewer') || 'Viewer',
       userRole: 'viewer',
       status: 'queue',
       upvotes: 0,
       voters: [],
       pinned: false,
-      addedAt: new Date(requestedAt).toISOString(),
+      addedAt: 'Just now',
       queueOrder: getNextQueueOrder(),
-      timestamp: requestedAt,
-      startSeconds: parsed.platform === 'youtube'
-        ? (startSeconds === null || startSeconds === undefined
-          ? (parseMediaStartSeconds(normalizedUrl) || 0)
-          : Math.max(0, Number(startSeconds) || 0))
-        : 0,
+      timestamp: Date.now(),
       note: note || `Added to ${channelRoom} deck`,
-      thumbnail: resolvedThumbnail || parsed.thumbnail,
-      isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
+      thumbnail: parsed.thumbnail
     };
 
-    if (resolvedDurationSec) {
-      cacheVideoDuration(newVideo, resolvedDurationSec, 'metadata');
-      setDurationLookupOutcomes((prev) => ({
-        ...prev,
-        [String(newVideo.id)]: createDurationLookupOutcome({
-          status: 'found', platform: parsed.platform, previous: prev[String(newVideo.id)] || null,
-          provider: 'metadata', at: Date.now(),
-        })
-      }));
-    } else if (deferredMetadataPromise) {
-      const pendingId = String(newVideo.id);
-      const previousLookup = durationLookupOutcomes[pendingId] || null;
-      durationEnrichmentInFlightRef.current.add(pendingId);
-      setDurationLookupOutcomes((prev) => ({
-        ...prev,
-        [pendingId]: createDurationLookupOutcome({
-          status: 'pending', platform: parsed.platform, previous: prev[pendingId] || previousLookup, at: Date.now(),
-        })
-      }));
-    }
-    const confirmed = await syncAddVideo(newVideo);
-    pendingMediaRequestKeysRef.current.delete(identityKey);
-    if (!confirmed && String(note).toLowerCase().includes('twitch chat')) {
-      updateChatBridgeHealth({ lastRequestResult: 'pending_cloud_confirmation' });
-    }
-
-    if (deferredMetadataPromise && !resolvedDurationSec) {
-      const newVideoId = String(newVideo.id);
-      const previousLookup = durationLookupOutcomes[newVideoId] || null;
-      void deferredMetadataPromise.then((metadata) => {
-        const sourcePlayback = metadata?.twitchClipPlayback;
-        const sourceVideoId = String(sourcePlayback?.videoId || '');
-        const sourceVodOffset = Number(sourcePlayback?.vodOffset);
-        const sourceClipDuration = Number(sourcePlayback?.durationSec);
-        if (parsed.platform === 'twitch' && /^\d+$/.test(sourceVideoId) &&
-            Number.isFinite(sourceVodOffset) && sourceVodOffset >= 0 &&
-            Number.isFinite(sourceClipDuration) && sourceClipDuration > 0) {
-          const current = videosRef.current.find((video) => String(video.id) === newVideoId);
-          if (current && !current.twitchClipPlayback) {
-            void syncUpdateVideo(newVideoId, {
-              twitchClipPlayback: {
-                videoId: sourceVideoId,
-                vodOffset: sourceVodOffset,
-                durationSec: Math.round(sourceClipDuration),
-              }
-            });
-          }
-        }
-        const candidateDuration = Number(metadata?.durationSec);
-        if (!isValidMediaDuration(candidateDuration)) {
-          setDurationLookupOutcomes((prev) => ({
-            ...prev,
-            [newVideoId]: createDurationLookupOutcome({
-              status: metadata ? 'unavailable' : 'error',
-              platform: parsed.platform,
-              previous: previousLookup,
-              reason: metadata?.durationReason || 'The provider did not return a valid duration.',
-              provider: metadata?.durationProvider || '',
-              at: Date.now(),
-            })
-          }));
-          return;
-        }
-        const current = videosRef.current.find((video) => String(video.id) === newVideoId);
-        if (!current) return;
-        cacheVideoDuration(current, candidateDuration, 'metadata');
-        void syncUpdateVideo(newVideoId, {
-          duration: formatMediaDuration(candidateDuration),
-          durationSec: candidateDuration,
-          durationSource: 'metadata',
-          durationProvider: String(metadata?.durationProvider || ''),
-        });
-        setDurationLookupOutcomes((prev) => ({
-          ...prev,
-          [newVideoId]: createDurationLookupOutcome({
-            status: 'found', platform: parsed.platform,
-            previous: previousLookup, provider: metadata?.durationProvider || '', at: Date.now(),
-          })
-        }));
-      }).catch((error) => {
-        setDurationLookupOutcomes((prev) => ({
-          ...prev,
-          [newVideoId]: createDurationLookupOutcome({
-            status: 'error', platform: parsed.platform, previous: previousLookup,
-            reason: String(error?.message || 'Network error during duration lookup.'), at: Date.now(),
-          })
-        }));
-      }).finally(() => {
-        durationEnrichmentInFlightRef.current.delete(newVideoId);
-      });
-    }
+    syncAddVideo(newVideo);
 
     addToast(`Added "${cleanTitle.slice(0, 24)}..." [${finalCategory}] straight to the queue!`, 'success');
     return true;
@@ -3326,108 +1528,72 @@ function YediHubAppContent() {
     }
   };
   const handlePlayNow = (video) => {
-    const previousPlaying = (videosRef.current || videos).find((item) => item.status === 'playing' && String(item.id) !== String(video.id));
-    if (previousPlaying) recordActivity('track_skipped', previousPlaying, { actor: twitchAuth.username, source: 'play-now' });
-    const alreadyPlaying = (videosRef.current || videos).some((item) => item.status === 'playing' && String(item.id) === String(video.id));
-    if (!alreadyPlaying) recordActivity('play_started', video, { actor: twitchAuth.username, source: 'dashboard' });
     exitTikTokFullscreenBeforeTrackChange();
-    const latestVideos = videosRef.current || videos;
-    const now = Date.now();
-    const updatesById = new Map();
-
-    latestVideos.forEach((item) => {
-      if (item.status === 'playing' && String(item.id) !== String(video.id)) {
-        updatesById.set(String(item.id), {
-          status: 'watched',
-          watchedAt: new Date(now).toISOString(),
-          playedAt: now,
-          nextTrackOverrideId: null,
-        });
+    // Set current active playing to watched, set selected to playing
+    videos.forEach((v) => {
+      if (v.status === 'playing') {
+        syncUpdateVideo(v.id, { status: 'watched', watchedAt: 'Just now' });
       }
     });
-    updatesById.set(String(video.id), {
-      status: 'playing',
-      pinned: false,
-      playedAt: now + 1,
-      nextTrackOverrideId: null,
-    });
 
-    const nextVideos = latestVideos.map((item) => {
-      const updates = updatesById.get(String(item.id));
-      return updates ? { ...item, ...updates } : item;
-    });
-    videosRef.current = nextVideos;
-    setVideos(nextVideos);
-    currentVideoRef.current = nextVideos.find((item) => String(item.id) === String(video.id)) || null;
+    syncUpdateVideo(video.id, { status: 'playing', pinned: false });
     setSimProgress(0);
-
-    if (db && firebaseUser) {
-      void persistQueuePatches(updatesById, latestVideos, true).catch((error) => {
-        console.warn('Versioned play-now transition could not commit.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Playback changed locally — cloud sync failed');
-      });
-    }
-    addToast(`Now Playing: ${String(video.title || 'video').slice(0, 32)}...`, 'info');
+    addToast(`Now Playing: ${video.title.slice(0, 32)}...`, 'info');
   };
 
-  const handleSkipNext = (reason = 'skipped') => {
+  const handleSkipNext = () => {
     exitTikTokFullscreenBeforeTrackChange();
-    const latestVideos = videosRef.current || videos;
-    const outgoing = currentVideoRef.current ||
-      latestVideos.find((video) => video.status === 'playing') ||
-      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
-      null;
+    const outgoing = currentVideo;
     if (!outgoing) return;
 
-    if (reason === 'completed') recordActivity('playback_completed', outgoing, { source: 'player-ended' });
-    else recordActivity('track_skipped', outgoing, { actor: twitchAuth.username, source: 'dashboard' });
+    // Pick the next item first, then change every local status in a single state update.
+    // Updating the current and next Firestore documents separately caused transient snapshots
+    // with zero/two active players; TikTok iframes could then be torn down mid-navigation.
+    const nextOne = videos
+      .filter((video) => video.status === 'queue' && video.id !== outgoing.id)
+      .sort(compareQueueOrder)[0] || null;
+    const updatesById = new Map();
+    videos.filter((video) => video.status === 'playing').forEach((video) => {
+      updatesById.set(video.id, { status: 'watched', watchedAt: 'Just now' });
+    });
+    updatesById.set(outgoing.id, { status: 'watched', watchedAt: 'Just now' });
+    if (nextOne) updatesById.set(nextOne.id, { status: 'playing', pinned: false });
 
-    const transition = buildNextTrackTransition(latestVideos, outgoing, compareQueueOrder);
-    const { updatesById, nextVideos, nextOne } = transition;
-    if (nextOne) recordActivity('play_started', nextOne, { actor: twitchAuth.username, source: reason === 'completed' ? 'auto-next' : 'next-track' });
-    videosRef.current = nextVideos;
-    setVideos(nextVideos);
-    currentVideoRef.current = nextOne
-      ? nextVideos.find((video) => String(video.id) === String(nextOne.id)) || null
-      : null;
+    setVideos((previous) => previous.map((video) => {
+      const updates = updatesById.get(video.id);
+      return updates ? { ...video, ...updates } : video;
+    }));
     setSimProgress(0);
 
     if (db && firebaseUser) {
-      void persistQueuePatches(updatesById, latestVideos, true).catch((error) => {
-        console.warn('Versioned next-track transition could not commit.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Next video changed locally — cloud sync failed');
+      const batch = writeBatch(db);
+      updatesById.forEach((updates, videoId) => {
+        batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId), updates);
+      });
+      batch.commit().catch(async (error) => {
+        // In case a locally-created document is missing in Firestore, fall back to merge writes.
+        console.warn('Atomic queue advance failed; retrying as merge writes.', error);
+        try {
+          await Promise.all(Array.from(updatesById.entries()).map(([videoId, updates]) => {
+            const item = videos.find((video) => video.id === videoId) || { id: videoId };
+            return setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId),
+              { ...item, ...updates, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            );
+          }));
+        } catch (fallbackError) {
+          console.warn('Queue advance could not sync to Firestore; the local transition remains active.', fallbackError);
+          setCloudSynced(false);
+          setSyncStatusText('Queue advance saved locally — cloud sync failed');
+        }
       });
     }
 
-    if (nextOne) addToast(`Now playing: ${String(nextOne.title || 'video').slice(0, 32)}...`, 'info');
-    else addToast('Reached end of queue.', 'info');
-  };
-
-  const setPlayerVolume = (rawVolume) => {
-    const video = currentVideoRef.current || currentVideo;
-    if (!video) return;
-    const volume = clampPlayerVolume(rawVolume);
-    if (video.platform === 'youtube') {
-      const player = youtubePlayerRef.current;
-      if (!player || typeof player.setVolume !== 'function') return;
-      const muted = typeof player.isMuted === 'function' ? player.isMuted() : getPlaybackIntentForVideo(video.id, 'youtube').muted === true;
-      youtubeVolumeRestoreRef.current = { videoId: '', volume, until: 0 };
-      youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
-      player.setVolume(volume);
-      if (volume === 0) player.mute?.();
-      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume, muted: volume === 0 || muted };
-      updatePlaybackIntent(video.id, { volume, muted: volume === 0 || muted }, 'youtube');
-      return;
-    }
-    if (video.platform === 'twitch' && twitchPlayerReadyId === String(video.id)) {
-      const player = twitchPlayerRef.current;
-      if (!player || typeof player.setVolume !== 'function') return;
-      const muted = Boolean(player.getMuted?.());
-      player.setVolume(volume / 100);
-      if (volume === 0) player.setMuted(true);
-      updatePlaybackIntent(video.id, { volume, muted: volume === 0 || muted }, 'twitch');
+    if (nextOne) {
+      addToast(`Skipped! Now playing: ${nextOne.title.slice(0, 28)}...`, 'success');
+    } else {
+      addToast('Reached end of queue.', 'info');
     }
   };
 
@@ -3446,81 +1612,31 @@ function YediHubAppContent() {
       if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
       else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
       else if (volumeCommand.action === 'set') next = volumeCommand.value;
-      else if (volumeCommand.action === 'mute') {
-        youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
-        player.mute();
-        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
-        updatePlaybackIntent(currentVideo.id, { muted: true }, 'youtube');
-        addToast('YouTube player muted by staff command.', 'info');
-        return;
-      }
-      else if (volumeCommand.action === 'unmute') {
-        youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
-        player.unMute();
-        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
-        updatePlaybackIntent(currentVideo.id, { muted: false }, 'youtube');
-        addToast('YouTube player unmuted by staff command.', 'info');
-        return;
-      }
-      youtubeVolumeRestoreRef.current = { videoId: '', volume: next, until: 0 };
-      youtubeMuteRestoreRef.current = { videoId: '', muted: null, until: 0 };
+      else if (volumeCommand.action === 'mute') { player.mute(); addToast('YouTube player muted by staff command.', 'info'); return; }
+      else if (volumeCommand.action === 'unmute') { player.unMute(); addToast('YouTube player unmuted by staff command.', 'info'); return; }
       player.setVolume(next);
       if (next > 0 && typeof player.unMute === 'function') player.unMute();
       if (next === 0 && typeof player.mute === 'function') player.mute();
-      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
-      updatePlaybackIntent(currentVideo.id, { muted: next === 0, volume: next }, 'youtube');
       addToast(`YouTube volume set to ${next}%.`, 'success');
-      return;
-    }
-
-    if (currentVideo?.platform === 'twitch') {
-      const player = twitchPlayerReadyId === String(currentVideo.id) ? twitchPlayerRef.current : null;
-      if (!player || typeof player.getVolume !== 'function' || typeof player.setVolume !== 'function') {
-        addToast('Twitch VOD player is not ready for volume commands yet.', 'warning');
-        return;
-      }
-      const current = clampPlayerVolume(Number(player.getVolume()) * 100);
-      let next = current;
-      if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
-      else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
-      else if (volumeCommand.action === 'set') next = clampPlayerVolume(volumeCommand.value);
-      else if (volumeCommand.action === 'mute') {
-        player.setMuted(true);
-        updatePlaybackIntent(currentVideo.id, { muted: true }, 'twitch');
-        addToast('Twitch player muted by staff command.', 'info');
-        return;
-      } else if (volumeCommand.action === 'unmute') {
-        player.setMuted(false);
-        updatePlaybackIntent(currentVideo.id, { muted: false }, 'twitch');
-        addToast('Twitch player unmuted by staff command.', 'info');
-        return;
-      }
-      player.setVolume(next / 100);
-      player.setMuted(next === 0);
-      updatePlaybackIntent(currentVideo.id, { muted: next === 0, volume: next }, 'twitch');
-      addToast(`Twitch volume set to ${next}%.`, 'success');
       return;
     }
 
     if (currentVideo?.platform === 'tiktok') {
       const iframeWindow = tiktokIframeRef.current?.contentWindow;
       if (!iframeWindow) { addToast('TikTok player is not ready for volume commands yet.', 'warning'); return; }
-      if (volumeCommand.action === 'up' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100)) {
-        addToast('TikTok does not allow exact volume changes from chat commands. Use the volume control inside the TikTok player; !mute, !unmute, !volume 0 and !volume 100 still work.', 'info');
+      if (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100) {
+        addToast('TikTok only exposes mute/unmute to remote commands. Use its in-player volume slider for exact levels.', 'info');
         return;
       }
-      const shouldMute = volumeCommand.action === 'mute' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
-      tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: shouldMute ? 'muted' : 'unmuted' };
-      tiktokAudioStateRef.current = { requestId: currentVideo.id, muted: shouldMute };
-      updatePlaybackIntent(currentVideo.id, { muted: shouldMute }, 'tiktok');
+      const shouldMute = volumeCommand.action === 'mute' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
       const messageType = shouldMute ? 'mute' : 'unMute';
-      postTikTokPlayerCommand(iframeWindow, messageType, null);
+      iframeWindow.postMessage({ type: messageType, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
       addToast(shouldMute ? 'TikTok audio muted by staff command.' : 'TikTok audio unmuted by staff command. Use the in-player slider for incremental volume changes.', 'info');
       return;
     }
 
     if (currentVideo?.platform === 'twitch') {
-      addToast('This Twitch Clip has no source VOD available for shared volume controls. Adjust volume inside the Clip player.', 'info');
+      addToast('Twitch Clip embeds do not expose remote volume controls. Adjust volume inside the Clip player.', 'info');
       return;
     }
 
@@ -3529,171 +1645,46 @@ function YediHubAppContent() {
 
   const handlePreviousTrack = () => {
     exitTikTokFullscreenBeforeTrackChange();
-    const latestVideos = videosRef.current || videos;
-    const outgoing = currentVideoRef.current ||
-      latestVideos.find((video) => video.status === 'playing') ||
-      latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
-      null;
+    const outgoing = currentVideoRef.current;
     if (!outgoing) return;
-
-    const transition = buildPreviousTrackTransition(latestVideos, outgoing);
-    const { previouslyPlayed, updates, nextVideos } = transition;
-    if (previouslyPlayed) recordActivity('track_replayed', previouslyPlayed, { actor: twitchAuth.username, source: 'dashboard' });
+    const previouslyPlayed = videos
+      .filter((video) => video.status === 'watched' && video.id !== outgoing.id)
+      .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))[0];
     if (!previouslyPlayed) {
       addToast('There is no previous video in history yet.', 'warning');
       return;
     }
-    videosRef.current = nextVideos;
-    setVideos(nextVideos);
-    currentVideoRef.current = nextVideos.find((video) => String(video.id) === String(previouslyPlayed.id)) || null;
+    const updates = new Map();
+    updates.set(outgoing.id, { status: 'queue', queueOrder: getNextQueueOrder() });
+    updates.set(previouslyPlayed.id, { status: 'playing', pinned: false });
+    setVideos((previous) => previous.map((video) => {
+      const change = updates.get(video.id);
+      return change ? { ...video, ...change } : video;
+    }));
     setSimProgress(0);
-
     if (db && firebaseUser) {
-      void persistQueuePatches(updates, latestVideos, true).catch((error) => {
-        console.warn('Versioned previous-track transition could not commit.', error);
+      const batch = writeBatch(db);
+      updates.forEach((change, id) => batch.set(
+        doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(id)),
+        change, { merge: true }
+      ));
+      batch.commit().catch((error) => {
+        console.warn('Previous-track transition could not sync to Firestore.', error);
         setCloudSynced(false);
         setSyncStatusText('Previous track changed locally — cloud sync failed');
       });
     }
-    addToast(`Previous: ${String(previouslyPlayed.title || 'video').slice(0, 32)}...`, 'info');
   };
 
   // Player and bridge callbacks always use current handlers and queue state.
-  handleSkipNextRef.current = handleSkipNext;
+  handleSkipNextRef.current = handleSkipNext;  handleSkipNextRef.current = handleSkipNext;
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
-    const playing = currentVideoRef.current || currentVideo;
-    if (!playing || String(playing.id) !== String(videoId)) return;
-    if (streamSettings.autoPlayNext && normalizeTwitchLogin(twitchAuth.username) === PRIVATE_CHANNEL) {
-      handleSkipNextRef.current?.('completed');
-    } else {
-      recordActivity('playback_completed', playing, { source: 'player-ended' });
+    if (!currentVideo || currentVideo.id !== videoId) return;
+    if (streamSettings.autoPlayNext) {
+      handleSkipNextRef.current?.();
     }
   };
-
-  const togglePlaybackFromKeyboard = () => {
-    const video = currentVideoRef.current || currentVideo;
-    if (!video) return;
-    if (video.platform === 'youtube') {
-      const player = youtubePlayerRef.current;
-      if (!player || typeof player.getPlayerState !== 'function') {
-        addToast('YouTube player is not ready for keyboard controls yet.', 'warning');
-        return;
-      }
-      const state = Number(player.getPlayerState());
-      const shouldPause = state === 1 || state === 3 ||
-        (state < 0 && !getPlaybackIntentForVideo(video.id, 'youtube').paused);
-      if (shouldPause) {
-        updatePlaybackIntent(video.id, { paused: true });
-        keyboardPausedRef.current = { videoId: String(video.id), paused: true };
-        player.pauseVideo?.();
-      } else {
-        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
-        updatePlaybackIntent(video.id, { paused: false });
-        keyboardPausedRef.current = { videoId: String(video.id), paused: false };
-        player.playVideo?.();
-      }
-      return;
-    }
-    if (video.platform === 'twitch') {
-      const player = twitchPlayerReadyId === String(video.id) ? twitchPlayerRef.current : null;
-      if (!player || typeof player.isPaused !== 'function') {
-        addToast('Twitch player is not ready for keyboard controls yet.', 'warning');
-        return;
-      }
-      const shouldPause = !getPlaybackIntentForVideo(video.id, 'twitch').paused;
-      keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
-      updatePlaybackIntent(video.id, { paused: shouldPause }, 'twitch');
-      if (shouldPause) player.pause?.();
-      else {
-        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
-        player.play?.();
-      }
-      return;
-    }
-    if (video.platform === 'tiktok') {
-      const iframeWindow = tiktokIframeRef.current?.contentWindow;
-      if (!iframeWindow) {
-        addToast('TikTok player is not ready for keyboard controls yet.', 'warning');
-        return;
-      }
-      const sameVideo = keyboardPausedRef.current.videoId === String(video.id);
-      const shouldPause = sameVideo ? !keyboardPausedRef.current.paused : true;
-      keyboardPausedRef.current = { videoId: String(video.id), paused: shouldPause };
-      if (shouldPause) {
-        updatePlaybackIntent(video.id, { paused: true });
-      } else {
-        playbackRestoreGuardRef.current = { videoId: String(video.id), until: 0, paused: false, muted: null };
-        updatePlaybackIntent(video.id, { paused: false });
-      }
-      postTikTokPlayerCommand(iframeWindow, shouldPause ? 'pause' : 'play', null);
-      return;
-    }
-    addToast('This player does not expose remote play/pause controls. Use its in-player controls.', 'info');
-  };
-
-  const toggleMuteFromKeyboard = () => {
-    const video = currentVideoRef.current || currentVideo;
-    if (!video) return;
-    if (video.platform === 'youtube') {
-      const player = youtubePlayerRef.current;
-      const isMuted = typeof player?.isMuted === 'function'
-        ? player.isMuted()
-        : Boolean(youtubePlaybackInfoRef.current.muted);
-      handleVolumeCommandRef.current?.({ action: isMuted ? 'unmute' : 'mute' }, 'streamer');
-      return;
-    }
-    if (video.platform === 'twitch') {
-      const player = twitchPlayerReadyId === String(video.id) ? twitchPlayerRef.current : null;
-      if (!player || typeof player.setMuted !== 'function') {
-        addToast('Twitch player is not ready for audio controls yet.', 'warning');
-        return;
-      }
-      const muted = Boolean(player.getMuted?.());
-      player.setMuted(!muted);
-      updatePlaybackIntent(video.id, { muted: !muted }, 'twitch');
-      return;
-    }
-    if (video.platform === 'tiktok') {
-      const actualAudioState = tiktokAudioStateRef.current.requestId === String(video.id)
-        ? tiktokAudioStateRef.current.muted
-        : null;
-      const muted = typeof actualAudioState === 'boolean'
-        ? actualAudioState
-        : tiktokMutePreferenceRef.current.requestId === String(video.id) &&
-          tiktokMutePreferenceRef.current.preference === 'muted';
-      handleVolumeCommandRef.current?.({ action: muted ? 'unmute' : 'mute' }, 'streamer');
-      return;
-    }
-    addToast('This player does not expose a remote mute control. Use its in-player controls.', 'info');
-  };
-
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-      const target = event.target;
-      const isTyping = target instanceof HTMLElement && (
-        target.isContentEditable ||
-        target.closest('input, textarea, select, [contenteditable="true"]')
-      );
-      if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen) return;
-      const key = String(event.key || '').toLowerCase();
-      if (event.code === 'Space' || key === ' ') {
-        event.preventDefault();
-        if (!event.repeat) togglePlaybackFromKeyboard();
-      } else if (key === 'm') {
-        if (!event.repeat) toggleMuteFromKeyboard();
-      } else if (isStaff && (key === 'arrowright' || key === 'n')) {
-        event.preventDefault();
-        if (!event.repeat) handleSkipNextRef.current?.();
-      } else if (isStaff && (key === 'arrowleft' || key === 'p')) {
-        event.preventDefault();
-        if (!event.repeat) handlePreviousTrack();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, twitchPlayerReadyId, topMenuOpen]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -3709,13 +1700,13 @@ function YediHubAppContent() {
     const playerWindow = iframe.contentWindow;
     if (!playerWindow) return undefined;
     let cancelled = false;
-    let hasPlayed = false;
+    let hasStarted = false;
     let endedHandled = false;
     let previousState = -1;
     const postCommand = (func, args = []) => {
       if (cancelled) return;
       try {
-        postYouTubePlayerCommand(playerWindow, func, args);
+        playerWindow.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
       } catch (error) {
         console.debug('YouTube command could not be sent.', error);
       }
@@ -3724,8 +1715,6 @@ function YediHubAppContent() {
       getCurrentTime: () => Number(youtubePlaybackInfoRef.current.currentTime) || 0,
       getDuration: () => Number(youtubePlaybackInfoRef.current.duration) || 0,
       getVolume: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.volume)) ? Number(youtubePlaybackInfoRef.current.volume) : 100,
-      seekTo: (seconds, allowSeekAhead = true) => postCommand('seekTo', [Math.max(0, Number(seconds) || 0), Boolean(allowSeekAhead)]),
-      getPlayerState: () => Number.isFinite(Number(youtubePlaybackInfoRef.current.playerState)) ? Number(youtubePlaybackInfoRef.current.playerState) : -1,
       setVolume: (value) => postCommand('setVolume', [Math.max(0, Math.min(100, Number(value) || 0))]),
       mute: () => postCommand('mute'),
       unMute: () => postCommand('unMute'),
@@ -3742,30 +1731,10 @@ function YediHubAppContent() {
       } catch { /* Player may still be initializing; the next retry will announce again. */ }
       postCommand('addEventListener', ['onStateChange']);
       postCommand('addEventListener', ['onError']);
-      postCommand('addEventListener', ['onAutoplayBlocked']);
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
-      const intent = getPlaybackIntentForVideo(video.id, 'youtube');
-      const desiredVolume = clampPlayerVolume(intent.volume);
-      const desiredMuted = intent.muted === true;
-      youtubeVolumeRestoreRef.current = { videoId: String(video.id), volume: desiredVolume, until: Date.now() + 3500 };
-      youtubeMuteRestoreRef.current = { videoId: String(video.id), muted: desiredMuted, until: Date.now() + 3500 };
-      postCommand('setVolume', [desiredVolume]);
-      if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(video.id), pending: true };
-      const pending = pendingPlaybackRestoreRef.current;
-      const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
-      const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
-        ? pending.currentTime
-        : known;
-      if (intent.paused) postCommand('pauseVideo');
-      if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
-        postCommand('seekTo', [restoreSeconds, true]);
-      }
-      // Sound is the default. Only preserve mute when the viewer explicitly chose it.
-      if (intent.muted === true) postCommand('mute');
-      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-      if (intent.muted !== true) postCommand('unMute');
+      postCommand('playVideo');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow) return;
@@ -3775,12 +1744,6 @@ function YediHubAppContent() {
         try { payload = JSON.parse(payload); } catch { return; }
       }
       if (!payload || typeof payload !== 'object') return;
-      if (payload.event === 'onAutoplayBlocked' && currentVideoRef.current?.id === video.id &&
-          !getPlaybackIntentForVideo(video.id, 'youtube').paused &&
-          youtubePlaybackInfoRef.current.playerState !== 1 &&
-          !youtubeProgressSignalRef.current.advancing) {
-        setYoutubeNeedsGesture(String(video.id));
-      }
 
       const info = payload.event === 'infoDelivery' && payload.info && typeof payload.info === 'object'
         ? payload.info
@@ -3788,90 +1751,16 @@ function YediHubAppContent() {
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
       if (info) {
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
-        if (Number.isFinite(Number(info.volume))) {
-          const volume = clampPlayerVolume(info.volume);
-          const restore = youtubeVolumeRestoreRef.current;
-          if (restore.videoId === String(video.id) && Date.now() < restore.until) {
-            if (Math.abs(volume - restore.volume) > 1) postCommand('setVolume', [restore.volume]);
-          } else {
-            updatePlaybackIntent(video.id, { volume }, 'youtube');
-          }
-        }
-        if (typeof info.muted === 'boolean') {
-          const restore = youtubeMuteRestoreRef.current;
-          const restoringAudio = restore.videoId === String(video.id) && Date.now() < restore.until;
-          const guard = playbackRestoreGuardRef.current;
-          const restoringMute = guard.videoId === String(video.id) && Date.now() < guard.until && typeof guard.muted === 'boolean';
-          const intent = getPlaybackIntentForVideo(video.id, 'youtube');
-          const startupMute = youtubeStartupMuteRef.current;
-          const ignoringInitialAutoplayMute = startupMute.videoId === String(video.id) && startupMute.pending && info.muted === true;
-          if (startupMute.videoId === String(video.id) && startupMute.pending && info.muted === false) {
-            youtubeStartupMuteRef.current = { videoId: String(video.id), pending: false };
-          }
-          if (restoringAudio) {
-            if (info.muted !== restore.muted) postCommand(restore.muted ? 'mute' : 'unMute');
-          } else if (!restoringMute && !ignoringInitialAutoplayMute && intent.muted !== info.muted) {
-            updatePlaybackIntent(video.id, { muted: info.muted }, 'youtube');
-          }
-        }
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
-        if (Number.isFinite(now) && now >= 0 && currentVideoRef.current?.id === video.id) {
-          // Some embeds emit currentTime updates but never deliver onStateChange.
-          // Advancing timestamps prove actual playback, including when the
-          // cross-origin iframe API state remains stale at -1.
-          const progress = youtubeProgressSignalRef.current;
-          if (progress.videoId !== String(video.id)) {
-            youtubeProgressSignalRef.current = { videoId: String(video.id), lastTime: now, advancing: false };
-          } else {
-            if (progress.lastTime !== null && now > progress.lastTime + 0.15) {
-              progress.advancing = true;
-              setYoutubeNeedsGesture('');
-              setYoutubeHasRenderedFrameId(String(video.id));
-            }
-            progress.lastTime = now;
-          }
-          recordPlaybackPosition(video.id, now);
-        }
-        if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
-          playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
-          reportPlayerDuration(video.id, duration);
-          if (Number.isFinite(now)) setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
+        if (Number.isFinite(now) && Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
+          setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
         }
       }
       if (Number.isFinite(stateFromEvent)) {
         youtubePlaybackInfoRef.current.playerState = stateFromEvent;
-        if (stateFromEvent === 1) {
-          setYoutubeNeedsGesture('');
-          setYoutubeHasRenderedFrameId(String(video.id));
-        }
-        const videoId = String(video.id);
-        const intent = getPlaybackIntentForVideo(videoId);
-        const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
-          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
-        if (stateFromEvent === 2) {
-          // YouTube can emit PAUSED while constructing the iframe, before any
-          // playback has started. This is not a user pause and must not cancel
-          // subsequent autoplay retries or permanently black out the player.
-          if (shouldPersistYouTubePausedEvent({
-            hasPlayed,
-            visible: document.visibilityState !== 'hidden',
-          })) {
-            updatePlaybackIntent(videoId, { paused: true });
-            keyboardPausedRef.current = { videoId, paused: true };
-          }
-        } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
-          // Consume this one transient resume event only. Do not keep rejecting
-          // explicit Play clicks for the remainder of a long visibility guard.
-          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
-          postCommand('pauseVideo');
-        } else if (stateFromEvent === 1) {
-          updatePlaybackIntent(videoId, { paused: false });
-          keyboardPausedRef.current = { videoId, paused: false };
-        }
-        if (stateFromEvent === 1) hasPlayed = true;
-        if (stateFromEvent === 0 && hasPlayed && previousState !== 0 && !endedHandled) {
+        if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
+        if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
           endedHandled = true;
           if (currentVideoRef.current?.id === video.id) handleMediaEndedRef.current?.(video.id);
         }
@@ -3897,238 +1786,18 @@ function YediHubAppContent() {
     };
   }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
 
-  // Twitch Clip embeds are non-interactive. When Twitch still exposes the source VOD,
-  // play that segment in the interactive VOD player so host controls can keep one shared state.
-  useEffect(() => {
-    const video = currentVideo;
-    const playback = twitchClipPlayback;
-    const requestId = String(video?.id || '');
-    if (!video || video.platform !== 'twitch' || playback.requestId !== requestId || playback.status !== 'vod') {
-      twitchPlayerRef.current = null;
-      setTwitchPlayerReadyId('');
-      return undefined;
-    }
-    const mount = twitchPlayerMountRef.current;
-    if (!mount) return undefined;
-
-    let cancelled = false;
-    let player = null;
-    let pollTimer = 0;
-    let scriptTimer = 0;
-    let scriptAttempts = 0;
-    let endedHandled = false;
-    let audioRestoreUntil = 0;
-    const apiScriptUrl = 'https://player.twitch.tv/js/embed/v1.js';
-    const intent = getPlaybackIntentForVideo(requestId, 'twitch');
-    const knownTime = playbackPositionRef.current.videoId === requestId
-      ? Number(playbackPositionRef.current.seconds) || 0
-      : 0;
-    const startAt = knownTime > playback.vodOffset + 0.5 ? knownTime : playback.vodOffset;
-    const setNativeFallback = () => {
-      if (cancelled) return;
-      setTwitchClipPlayback((current) => current.requestId === requestId
-        ? { ...current, status: 'native' }
-        : current);
-    };
-    const syncAudioFromPlayer = () => {
-      if (!player || cancelled || String(currentVideoRef.current?.id || '') !== requestId) return;
-      const actualVolume = clampPlayerVolume(Number(player.getVolume?.()) * 100);
-      const actualMuted = Boolean(player.getMuted?.());
-      const observed = twitchObservedAudioRef.current;
-      if (Date.now() < audioRestoreUntil) {
-        const preferred = getPlaybackIntentForVideo(requestId, 'twitch');
-        if (Math.abs(actualVolume - preferred.volume) > 2) player.setVolume(preferred.volume / 100);
-        if (actualMuted !== (preferred.muted === true)) player.setMuted(preferred.muted === true);
-        twitchObservedAudioRef.current = { requestId, muted: preferred.muted === true, volume: preferred.volume };
-        return;
-      }
-      if (observed.requestId !== requestId || observed.muted !== actualMuted || Math.abs((Number(observed.volume) || 0) - actualVolume) >= 1) {
-        twitchObservedAudioRef.current = { requestId, muted: actualMuted, volume: actualVolume };
-        updatePlaybackIntent(requestId, { muted: actualMuted, volume: actualVolume }, 'twitch');
-      }
-    };
-    const onReady = () => {
-      if (cancelled || !player) return;
-      const currentIntent = getPlaybackIntentForVideo(requestId, 'twitch');
-      audioRestoreUntil = Date.now() + 2600;
-      player.setVolume(clampPlayerVolume(currentIntent.volume) / 100);
-      player.setMuted(currentIntent.muted === true);
-      const restoredTime = playbackPositionRef.current.videoId === requestId
-        ? Number(playbackPositionRef.current.seconds) || 0
-        : 0;
-      const desiredStart = restoredTime > playback.vodOffset + 0.5 ? restoredTime : playback.vodOffset;
-      player.seek(desiredStart);
-      twitchObservedAudioRef.current = {
-        requestId,
-        muted: currentIntent.muted === true,
-        volume: clampPlayerVolume(currentIntent.volume),
-      };
-      setTwitchPlayerReadyId(requestId);
-      if (currentIntent.paused || document.visibilityState === 'hidden') player.pause();
-      else player.play();
-      reportPlayerDuration(requestId, playback.durationSec);
-      pollTimer = window.setInterval(() => {
-        if (cancelled || !player || String(currentVideoRef.current?.id || '') !== requestId) return;
-        let currentTime = Number(player.getCurrentTime?.());
-        if (!Number.isFinite(currentTime) || currentTime < 0) return;
-        if (currentTime < playback.vodOffset - 0.5) {
-          player.seek(playback.vodOffset);
-          currentTime = playback.vodOffset;
-        }
-        recordPlaybackPosition(requestId, currentTime);
-        const elapsed = Math.max(0, currentTime - playback.vodOffset);
-        setSimProgress(Math.min(100, Math.max(0, (elapsed / playback.durationSec) * 100)));
-        syncAudioFromPlayer();
-        const clipEnd = playback.vodOffset + playback.durationSec;
-        if (!endedHandled && !player.isPaused?.() && currentTime >= clipEnd - 0.3) {
-          endedHandled = true;
-          player.pause();
-          handleMediaEndedRef.current?.(requestId);
-        }
-      }, 350);
-    };
-    const onPlay = () => {
-      if (cancelled) return;
-      setTwitchNeedsGestureId('');
-      const guard = playbackRestoreGuardRef.current;
-      const isUnexpectedResume = getPlaybackIntentForVideo(requestId, 'twitch').paused &&
-        guard.videoId === requestId && Date.now() < guard.until && guard.paused;
-      if (isUnexpectedResume) {
-        player?.pause();
-        playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
-        return;
-      }
-      if (document.visibilityState !== 'hidden') {
-        updatePlaybackIntent(requestId, { paused: false }, 'twitch');
-        keyboardPausedRef.current = { videoId: requestId, paused: false };
-      }
-    };
-    const onPause = () => {
-      if (document.visibilityState !== 'hidden' && !endedHandled) {
-        updatePlaybackIntent(requestId, { paused: true }, 'twitch');
-        keyboardPausedRef.current = { videoId: requestId, paused: true };
-      }
-    };
-    const onBlocked = () => {
-      if (!cancelled && !getPlaybackIntentForVideo(requestId, 'twitch').paused) {
-        setTwitchNeedsGestureId(requestId);
-      }
-    };
-    const onEnded = () => {
-      if (!endedHandled && String(currentVideoRef.current?.id || '') === requestId) {
-        endedHandled = true;
-        handleMediaEndedRef.current?.(requestId);
-      }
-    };
-    const createPlayer = () => {
-      const TwitchPlayer = window.Twitch?.Player;
-      if (!TwitchPlayer || cancelled) return false;
-      try {
-        mount.id = 'twitch-player-' + requestId.replace(/[^a-zA-Z0-9_-]/g, '-');
-        player = new TwitchPlayer(mount.id, {
-          width: '100%',
-          height: '100%',
-          video: 'v' + playback.videoId,
-          time: formatTwitchPlayerTime(startAt),
-          parent: [window.location.hostname],
-          autoplay: !intent.paused,
-          muted: intent.muted === true,
-        });
-        twitchPlayerRef.current = player;
-        player.addEventListener(TwitchPlayer.READY, onReady);
-        player.addEventListener(TwitchPlayer.PLAY, onPlay);
-        player.addEventListener(TwitchPlayer.PAUSE, onPause);
-        player.addEventListener(TwitchPlayer.PLAYBACK_BLOCKED, onBlocked);
-        player.addEventListener(TwitchPlayer.ENDED, onEnded);
-        return true;
-      } catch (error) {
-        console.warn('Twitch interactive VOD player could not be created.', error);
-        setNativeFallback();
-        return true;
-      }
-    };
-    if (!window.Twitch?.Player) {
-      let script = document.querySelector('script[data-twitch-embed-api="true"]');
-      if (!script) {
-        script = document.createElement('script');
-        script.src = apiScriptUrl;
-        script.async = true;
-        script.dataset.twitchEmbedApi = 'true';
-        document.head.appendChild(script);
-      }
-    }
-    if (!createPlayer()) {
-      scriptTimer = window.setInterval(() => {
-        scriptAttempts += 1;
-        if (createPlayer()) {
-          window.clearInterval(scriptTimer);
-          scriptTimer = 0;
-        } else if (scriptAttempts >= 120) {
-          window.clearInterval(scriptTimer);
-          scriptTimer = 0;
-          setNativeFallback();
-        }
-      }, 100);
-    }
-    return () => {
-      cancelled = true;
-      if (scriptTimer) window.clearInterval(scriptTimer);
-      if (pollTimer) window.clearInterval(pollTimer);
-      if (player) {
-        try { player.pause?.(); } catch { /* The embed can be torn down while unavailable. */ }
-        try { player.removeEventListener?.(window.Twitch?.Player?.READY, onReady); } catch { /* Optional API method. */ }
-        try { player.removeEventListener?.(window.Twitch?.Player?.PLAY, onPlay); } catch { /* Optional API method. */ }
-        try { player.removeEventListener?.(window.Twitch?.Player?.PAUSE, onPause); } catch { /* Optional API method. */ }
-        try { player.removeEventListener?.(window.Twitch?.Player?.PLAYBACK_BLOCKED, onBlocked); } catch { /* Optional API method. */ }
-        try { player.removeEventListener?.(window.Twitch?.Player?.ENDED, onEnded); } catch { /* Optional API method. */ }
-        try { player.destroy?.(); } catch { /* Older embed builds have no destroy method. */ }
-      }
-      if (twitchPlayerRef.current === player) twitchPlayerRef.current = null;
-      if (mount.isConnected) mount.replaceChildren();
-    };
-  }, [currentVideo?.id, currentVideo?.platform, twitchClipPlayback.requestId, twitchClipPlayback.status, twitchClipPlayback.videoId, twitchClipPlayback.vodOffset, twitchClipPlayback.durationSec]);
-
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
-  // window reference and listener. Its first muted report can be an autoplay/browser state,
-  // not a user's preference, so do not persist it until startup unmute is acknowledged.
+  // window reference, listener, and startup timeout; stale messages from the previous iframe
   useEffect(() => {
     const video = currentVideo;
     if (!video || video.platform !== 'tiktok' || !video.videoId) return undefined;
     let cancelled = false;
-    let startupUnmuteAttempts = 0;
-    let startupAudioConfirmed = false;
-    let startupMuteGuardUntil = 0;
     const retryTimers = [];
     const getWindow = () => tiktokIframeRef.current?.contentWindow;
-    const initialIntent = getPlaybackIntentForVideo(video.id, 'tiktok');
-    setTiktokNeedsGestureId('');
-    startupAudioConfirmed = initialIntent.muted === true;
-    tiktokMutePreferenceRef.current = {
-      requestId: video.id,
-      preference: initialIntent.muted === true ? 'muted' : initialIntent.muted === false ? 'unmuted' : 'auto',
-    };
-    tiktokAudioStateRef.current = {
-      requestId: video.id,
-      muted: typeof initialIntent.muted === 'boolean' ? initialIntent.muted : null,
-    };
-    const sendCommand = (type, targetWindow = getWindow(), value = null) => {
+    const sendCommand = (type, targetWindow = getWindow()) => {
       if (!cancelled && targetWindow && targetWindow === getWindow()) {
-        postTikTokPlayerCommand(targetWindow, type, value);
+        targetWindow.postMessage({ type, value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
       }
-    };
-    const requestStartupUnmute = () => {
-      const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
-      const preference = tiktokMutePreferenceRef.current.requestId === video.id
-        ? tiktokMutePreferenceRef.current.preference
-        : 'auto';
-      if (!shouldAutoUnmuteTikTok({ mutedIntent: intent.muted, mutePreference: preference })) return false;
-      if (intent.paused || document.visibilityState === 'hidden' || startupUnmuteAttempts >= 3) return false;
-      startupUnmuteAttempts += 1;
-      if (!startupAudioConfirmed) startupMuteGuardUntil = Date.now() + 3500;
-      sendCommand('unMute');
-      // Record intended audio separately from transient onMute autoplay reports.
-      updatePlaybackIntent(video.id, { muted: false }, 'tiktok');
-      return true;
     };
     const handleTikTokMessage = (event) => {
       if (event.origin !== 'https://www.tiktok.com' || event.source !== getWindow()) return;
@@ -4136,95 +1805,27 @@ function YediHubAppContent() {
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
-        // A recreated iframe must restore playback position and audio preference.
-        const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
-        const pending = pendingPlaybackRestoreRef.current;
-        const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
-        const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
-          ? pending.currentTime
-          : known;
-        const deferPlaybackUntilVisible = document.visibilityState === 'hidden';
-        if (intent.paused || deferPlaybackUntilVisible) sendCommand('pause');
-        if (restoreSeconds > 0.5) sendCommand('seekTo', tiktokIframeRef.current?.contentWindow, restoreSeconds);
-        if (!intent.paused && !deferPlaybackUntilVisible) sendCommand('play');
-        if (intent.muted === true) {
-          startupAudioConfirmed = true;
-          startupMuteGuardUntil = 0;
-          tiktokAudioStateRef.current = { requestId: video.id, muted: true };
-          sendCommand('mute');
-        } else {
-          requestStartupUnmute();
-          // TikTok can finish constructing its media element after onPlayerReady.
-          // Retry unMute briefly after startup without changing the iframe URL.
-          [350, 1100].forEach((delay) => {
-            retryTimers.push(window.setTimeout(() => {
-              if (!cancelled && !startupAudioConfirmed) requestStartupUnmute();
-            }, delay));
-          });
-        }
-      } else if (data.type === 'onMute' && typeof data.value === 'boolean') {
-        const explicitPreference = tiktokMutePreferenceRef.current.requestId === video.id
-          ? tiktokMutePreferenceRef.current.preference
-          : 'auto';
-        const ignoreStartupMute = shouldIgnoreTikTokStartupMute({
-          muted: data.value,
-          startupMuteGuardActive: !startupAudioConfirmed &&
-            (startupMuteGuardUntil === 0 || Date.now() < startupMuteGuardUntil),
-          startupAudioConfirmed,
-          explicitMutePreference: explicitPreference,
+        const playerWindow = getWindow();
+        sendCommand('play', playerWindow);
+        sendCommand('unMute', playerWindow);
+        [250, 800].forEach((delay) => {
+          retryTimers.push(window.setTimeout(() => {
+            if (!cancelled && getWindow() === playerWindow) {
+              sendCommand('unMute', playerWindow);
+              if (delay === 800) sendCommand('play', playerWindow);
+            }
+          }, delay));
         });
-        tiktokAudioStateRef.current = { requestId: video.id, muted: data.value };
-        if (data.value === false) {
-          startupAudioConfirmed = true;
-          startupMuteGuardUntil = 0;
-        }
-        if (ignoreStartupMute) return;
-        updatePlaybackIntent(video.id, { muted: data.value }, 'tiktok');
-        tiktokMutePreferenceRef.current = {
-          requestId: video.id,
-          preference: data.value ? 'muted' : 'unmuted',
-        };
-      } else if (data.type === 'onVolumeChange' && Number.isFinite(Number(data.value))) {
-        updatePlaybackIntent(video.id, { volume: clampPlayerVolume(data.value) }, 'tiktok');
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
-        if (currentVideoRef.current?.id === video.id) recordPlaybackPosition(video.id, currentTime);
-        if (duration > 0) {
-          if (currentVideoRef.current?.id === video.id) {
-            playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
-            reportPlayerDuration(video.id, duration);
-          }
-          setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
-        }
+        if (duration > 0) setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
-        const videoId = String(video.id);
-        const intent = getPlaybackIntentForVideo(videoId, 'tiktok');
-        const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = state === 1 && intent.paused &&
-          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
-        if (state === 2) {
-          if (document.visibilityState !== 'hidden') {
-            updatePlaybackIntent(videoId, { paused: true }, 'tiktok');
-            keyboardPausedRef.current = { videoId, paused: true };
-          }
-        } else if (state === 1 && suppressUnexpectedResume) {
-          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
-          sendCommand('pause');
-        } else if (state === 1) {
-          setTiktokNeedsGestureId('');
-          updatePlaybackIntent(videoId, { paused: false }, 'tiktok');
-          keyboardPausedRef.current = { videoId, paused: false };
-        }
-        // Retry host unmute once playback actually starts; only an explicit mute choice wins.
-        if (state === 1 && !suppressUnexpectedResume && !startupAudioConfirmed) {
-          requestStartupUnmute();
-        }
+        if (state === 1) sendCommand('unMute');
         if (state === 0) handleMediaEndedRef.current?.(video.id);
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
-        if (/autoplay|3002/i.test(String(errorType))) setTiktokNeedsGestureId(String(video.id));
         addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
       }
     };
@@ -4260,59 +1861,14 @@ function YediHubAppContent() {
     addToast(`Saved "${video.title.slice(0, 24)}..." to Watch Later list.`, 'info');
   };
 
-  const handleRequeue = async (video) => {
-    // History replays must be saved to the *shared* queue before reporting
-    // success. An optimistic local-only status change gets overwritten on the
-    // next Firestore snapshot and looks like the video disappeared instantly.
-    if (!isModerator || !video?.id) return false;
-    const id = String(video.id);
-    if (historyRequeueInFlightRef.current.has(id)) return false;
-    const current = (videosRef.current || []).find((item) => String(item.id) === id);
-    if (!current || current.status !== 'watched') {
-      addToast('This video is no longer in History. Refresh the queue to see its current status.', 'warning');
-      return false;
-    }
-    if (!db || !firebaseUser) {
-      addToast('Cannot re-add yet: the shared queue is offline. Reconnect Firebase and retry.', 'warning');
-      return false;
-    }
-    const identity = getMediaIdentityKey(current.platform, current.videoId, current.url);
-    if ((videosRef.current || []).some((item) => String(item.id) !== id &&
-      ['queue', 'playing', 'watch_later'].includes(String(item.status)) &&
-      getMediaIdentityKey(item.platform, item.videoId, item.url) === identity)) {
-      addToast('This video already has an active request. Duplicate replay ignored.', 'warning');
-      return false;
-    }
-    const updates = buildHistoryRequeuePatch(current, getNextQueueOrder(), Date.now());
-    if (!updates) return false;
-    historyRequeueInFlightRef.current.add(id);
-    try {
-      // This transaction also bumps room queueVersion. If another staff session
-      // already moved the item, persistQueuePatches rejects the stale status.
-      await persistQueuePatches(new Map([[id, updates]]), [...videosRef.current], false);
-      const apply = (items) => items.map((item) => {
-        if (String(item.id) !== id) return item;
-        // The Firestore listener (or auto-start) may already have moved the
-        // committed request into 'playing'. Do not downgrade that newer state
-        // back to 'queue' after the transaction promise resolves.
-        return item.status === 'watched' ? { ...item, ...updates } : item;
-      });
-      videosRef.current = apply(videosRef.current);
-      setVideos((previous) => apply(previous));
-      addToast(`Re-added "${String(current.title || 'video').slice(0, 36)}" to the shared queue.`, 'success');
-      return true;
-    } catch (error) {
-      console.warn('History re-queue could not commit to the shared queue:', error);
-      const stale = String(error?.message || '').includes('QUEUE_VERSION_CONFLICT');
-      addToast(stale
-        ? 'History changed on another dashboard. Refresh and retry this request.'
-        : 'Could not save the replay to the shared queue. No change was made.', 'warning');
-      setCloudSynced(false);
-      setSyncStatusText('History re-queue could not be confirmed');
-      return false;
-    } finally {
-      historyRequeueInFlightRef.current.delete(id);
-    }
+  const handleRequeue = (video) => {
+    syncUpdateVideo(video.id, {
+      status: 'queue',
+      queueOrder: getNextQueueOrder(),
+      timestamp: Date.now(),
+      addedAt: 'Re-queued'
+    });
+    addToast(`Re-added "${video.title.slice(0, 24)}..." to active queue.`, 'info');
   };
 
   const handleTogglePin = (video) => {
@@ -4328,7 +1884,7 @@ function YediHubAppContent() {
   };
 
   const handleCategoryChange = (videoId, newCategory) => {
-    syncUpdateVideo(videoId, { category: newCategory, categoryManuallySet: true, mediaType: newCategory === 'Music' ? 'Music' : 'Non-Music' });
+    syncUpdateVideo(videoId, { category: newCategory });
     addToast(`Category updated to "${newCategory}"`, 'success');
   };
 
@@ -4360,24 +1916,7 @@ function YediHubAppContent() {
     voteAttemptsRef.current.add(voteKey);
     reorderQueueAfterVoteRef.current = true;
     setVotedIds((prev) => ({ ...prev, [voteKey]: true }));
-    const voteResult = await syncIncrementUpvote(videoId, voterLogin);
-    if (!voteResult?.ok) {
-      voteAttemptsRef.current.delete(voteKey);
-      reorderQueueAfterVoteRef.current = false;
-      setVotedIds((prev) => {
-        const next = { ...prev };
-        delete next[voteKey];
-        return next;
-      });
-      const message = voteResult?.reason === 'already-voted'
-        ? 'You already upvoted this video. You can vote on other videos.'
-        : voteResult?.reason === 'own-request'
-          ? 'You cannot upvote your own request.'
-          : 'That video is no longer waiting in the queue.';
-      addToast(message, 'info');
-      return { ...voteResult, video: target };
-    }
-    recordActivity('vote_cast', target, { actor: voterLogin, source: 'twitch-chat-or-dashboard' });
+    await syncIncrementUpvote(videoId, voterLogin);
     addToast(`+1 vote for "${target.title.slice(0, 28)}" — queue priority updated.`, 'success');
     return { ok: true, video: target };
   };
@@ -4403,7 +1942,7 @@ function YediHubAppContent() {
         lastChatReplyAtRef.current = Date.now();
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));
-          console.warn('whale cum could not reply in Twitch chat:', result.error || response.statusText);
+          console.warn('Yedi Hub could not reply in Twitch chat:', result.error || response.statusText);
           if (!reauthNoticeShownRef.current && (response.status === 401 || response.status === 403)) {
             reauthNoticeShownRef.current = true;
             addToast(result.error || 'Chat replies need the separate @gachibot69 bot session. Use Connect Bot in the header and authorize that account.', 'warning');
@@ -4420,16 +1959,14 @@ function YediHubAppContent() {
     const queue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const target = queue[position - 1];
     if (!target) {
-      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !when to see your requests.`);
+      sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin) || 'viewer'} there is no queued video at #${position}. Use !position to see your requests.`);
       return;
     }
     handleUpvote(target.id, voterLogin).then((result) => {
       if (!result?.ok && result?.reason === 'own-request') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Can't upvote your own request.`);
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you cannot upvote your own request.`);
       } else if (!result?.ok && result?.reason === 'already-voted') {
-        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} Already voted for that video.`);
-      } else if (result?.ok) {
-        sendTwitchChatReply('@' + normalizeTwitchLogin(voterLogin) + ' +1 vote: ' + String(result.video?.title || 'video').slice(0, 38) + '.');
+        sendTwitchChatReply(`@${normalizeTwitchLogin(voterLogin)} you already voted for that video. You can upvote different videos.`);
       }
     });
   };
@@ -4452,13 +1989,8 @@ function YediHubAppContent() {
     if (playing && owned(playing)) messages.push('one request is playing now');
 
     let secondsAhead = 0;
-    let hasFallbackBeforeQueue = false;
     if (playing) {
-      const knownPlaybackDuration = playbackDurationRef.current.videoId === String(playing.id)
-        ? Number(playbackDurationRef.current.seconds) : 0;
-      const durationEstimate = getDurationEstimate(playing);
-      const duration = knownPlaybackDuration > 0 ? knownPlaybackDuration : durationEstimate.seconds;
-      if (!(knownPlaybackDuration > 0) && durationEstimate.estimated) hasFallbackBeforeQueue = true;
+      const duration = estimateVideoDurationSeconds(playing);
       const progress = currentVideo?.id === playing.id && (playing.platform === 'youtube' || playing.platform === 'tiktok')
         ? Math.max(0, Math.min(100, Number(simProgress) || 0))
         : 0;
@@ -4466,25 +1998,23 @@ function YediHubAppContent() {
     }
     let queuedDurationBefore = 0;
     const etaById = new Map();
-    const etaFallbackById = new Map();
-    queued.forEach((video) => {
+    queued.forEach((video, index) => {
       etaById.set(video.id, secondsAhead + queuedDurationBefore);
-      etaFallbackById.set(video.id, hasFallbackBeforeQueue);
-      const estimate = getDurationEstimate(video);
-      queuedDurationBefore += estimate.seconds;
-      if (estimate.estimated) hasFallbackBeforeQueue = true;
+      queuedDurationBefore += estimateVideoDurationSeconds(video);
     });
 
     myQueued.forEach(({ video, position }) => {
-      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))})`);
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (est. ${formatQueueWait(etaById.get(video.id))})`);
     });
 
     if (!messages.length) {
-      sendTwitchChatReply(`@${requester} No upcoming requests. Use !assr <URL/title>.`);
+      sendTwitchChatReply(`@${requester} I couldn't find an upcoming request from you. Submit with !assr <URL>, then use !position again.`);
       return;
     }
     const visibleItems = messages.slice(0, 3);
-    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}.`);
+    const extraCount = Math.max(0, messages.length - visibleItems.length);
+    const extraNote = extraCount > 0 ? `; plus ${extraCount} more status item${extraCount === 1 ? '' : 's'}` : '';
+    sendTwitchChatReply(`@${requester} ${visibleItems.join('; ')}${extraNote}. Waits are estimates and votes can change positions.`);
   };
   handleQueuePositionRef.current = handleQueuePositionCommand;
 
@@ -4495,12 +2025,12 @@ function YediHubAppContent() {
       .filter((video) => video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === requester)
       .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
     if (!ownedWaiting.length) {
-      sendTwitchChatReply(`@${requester} No waiting request to remove.`);
+      sendTwitchChatReply(`@${requester} you have no waiting requests to remove. Playing/already-played videos cannot be removed with !remove.`);
       return;
     }
     const target = ownedWaiting[0];
     void syncDeleteVideo(target.id);
-    sendTwitchChatReply(`@${requester} Removed your latest waiting request.`);
+    sendTwitchChatReply(`@${requester} removed "${String(target.title || 'your request').slice(0, 70)}" from the queue.`);
   };
   handleRemoveOwnRequestRef.current = handleRemoveOwnRequest;
 
@@ -4508,12 +2038,12 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(requesterLogin);
     const playing = videos.find((video) => video.status === 'playing') || null;
     const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const top = queued.slice(0, 3).map((video, index) =>
-      '#' + (index + 1) + ' ' + String(video.title || 'Untitled').slice(0, 26)
+    const top = queued.slice(0, 5).map((video, index) =>
+      `#${index + 1} ${String(video.title || 'Untitled').slice(0, 35)} (@${normalizeTwitchLogin(video.requestedBy) || 'viewer'}, +${Number(video.upvotes) || 0})`
     );
     const myCount = queued.filter((video) => normalizeTwitchLogin(video.requestedBy) === requester).length;
-    const playingText = playing ? 'Now: "' + String(playing.title || 'Untitled').slice(0, 32) + '"' : 'Nothing playing';
-    sendTwitchChatReply('@' + requester + ' ' + playingText + ' | ' + queued.length + ' waiting (' + myCount + ' yours). Next: ' + (top.length ? top.join(', ') : 'empty') + '.');
+    const playingText = playing ? `Now playing: "${String(playing.title || 'Untitled').slice(0, 45)}".` : 'Nothing is playing right now.';
+    sendTwitchChatReply(`${playingText} Queue: ${queued.length} waiting; ${myCount} of yours waiting. ${top.length ? 'Next up: ' + top.join(' | ') + (queued.length > top.length ? ` | +${queued.length - top.length} more` : '') : 'The waiting queue is empty.'}`);
   };
   handleQueueSummaryRef.current = handleQueueSummary;
 
@@ -4543,67 +2073,31 @@ function YediHubAppContent() {
     });
     queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
     setSortBy('priority');
-    videosRef.current = nextVideos;
     setVideos(nextVideos);
 
     if (db && firebaseUser) {
       void (async () => {
-        void persistQueuePatches(updates.map((video) => ({ id: String(video.id), queueOrder: video.queueOrder })), videos, true)
-          .catch((error) => {
-            console.warn('Versioned queue reorder did not commit.', error);
+        const batch = writeBatch(db);
+        updates.forEach((video) => {
+          const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id));
+          batch.set(itemRef, { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) }, { merge: true });
+        });
+        try {
+          await batch.commit();
+        } catch (error) {
+          console.warn('Atomic queue reorder failed; attempting a merge-write fallback.', error);
+          try {
+            await Promise.all(updates.map((video) => setDoc(
+              doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(video.id)),
+              { id: String(video.id), queueOrder: video.queueOrder, channelRoom: normalizeRoomName(channelRoom) },
+              { merge: true }
+            )));
+          } catch (fallbackError) {
+            console.warn('Queue order could not sync to Firebase; the order remains stored locally.', fallbackError);
             setCloudSynced(false);
-            setSyncStatusText(String(error?.message || '').includes('QUEUE_VERSION_CONFLICT')
-              ? 'Queue changed in another session — refreshing before the next reorder'
-              : 'Queue order saved locally — cloud update failed');
-            if ((Number(queueVersionRef.current) || 0) === (Number(error?.currentVersion) || 0)) {
-              videosRef.current = videos;
-              setVideos(videos);
-            } else {
-              setVideos([...(videosRef.current || videos)]);
-            }
-          });
-      })();
-    }
-  };
-
-  const handleDropReorder = (movingId, targetId) => {
-    if (!isStaff || activeTab !== 'queue' || !movingId || !targetId || String(movingId) === String(targetId)) return;
-    const fullQueue = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
-    const fromIndex = fullQueue.findIndex((video) => String(video.id) === String(movingId));
-    const targetIndexBeforeRemoval = fullQueue.findIndex((video) => String(video.id) === String(targetId));
-    if (fromIndex < 0 || targetIndexBeforeRemoval < 0 || fromIndex === targetIndexBeforeRemoval) return;
-
-    const [movingVideo] = fullQueue.splice(fromIndex, 1);
-    const targetIndex = fullQueue.findIndex((video) => String(video.id) === String(targetId));
-    if (targetIndex < 0) return;
-    fullQueue.splice(targetIndex, 0, movingVideo);
-
-    const updates = fullQueue.map((video, position) => ({ ...video, queueOrder: (position + 1) * 1000 }));
-    const orderById = new Map(updates.map((video) => [String(video.id), video.queueOrder]));
-    const nextVideos = videos.map((video) => {
-      const nextOrder = orderById.get(String(video.id));
-      return nextOrder === undefined ? video : { ...video, queueOrder: nextOrder };
-    });
-    queueOrderSequenceRef.current = Math.max(queueOrderSequenceRef.current, Date.now());
-    setSortBy('priority');
-    setVideos(nextVideos);
-
-    if (db && firebaseUser) {
-      void (async () => {
-        void persistQueuePatches(updates.map((video) => ({ id: String(video.id), queueOrder: video.queueOrder })), videos, true)
-          .catch((error) => {
-            console.warn('Versioned drag-and-drop reorder did not commit.', error);
-            setCloudSynced(false);
-            setSyncStatusText(String(error?.message || '').includes('QUEUE_VERSION_CONFLICT')
-              ? 'Queue changed in another session — refreshing before the next reorder'
-              : 'Queue order saved locally — cloud update failed');
-            if ((Number(queueVersionRef.current) || 0) === (Number(error?.currentVersion) || 0)) {
-              videosRef.current = videos;
-              setVideos(videos);
-            } else {
-              setVideos([...(videosRef.current || videos)]);
-            }
-          });
+            setSyncStatusText('Queue order saved locally — cloud update failed');
+          }
+        }
       })();
     }
   };
@@ -4619,7 +2113,7 @@ function YediHubAppContent() {
     return (
       <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 text-center shadow-2xl">
-          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">WHALE CUM</h1>
+          <div className="text-4xl mb-4">🧼</div><h1 className="text-2xl font-black tracking-tight text-white">Yedi Hub</h1>
           <p className="mt-3 text-sm text-slate-300">Verifying your private Twitch session…</p>
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-purple-500 to-cyan-400" /></div>
         </div>
@@ -4632,7 +2126,7 @@ function YediHubAppContent() {
         <div className="w-full max-w-lg rounded-3xl border border-purple-500/30 bg-[#111522]/95 p-8 sm:p-10 text-center shadow-2xl">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-4xl">🧼</div>
           <div className="text-[10px] font-black uppercase tracking-[0.35em] text-amber-200">Private streamer deck</div>
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">WHALE CUM</h1>
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-white">Yedi Hub</h1>
           <p className="mt-3 text-sm leading-6 text-slate-300">A private request player for <strong className="text-purple-200">twitch.tv/2o3a</strong>. Sign in using one of the two approved Twitch accounts.</p>
           {loginError === 'unauthorized' ? <div className="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">This Twitch account is not on the access list. No site access was granted.</div> : null}
           {loginError && loginError !== 'unauthorized' ? <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/5 px-4 py-3 text-xs text-amber-100">Twitch login returned an error. Please try again.</div> : null}
@@ -4650,104 +2144,103 @@ function YediHubAppContent() {
 
 
   // ==========================================
+  // RENDER OBS OVERLAY HUD (POP-OUT MODE)
+  // ==========================================
+  if (showObsOverlay) {
+    return (
+      <div className="gachi-theme gachi-overlay fixed inset-0 bg-[#090a0f] text-white p-6 flex flex-col justify-between font-sans select-none overflow-hidden border-4 border-purple-500/30">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 bg-[#18181b]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 shadow-lg">
+            <Radio className="w-4 h-4 text-purple-400 animate-pulse" />
+            <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
+              ♂ GACHI ARENA • OBS DECK • {channelRoom ? `twitch.tv/${channelRoom}` : 'CHANNEL NOT SET'} ♂
+            </span>
+          </div>
+          <button
+            onClick={() => setShowObsOverlay(false)}
+            className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-all"
+          >
+            Exit Overlay View
+          </button>
+        </div>
+
+        {/* Big Now Playing Banner for OBS */}
+        {currentVideo ? (
+          <div className="max-w-2xl bg-[#121622]/95 border border-purple-500/40 rounded-2xl p-5 shadow-2xl backdrop-blur-md flex items-center gap-5">
+            <img
+              src={currentVideo.thumbnail}
+              alt=""
+              className="w-24 h-24 rounded-xl object-cover border border-white/10 shrink-0"
+            />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-600 text-white">
+                  Now Playing
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
+                  {currentVideo.category}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${(currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                  {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
+                </span>
+              </div>
+              <h2 className="text-lg font-black text-white truncate">{currentVideo.title}</h2>
+              <p className="text-xs text-purple-200">
+                Requested by <strong className="text-white">@{currentVideo.requestedBy}</strong> • 🔥 {currentVideo.upvotes || 0} Hypes
+              </p>
+              {/* Progress bar */}
+              <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mt-2">
+                <div
+                  className="bg-gradient-to-r from-purple-500 to-cyan-400 h-full transition-all duration-300"
+                  style={{ width: `${simProgress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-slate-400 text-sm">No active video in stream deck.</div>
+        )}
+
+        {/* Next Up Ticker */}
+        <div className="bg-[#121622]/80 backdrop-blur-md px-4 py-2.5 rounded-xl border border-white/5 flex items-center gap-3 max-w-xl">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">Next Up:</span>
+          {counts.queue > 0 ? (
+            <span className="text-xs text-slate-200 truncate">
+              {videos.filter((v) => v.status === 'queue').sort(compareQueueOrder)[0]?.title || 'Loading next item...'}
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400">Queue is empty. Use !assr &lt;url&gt; in Twitch chat!</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
   // MAIN APP INTERFACE
   // ==========================================
-  const workspaceVisibleOrder = workspaceLayout.order.filter((panelId) => workspaceLayout.visible[panelId]);
-  const playerControlStateMatchesCurrentVideo = Boolean(currentVideo && playerControlState.videoId === String(currentVideo.id));
-  const playerIsPaused = currentVideo
-    ? (playerControlStateMatchesCurrentVideo ? playerControlState.paused : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).paused)
-    : false;
-  const playerIsMuted = currentVideo
-    ? (playerControlStateMatchesCurrentVideo ? playerControlState.muted : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).muted === true)
-    : false;
-  const playerVolume = currentVideo
-    ? clampPlayerVolume(playerControlStateMatchesCurrentVideo ? playerControlState.volume : getPlaybackIntentForVideo(currentVideo.id, currentVideo.platform).volume)
-    : 100;
-  const workspaceHasPlayer = workspaceVisibleOrder.includes('player');
-  const workspaceGridColumns = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).map((panelId) => {
-    if (workspaceVisibleOrder.length === 1 || !workspaceHasPlayer) return 'minmax(0, 1fr)';
-    if (panelId === 'player') return 'minmax(0, 1fr)';
-    return panelId === 'queue' ? 'minmax(320px, 30vw)' : 'minmax(220px, 20vw)';
-  }).join(' ');
-  const workspaceGridAreas = `"${(workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player']).join(' ')}"`;
-  const workspaceMobileAreas = (workspaceVisibleOrder.length ? workspaceVisibleOrder : ['player'])
-    .map((panelId) => `"${panelId}"`).join(' ');
-  const workspaceVisiblePanelCount = workspaceVisibleOrder.length;
-
-  const moveWorkspacePanel = (panelId, destinationIndex) => {
-    setWorkspaceLayout((current) => {
-      const order = [...current.order];
-      const fromIndex = order.indexOf(panelId);
-      if (fromIndex < 0) return current;
-      const [moved] = order.splice(fromIndex, 1);
-      const toIndex = Math.max(0, Math.min(order.length, Number(destinationIndex) || 0));
-      order.splice(toIndex, 0, moved);
-      return { ...current, order };
-    });
-  };
-  const toggleWorkspacePanel = (panelId) => {
-    setWorkspaceLayout((current) => {
-      const visibleCount = WORKSPACE_PANEL_IDS.filter((id) => current.visible[id]).length;
-      if (current.visible[panelId] && visibleCount <= 1) return current;
-      return { ...current, visible: { ...current.visible, [panelId]: !current.visible[panelId] } };
-    });
-  };
-
-  const togglePlayerFullscreen = async () => {
-    const stage = playerStageRef.current;
-    if (!stage) {
-      addToast('The player is not ready for fullscreen yet.', 'warning');
-      return;
-    }
-    try {
-      if (document.fullscreenElement === stage) {
-        await document.exitFullscreen();
-      } else if (typeof stage.requestFullscreen === 'function') {
-        await stage.requestFullscreen();
-      } else {
-        addToast('Fullscreen is not supported by this browser.', 'warning');
-      }
-    } catch (error) {
-      console.warn('Could not enter player fullscreen.', error);
-      addToast('The browser blocked fullscreen. Try the fullscreen button again.', 'warning');
-    }
-  };
-
-  const startYouTubeFromPrompt = () => {
-    const video = currentVideoRef.current || currentVideo;
-    const playerWindow = youtubeIframeRef.current?.contentWindow;
-    if (!video || video.platform !== 'youtube' || !playerWindow) return;
-    const intent = getPlaybackIntentForVideo(video.id, 'youtube');
-    if (intent.muted === true) postYouTubePlayerCommand(playerWindow, 'mute');
-    else postYouTubePlayerCommand(playerWindow, 'unMute');
-    postYouTubePlayerCommand(playerWindow, 'playVideo');
-    setYoutubeNeedsGesture('');
-    updatePlaybackIntent(video.id, { paused: false }, 'youtube');
-    youtubeIframeRef.current?.focus();
-  };
-
   return (
     <div className="gachi-theme min-h-screen bg-[#090a0f] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
       {/* ==========================================
           HEADER: BROADCASTER IDENTITY & SYNC STATUS
           ========================================== */}
       <header className="sticky top-0 z-40 bg-[#0e121a]/95 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-2.5">
-        <div className="gachi-topbar-inner w-full max-w-none mx-auto flex flex-wrap items-center justify-between gap-3">
+        <div className="max-w-[1680px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Channel Room Selector */}
-          <div className="gachi-topbar-brand flex min-w-0 items-center gap-3">
+          <div className="flex items-center gap-3">
             <div className="yedi-soap-logo w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" title="Swedish bathhouse soap">
               <span className="yedi-soap-mark" role="img" aria-label="Bath soap">🧼</span>
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
-                  WHALE CUM
+                  Yedi Hub
                 </span>
                 <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ♂ GACHI MODE ♂
                 </span>
                 <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  ♂ fitta javla fih
+                  🇸🇪 fitta javla fih
                 </span>
               </div>
 
@@ -4760,274 +2253,139 @@ function YediHubAppContent() {
           </div>
 
           {/* Sync & Mode Badges */}
-          <button
-            type="button"
-            onClick={() => { if (isModerator) setConnectionDetailsExpanded((expanded) => !expanded); }}
-            title={isModerator ? 'Show connection details' : 'Request queue status'}
-            aria-label={isModerator ? `Connection details: ${syncStatusText}` : `Requests ${streamSettings.queueOpen ? 'open' : 'closed'}`}
-            aria-expanded={isModerator && connectionDetailsExpanded}
-            className={`gachi-topbar-sync flex min-w-0 items-center gap-2 bg-[#141926] border rounded-xl px-2.5 py-1.5 text-[10px] sm:text-xs ${headerStatusClass} ${isModerator ? 'cursor-pointer' : 'cursor-default'}`}
-          >
-            <span className="flex shrink-0 items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${headerStatusDotClass}`} />
-              <span className="font-semibold whitespace-nowrap">{isModerator ? syncIndicatorLabel : 'Requests'}</span>
+          <div className="hidden xl:flex items-center gap-2.5 bg-[#141926] border border-slate-800 rounded-xl px-3.5 py-1.5 text-xs">
+            <span className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${cloudSynced ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className="text-slate-300 font-medium">{syncStatusText}</span>
             </span>
+
             <span className="text-slate-600">|</span>
-            <span className="whitespace-nowrap text-slate-300">
+
+            <span className="text-slate-400">
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
-            {isModerator && <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />}
-          </button>
+          </div>
 
-
-          {/* All top-bar actions live inside a single compact dropdown. */}
-          <div className="gachi-topbar-menu relative z-50" ref={topMenuRef}>
+          {/* Right Action Tools */}
+          <div className="flex items-center gap-2">
+            {/* Pop-Out OBS Overlay View */}
             <button
-              type="button"
-              onClick={() => setTopMenuOpen((open) => !open)}
-              aria-expanded={topMenuOpen}
-              aria-haspopup="true"
-              aria-controls="whale-cum-top-menu"
-              className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-gradient-to-r from-[#24112f] to-[#11101a] px-3.5 py-2 text-xs font-black text-white shadow-lg shadow-purple-950/20 transition hover:border-purple-400/60 hover:from-[#351447] hover:to-[#171020]"
+              onClick={() => setShowObsOverlay(true)}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-semibold transition-colors"
+              title="OBS Overlay Browser Capture Deck"
             >
-              <Settings className="h-4 w-4 text-purple-300" />
-              <span>Options</span>
-              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${topMenuOpen ? 'rotate-180' : ''}`} />
+              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span>OBS Deck</span>
             </button>
-            {topMenuOpen && (
-              <div id="whale-cum-top-menu" className="absolute right-0 top-full z-[60] mt-2 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-purple-500/25 bg-[#0b0a12] p-2 shadow-2xl shadow-black/70 ring-1 ring-white/5">
-                <div className="border-b border-white/10 px-3 pb-2.5 pt-1">
-                  <div className="text-[9px] font-black uppercase tracking-[0.2em] text-purple-300">Arena options</div>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-bold text-white">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</span>
-                    <span className="shrink-0 rounded-md border border-purple-400/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-black uppercase text-purple-200">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</span>
-                  </div>
-                </div>
-                {isModerator && (
-                  <button type="button" onClick={() => { setTopMenuOpen(false); setShowSettingsModal(true); }} className="mt-2 flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
-                    <Settings className="h-4 w-4 text-cyan-300" />
-                    <span className="flex-1">Moderator controls <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Request queue, automatic playback, and backups</span></span>
-                  </button>
-                )}
-                <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
-                  <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
-                </button>
-                {isModerator && <button type="button" onClick={() => { setTopMenuOpen(false); setShowLayoutCustomizer(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-rose-500/25 hover:bg-rose-500/10">
-                  <Layers className="h-4 w-4 text-rose-300" />
-                  <span className="flex-1">Customize layout <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Reorder or hide panels for this browser</span></span>
-                </button>}
-                {isModerator && (
-                  <>
-                    <div className="my-2 border-t border-white/10" />
-                    <div className="rounded-xl px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
-                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : isCommandBridgeOwner ? 'RECONNECTING' : 'MODERATOR ONLY'}</span>
-                  </div>
-                  <button type="button" disabled={!isCommandBridgeOwner} onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:cursor-not-allowed disabled:opacity-50">
-                    <RefreshCw className="h-3 w-3" /> {isCommandBridgeOwner ? 'Restart command bridge' : 'Moderator browser only'}
-                  </button>
-                </div>
-                <div className="mt-1 rounded-xl px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />Chat reply bot</span>
-                    <span className={chatBotSession.connected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-rose-200'}>{chatBotSession.loading ? 'CHECKING' : chatBotSession.connected ? 'ONLINE' : 'OFFLINE'}</span>
-                  </div>
-                  <button type="button" onClick={async () => {
-                    setTopMenuOpen(false);
-                    if (!chatBotSession.connected) { window.location.href = '/api/twitch/bot-login'; return; }
-                    try {
-                      await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
-                      setChatBotSession({ loading: false, connected: false, username: '' });
-                      addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
-                    } catch (error) { addToast('Could not disconnect the chat bot. Please try again.', 'warning'); }
-                  }} className={`mt-2 flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold transition ${chatBotSession.connected ? 'border-slate-700 bg-[#171420] text-slate-200 hover:border-rose-400/40 hover:text-rose-200' : 'border-cyan-500/40 bg-cyan-800/60 text-white hover:bg-cyan-700'}`} title={chatBotSession.connected ? 'Disconnect chat reply account @gachibot69' : 'Connect chat reply account @gachibot69'}>
-                    {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
-                    {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
-                  </button>
-                </div>
-                    <div className="my-2 border-t border-white/10" />
-                  </>
-                )}
-                <button type="button" onClick={() => {
-                  setTopMenuOpen(false);
-                  if (!normalizeRoomName(channelRoom)) { addToast('Set a Twitch channel before copying a room link.', 'warning'); return; }
-                  const shareUrl = new URL(window.location.href);
-                  shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
-                  navigator.clipboard.writeText(shareUrl.toString())
-                    .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
-                    .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
-                }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
-                  <Copy className="h-4 w-4 text-purple-300" />
-                  <span className="flex-1">Copy room link <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Share this broadcaster room</span></span>
-                </button>
-              </div>
+
+            {/* Queue settings: keep the close/open switch one click away for staff. */}
+            {isStaff && (
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold transition-colors"
+                title="Queue settings — close or reopen requests and configure playback"
+              >
+                <Settings className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Settings</span>
+              </button>
             )}
+
+            {/* User Profile / Login Modal Trigger */}
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="flex items-center gap-2 pl-2 pr-3 py-1 rounded-xl bg-[#141926] hover:bg-slate-800 border border-slate-800 transition-colors"
+            >
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center text-xs font-bold text-white">
+                {twitchAuth.avatarLetter}
+              </div>
+              <div className="text-left hidden sm:block">
+                <div className="text-xs font-bold text-slate-200 leading-none">{twitchAuthLoading ? 'Checking Twitch…' : twitchAuth.displayName}</div>
+                <div className="text-[10px] text-purple-400 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</div>
+              </div>
+            </button>
+
+            {/* Twitch IRC bridge controls only — no chat transcript is shown on the site. */}
+            <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${ircConnected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              {ircConnected ? 'Bridge Live' : 'Bridge Reconnecting'}
+            </div>
+            <button
+              onClick={() => connectTwitchIrc(channelRoom)}
+              className="px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
+              title="Restart Twitch command bridge"
+            >
+              Restart Bridge
+            </button>
+            <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wide ${chatBotSession.connected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-200'}`} title="Chat replies such as !position are sent by the separate Twitch account gachibot69">
+              <span className={`h-1.5 w-1.5 rounded-full ${chatBotSession.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+              {chatBotSession.loading ? 'Bot checking' : chatBotSession.connected ? 'Bot Online' : 'Bot Offline'}
+            </div>
+            <button
+              onClick={async () => {
+                if (!chatBotSession.connected) {
+                  window.location.href = '/api/twitch/bot-login';
+                  return;
+                }
+                try {
+                  await fetch('/api/twitch/bot-logout', { method: 'POST', credentials: 'same-origin' });
+                  setChatBotSession({ loading: false, connected: false, username: '' });
+                  addToast('Disconnected Twitch chat bot @gachibot69.', 'info');
+                } catch (error) {
+                  addToast('Could not disconnect the chat bot. Please try again.', 'warning');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-bold ${chatBotSession.connected ? 'bg-[#141926] hover:bg-slate-800 text-slate-200 border-slate-800' : 'bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500/40'}`}
+              title={chatBotSession.connected ? 'Disconnect the separate chat reply account' : 'Log in with Twitch account gachibot69 to send chat replies'}
+            >
+              {chatBotSession.loading ? 'Checking Bot…' : chatBotSession.connected ? 'Disconnect Bot' : 'Connect @gachibot69'}
+            </button>
+            <button
+              onClick={() => {
+                if (!normalizeRoomName(channelRoom)) {
+                  addToast('Set a Twitch channel before copying a room link.', 'warning');
+                  return;
+                }
+                const shareUrl = new URL(window.location.href);
+                shareUrl.searchParams.set('channel', normalizeRoomName(channelRoom));
+                navigator.clipboard.writeText(shareUrl.toString())
+                  .then(() => addToast('Channel link copied. It opens this room and restores its cloud settings.', 'success'))
+                  .catch(() => addToast(`Share this room URL: ${shareUrl.toString()}`, 'info'));
+              }}
+              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141926] hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] font-bold"
+              title="Copy link for this broadcaster room"
+            >
+              <Copy className="w-3 h-3" />
+              Room Link
+            </button>
           </div>
         </div>
-
-        {isModerator && connectionDetailsExpanded && (
-          <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-5">
-            <div className="min-w-0">
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
-              <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
-            </div>
-            <div className="min-w-0">
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud chat intake</div>
-              <div className={cloudChatListener.active ? 'text-emerald-300' : cloudChatListener.status === 'error' || cloudChatListener.status === 'unavailable' ? 'text-rose-200' : 'text-amber-200'}>
-                {cloudChatListener.message}
-              </div>
-              {!cloudChatListener.active && isModerator && ['staff_scope_missing', 'staff_reauth_required'].includes(cloudChatListener.code) ? (
-                <a href="/api/twitch/login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Reconnect moderator for cloud chat</a>
-              ) : null}
-              {!cloudChatListener.active && isModerator && ['bot_scope_missing', 'bot_reauth_required'].includes(cloudChatListener.code) ? (
-                <a href="/api/twitch/bot-login" className="mt-1 inline-block font-bold text-purple-200 underline underline-offset-2">Reconnect @gachibot69</a>
-              ) : null}
-            </div>
-            <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Authenticated Twitch WebSocket connected' : isCommandBridgeOwner && !chatBotSession.connected ? 'Connect @gachibot69 to enable moderator chat intake' : isCommandBridgeOwner ? 'Connecting authenticated chat…' : 'Moderator browser only'}</div>
-              <div className="mt-1 break-words text-[9px] text-slate-400">
-                Bridge: {chatBridgeHealth.status}{chatBridgeHealth.code ? ' · ' + chatBridgeHealth.code : ''}
-              </div>
-              <div className="mt-1 break-words text-[9px] text-slate-400">Last chat message: {formatTechnicalTimestamp(chatBridgeHealth.lastMessageAt)}</div>
-              <div className="mt-1 break-words text-[9px] text-slate-400">
-                Last chat request: {formatTechnicalTimestamp(chatBridgeHealth.lastRequestAt)}
-                {chatBridgeHealth.lastRequestResult ? ' · ' + chatBridgeHealth.lastRequestResult.replaceAll('_', ' ') : ''}
-              </div>
-              {isModerator && (
-                <div className="mt-1 break-words text-[9px] text-slate-400">
-                  Latest chat classification: {String(chatBridgeHealth.lastMessageKind || 'none').replaceAll('_', ' ')}
-                </div>
-              )}
-              {isModerator && chatBridgeHealth.lastMessageAt > 0 && !chatBridgeHealth.lastRequestAt && (
-                <div className="mt-1 text-[9px] text-amber-200">
-                  Twitch may be holding normal viewers' links. Moderator: permit supported video domains in Mod View, or have viewers send !assr followed by the 11-character YouTube video ID (no URL).
-                  <a className="ml-1 font-bold underline underline-offset-2 text-cyan-200" href="https://www.twitch.tv/moderator/2o3a" target="_blank" rel="noreferrer">Open 2o3a Mod View</a>
-                </div>
-              )}
-              {!chatBotSession.connected && <a href="/api/twitch/bot-login" className="mt-1 inline-block text-[10px] font-bold text-cyan-200 underline underline-offset-2">Connect @gachibot69 to receive chat requests</a>}
-            </div>
-            <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
-              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69' : 'Offline · chat replies unavailable'}</div>
-            </div>
-            <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
-              <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'}</div>
-            </div>
-          </div>
-        )}
-
-        {twitchAuth.authenticated && normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete' && (
-          <section className="mt-2 w-full rounded-xl border border-cyan-500/25 bg-[#070c14] p-3 sm:p-4" aria-label="Moderator technical diagnostics">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-cyan-300" />
-                <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">Technical diagnostics</h3>
-              </div>
-              <span className="rounded-md border border-cyan-500/20 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-cyan-200/80">Moderator view · read only · refreshes every 2m</span>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <div className="min-w-0">
-                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firebase auth / sync</div>
-                <div className={cloudSynced ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>{firebaseLoginToken ? (cloudSynced ? 'Custom token issued · Firestore listener connected' : syncStatusText) : syncStatusText}</div>
-              </div>
-              <div className="min-w-0">
-                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Twitch EventSub subscription</div>
-                <div className={cloudChatListener.active ? 'mt-1 break-words text-[11px] font-bold text-emerald-300' : 'mt-1 break-words text-[11px] font-bold text-amber-200'}>
-                  {cloudChatListener.subscriptionStatus || cloudChatListener.status || 'Checking'}{cloudChatListener.active ? (hasVerifiedCloudChatIntake(cloudChatListener) ? ' · intake verified' : ' · awaiting delivery') : ' · intake not verified'}
-                </div>
-                <div className="mt-1 break-words text-[10px] text-slate-500">Latest webhook: {formatTechnicalTimestamp(cloudChatListener.lastWebhookAt)}</div>
-                <div className="mt-1 break-words text-[10px] text-slate-500">Webhook persistence: {cloudChatListener.lastWebhookStatus || 'unknown'}</div>
-              </div>
-              <div className="min-w-0">
-                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Firestore writes</div>
-                <div className={cloudChatListener.firestoreStatus === 'unavailable' ? 'mt-1 text-[11px] font-bold text-rose-200' : cloudChatListener.lastWriteStatus === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : 'mt-1 text-[11px] font-bold text-amber-200'}>{cloudChatListener.firestoreStatus === 'unavailable' ? 'unavailable' : cloudChatListener.lastWriteStatus || 'unknown'}</div>
-                <div className="mt-1 break-words text-[10px] text-slate-500">Last successful queue write: {formatTechnicalTimestamp(cloudChatListener.lastWriteAt)}{cloudChatListener.lastWriteSource ? ' · via ' + cloudChatListener.lastWriteSource.replace('-', ' ') : ''}</div>
-                <div className="mt-1 text-[10px] text-slate-500">Queue version: {cloudChatListener.firestoreStatus === 'unavailable' ? 'unavailable' : cloudChatListener.queueVersion || 0}{cloudChatListener.firestoreStatus !== 'unavailable' && cloudChatListener.queueUpdatedAt ? ' · updated ' + formatTechnicalTimestamp(cloudChatListener.queueUpdatedAt) : ''}</div>
-              </div>
-              <div className="min-w-0">
-                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Moderator browser writes</div>
-                <div className={localQueueWriteHealth.status === 'ok' ? 'mt-1 text-[11px] font-bold text-emerald-300' : localQueueWriteHealth.status === 'error' ? 'mt-1 text-[11px] font-bold text-rose-200' : 'mt-1 text-[11px] font-bold text-amber-200'}>{localQueueWriteHealth.status || 'unknown'}</div>
-                <div className="mt-1 break-words text-[10px] text-slate-500">Last confirmed: {formatTechnicalTimestamp(localQueueWriteHealth.lastSuccessAt)}</div>
-                {['error', 'pending'].includes(localQueueWriteHealth.status) && <div className="mt-1 break-words text-[10px] text-amber-200">{localQueueWriteHealth.code}: not confirmed for the streamer</div>}
-              </div>
-              <div className="min-w-0">
-                <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">Backend configuration</div>
-                <div className="mt-1 break-words text-[10px] text-slate-200">Firebase Admin: {typeof cloudChatListener.firebaseAdminConfigured !== 'boolean' ? 'checking' : cloudChatListener.firebaseAdminConfigured ? 'configured' : 'missing'}</div>
-                <div className="mt-1 break-words text-[10px] text-slate-200">Firebase web config: {typeof cloudChatListener.firebaseWebConfigConfigured !== 'boolean' ? 'checking' : cloudChatListener.firebaseWebConfigConfigured ? 'configured' : 'missing'}</div>
-              </div>
-            </div>
-            {(cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage || cloudChatListener.lastProcessingError || ['error', 'pending'].includes(localQueueWriteHealth.status)) && (
-              <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-                <div className="text-[9px] font-black uppercase tracking-wider text-amber-200">Actionable diagnostic</div>
-                {cloudChatListener.healthDiagnosticCode || cloudChatListener.healthDiagnosticMessage ? (
-                  <>
-                    <div className="mt-1 break-words font-mono text-[10px] text-amber-100">Server check · {cloudChatListener.healthDiagnosticCode || cloudChatListener.code || 'firestore_health_check_failed'}</div>
-                    <div className="mt-1 break-words text-[11px] text-slate-200">{cloudChatListener.healthDiagnosticMessage || cloudChatListener.message}</div>
-                  </>
-                ) : null}
-                {['error', 'pending'].includes(localQueueWriteHealth.status) && (
-                  <>
-                    <div className="mt-2 break-words font-mono text-[10px] text-amber-100">Moderator browser · {localQueueWriteHealth.code || 'firestore_write_failed'}</div>
-                    <div className="mt-1 break-words text-[11px] text-slate-200">{localQueueWriteHealth.message || 'Firestore did not confirm the queue write. The request remains only on this moderator dashboard until a retry succeeds.'}</div>
-                    <div className="mt-1 text-[10px] text-slate-500">Last failed queue write: {formatTechnicalTimestamp(localQueueWriteHealth.lastFailureAt)}</div>
-                  </>
-                )}
-                {cloudChatListener.lastProcessingError && cloudChatListener.healthDiagnosticMessage && (
-                  <div className="mt-1 break-words text-[10px] text-slate-400">Last processor error: {cloudChatListener.lastProcessingError}</div>
-                )}
-                {cloudChatListener.lastProcessingErrorAt > 0 && <div className="mt-1 text-[10px] text-slate-500">Last processor error at: {formatTechnicalTimestamp(cloudChatListener.lastProcessingErrorAt)}</div>}
-                {cloudChatListener.lastProcessingStatus !== 'unknown' && <div className="mt-1 text-[10px] text-slate-500">Processor status: {cloudChatListener.lastProcessingStatus}</div>}
-              </div>
-            )}
-          </section>
-        )}
       </header>
 
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
-      <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
-        <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
-        <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
-          <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
-          <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
-          <p className="mt-1 text-xs sm:text-sm font-black uppercase italic tracking-[0.22em] text-slate-100">REAL MEN WATCH REAL CONTENT</p>
-        </div>
-      </section>
-
-      <div className="gachi-workspace flex-1 w-full max-w-[1740px] mx-auto grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_390px] xl:grid-cols-[245px_minmax(0,1fr)_430px] gap-4 lg:gap-5 p-3 sm:p-4 lg:p-5" style={{ '--workspace-grid-columns': workspaceGridColumns, '--workspace-grid-areas': workspaceGridAreas, '--workspace-mobile-areas': workspaceMobileAreas }}>
-        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4" style={{ display: workspaceLayout.visible.stats ? undefined : 'none' }}>
-          <StatsBoard
-            queueStats={queueStats}
-            activityEvents={activityEvents}
-            currentSessionId={activitySessionIdRef.current}
-            statsNow={statsNow}
-            statsExpanded={statsExpanded}
-            onToggle={() => setStatsExpanded((expanded) => !expanded)}
-          />
-        </aside>
-        <div className="gachi-player-column flex flex-col gap-4 min-w-0" style={{ display: workspaceLayout.visible.player ? undefined : 'none' }}>
+      <div className="flex-1 max-w-[1680px] w-full mx-auto flex flex-col lg:flex-row gap-5 p-4 lg:p-6">
+        {/* LEFT COLUMN: ACTIVE MEDIA PLAYER & QUEUE LISTS */}
+        <div className="flex-1 flex flex-col gap-5 min-w-0">
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
-          <section className="gachi-panel bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
+          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
             {/* Header info strip */}
             <div className="px-4 py-2.5 bg-[#141926] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-wider text-[11px]">
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  MAIN EVENT
+                </span>
+
                 {currentVideo && (
                   <>
-                    <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black tracking-wide border ${currentVideo.status === 'playing' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-purple-500/15 border-purple-500/30 text-purple-200'}`}>
-                      {currentVideo.status === 'playing' ? 'NOW PLAYING' : 'READY TO PLAY'}
+                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[currentVideo.category]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
+                      {currentVideo.category}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[getVideoCategory(currentVideo)]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
-                      {getVideoCategory(currentVideo)}
-                    </span>
-                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${getVideoMediaType(currentVideo) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                      {getVideoMediaType(currentVideo)}
+                    <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${currentVideo.mediaType === 'Music' || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                      {currentVideo.mediaType || detectMusicType(currentVideo.url, currentVideo.title, currentVideo.note)}
                     </span>
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
@@ -5038,29 +2396,11 @@ function YediHubAppContent() {
 
               <div className="flex items-center gap-2">
                 <button
-                  type="button"
-                  onClick={() => setShowRequestModal(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-purple-500/35 bg-purple-600/20 px-2.5 py-1.5 text-[10px] font-black text-purple-100 transition hover:bg-purple-600/35 sm:text-xs"
-                  title="Request a video for the community queue"
-                >
-                  <Plus className="h-3.5 w-3.5" /> Request Video
-                </button>
-                <button
                   onClick={() => setIsTheatreMode(!isTheatreMode)}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                   title="Toggle Player Height"
                 >
                   {isTheatreMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={togglePlayerFullscreen}
-                  disabled={!currentVideo}
-                  className="p-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  title={isPlayerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                  aria-label={isPlayerFullscreen ? 'Exit player fullscreen' : 'Enter player fullscreen'}
-                >
-                  {isPlayerFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
@@ -5069,51 +2409,18 @@ function YediHubAppContent() {
             {currentVideo ? (
               <div>
                 <div
-                  ref={playerStageRef}
-                  className={`gachi-player-stage relative w-full bg-[#05020a] flex items-center justify-center overflow-hidden transition-all ${
-                    isPlayerFullscreen
-                      ? 'h-screen min-h-0 max-h-none w-screen'
-                      : 'aspect-video h-auto max-h-none'
+                  className={`relative w-full bg-black flex items-center justify-center transition-all ${
+                    currentVideo.platform === 'tiktok'
+                      ? (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[900px]' : 'h-[55vh] min-h-[460px] max-h-[700px]')
+                      : (isTheatreMode ? 'h-[72vh] min-h-[560px] max-h-[920px]' : 'h-[58vh] min-h-[430px] max-h-[720px]')
                   }`}
-                  style={!isPlayerFullscreen ? {
-                    width: '100%',
-                    aspectRatio: '16 / 9',
-                    height: 'auto',
-                    minWidth: 0,
-                    maxWidth: isTheatreMode ? 'min(100%, 153vh)' : 'min(100%, 116vh)',
-                    marginInline: 'auto',
-                  } : undefined}
                 >
-                  {isVerticalMedia(currentVideo) && (
-                    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
-                      <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
-                      {/* Keep portrait-video letterboxing black/purple instead of blurring bright thumbnail colors behind it. */}
-                      <div className="absolute inset-0 bg-[#05020a]/80 backdrop-blur-sm" />
-                      <div className="gachi-vertical-letterbox absolute inset-0" />
-                    </div>
-                  )}
-                  {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) &&
-                    youtubeHasRenderedFrameId !== String(currentVideo.id) && (
-                    <div className="pointer-events-none absolute bottom-3 left-3 z-30 max-w-[calc(100%-1.5rem)]">
-                      <button
-                        type="button"
-                        onClick={startYouTubeFromPrompt}
-                        className="pointer-events-auto flex items-center gap-2 rounded-xl border border-purple-300/50 bg-[#180d25]/90 px-4 py-2 text-xs font-bold text-white shadow-xl hover:bg-purple-700"
-                        aria-label="Start YouTube playback"
-                      >
-                        <Play className="h-4 w-4 fill-current" /> Play video (browser blocked autoplay)
-                      </button>
-                    </div>
-                  )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
-                    <div className={isVerticalMedia(currentVideo)
-                      ? 'gachi-portrait-shell gachi-shorts-shell'
-                      : 'gachi-landscape-shell'}>
                     <iframe
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
-                      className="gachi-video-embed border-0"
-                      src={youtubePlayerSrc}
+                      className="absolute inset-0 h-full w-full border-0"
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -5126,75 +2433,46 @@ function YediHubAppContent() {
                         const send = (func, args = []) => frame.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
                         send('addEventListener', ['onStateChange']);
                         send('addEventListener', ['onError']);
-                        send('addEventListener', ['onAutoplayBlocked']);
                         send('getCurrentTime');
                         send('getDuration');
                         send('getVolume');
-                        const intent = getPlaybackIntentForVideo(currentVideo.id, 'youtube');
-                                        const desiredVolume = clampPlayerVolume(intent.volume);
-                        const desiredMuted = intent.muted === true;
-                        youtubeVolumeRestoreRef.current = { videoId: String(currentVideo.id), volume: desiredVolume, until: Date.now() + 3500 };
-                        youtubeMuteRestoreRef.current = { videoId: String(currentVideo.id), muted: desiredMuted, until: Date.now() + 3500 };
-                        send('setVolume', [desiredVolume]);
-                        const pending = pendingPlaybackRestoreRef.current;
-                        const known = playbackPositionRef.current.videoId === String(currentVideo.id) ? playbackPositionRef.current.seconds : 0;
-                        const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
-                          ? pending.currentTime
-                          : known;
-                        if (intent.muted === null) youtubeStartupMuteRef.current = { videoId: String(currentVideo.id), pending: true };
-                        if (intent.paused) send('pauseVideo');
-                        if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
-                          send('seekTo', [restoreSeconds, true]);
-                        }
-                        if (intent.muted === true) send('mute');
-                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-                        if (intent.muted !== true) send('unMute');
+                        send('playVideo');
                       }}
                     />
-                    </div>
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
                     <>
-                      <div className="gachi-portrait-shell">
-                        <iframe
-                          key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
-                          ref={tiktokIframeRef}
-                          className="gachi-tiktok-player gachi-video-embed border-0"
-                          src={tiktokPlayerSrc}
-                          title={currentVideo.title}
-                          allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                          loading="eager"
-                          referrerPolicy="strict-origin-when-cross-origin"
-                          onLoad={() => {
+                      <iframe
+                        key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                        ref={tiktokIframeRef}
+                        className="gachi-tiktok-player border-0"
+                        style={{ width: 'auto', height: '100%', maxWidth: '100%', aspectRatio: '9 / 16' }}
+                        src={`https://www.tiktok.com/player/v1/${currentVideo.videoId}?autoplay=1&muted=0&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&timestamp=0&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`}
+                        title={currentVideo.title}
+                        allow="autoplay; encrypted-media; picture-in-picture; web-share"
+                        loading="eager"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        onLoad={() => {
+                          if (currentVideoRef.current?.id !== currentVideo.id) return;
+                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
+                          const sendAudioCommands = () => {
                             if (currentVideoRef.current?.id !== currentVideo.id) return;
-                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'ready' });
-                          }}
-                          onError={() => {
-                            if (currentVideoRef.current?.id !== currentVideo.id) return;
-                            setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
-                          }}
-                        />
-                      </div>
-                      {tiktokNeedsGestureId === String(currentVideo.id) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const intent = getPlaybackIntentForVideo(currentVideo.id, 'tiktok');
-                            if (!intent.paused) {
-                              postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, 'play');
-                              if (intent.muted !== true) postTikTokPlayerCommand(tiktokIframeRef.current?.contentWindow, 'unMute');
-                            }
-                            setTiktokNeedsGestureId('');
-                          }}
-                          className="absolute z-30 flex items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
-                          aria-label="Start TikTok playback"
-                        >
-                          <Play className="h-4 w-4 fill-current" /> Click to start video
-                        </button>
-                      )}
+                            const frame = tiktokIframeRef.current?.contentWindow;
+                            if (!frame) return;
+                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                          };
+                          sendAudioCommands();
+                          [180, 600, 1100].forEach((delay) => window.setTimeout(sendAudioCommands, delay));
+                        }}
+                        onError={() => {
+                          if (currentVideoRef.current?.id !== currentVideo.id) return;
+                          setTikTokPlayerState({ requestId: currentVideo.id, status: 'error' });
+                        }}
+                      />
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'error' && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center">
                           <div className="text-base font-black text-white">TikTok player could not start</div>
-                          <p className="max-w-sm text-sm text-slate-300">Check that the post is public, then retry the embedded player.</p>
+                          <p className="max-w-sm text-sm text-slate-300">Retry the player or open the post directly on TikTok.</p>
                           <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
                               type="button"
@@ -5204,7 +2482,12 @@ function YediHubAppContent() {
                               }}
                               className="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500"
                             >Retry TikTok player</button>
-                            
+                            <a
+                              href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700"
+                            >Open on TikTok</a>
                           </div>
                         </div>
                       )}
@@ -5212,40 +2495,20 @@ function YediHubAppContent() {
                   ) : currentVideo.platform === 'tiktok' ? (
                     <div className="max-w-lg p-8 text-center space-y-3">
                       <div className="text-cyan-300 font-bold">TikTok link needs a full video URL</div>
-                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so whale cum can extract the post ID.</p>
-                      
+                      <p className="text-sm text-slate-300">This looks like a shortened TikTok link. Open it, then copy the full address containing <code>/video/</code> and submit that link so Yedi Hub can extract the post ID.</p>
+                      <a href={currentVideo.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-500">
+                        Open TikTok <ExternalLink className="h-4 w-4" />
+                      </a>
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
-                    twitchClipPlayback.requestId === String(currentVideo.id) && twitchClipPlayback.status === 'vod' ? (
-                      <div className="absolute inset-1 overflow-hidden rounded-sm border border-[#5d277d] shadow-[0_0_24px_rgba(98,25,143,0.22)]">
-                        <div ref={twitchPlayerMountRef} className="h-full w-full" />
-                        {twitchNeedsGestureId === String(currentVideo.id) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const player = twitchPlayerRef.current;
-                              const intent = getPlaybackIntentForVideo(currentVideo.id, 'twitch');
-                              if (player && !intent.paused) player.play?.();
-                            }}
-                            className="absolute inset-0 z-30 m-auto flex h-fit max-w-[calc(100%-2rem)] items-center gap-2 rounded-xl border border-purple-300/40 bg-[#180d25]/95 px-5 py-3 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
-                            aria-label="Start Twitch video playback"
-                          >
-                            <Play className="h-4 w-4 fill-current" /> Click to start video
-                          </button>
-                        )}
-                      </div>
-                    ) : twitchClipPlayback.requestId !== String(currentVideo.id) || twitchClipPlayback.status === 'loading' ? (
-                      <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">Checking Twitch clip playback…</div>
-                    ) : (
-                      <iframe
-                        key={`twitch-native-${currentVideo.id}-${currentVideo.videoId}`}
-                        className="w-[calc(100%-0.5rem)] h-[calc(100%-0.5rem)] border border-[#5d277d] rounded-sm shadow-[0_0_24px_rgba(98,25,143,0.22)]"
-                        src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=${!playerIsPaused}&muted=${playerIsMuted}&preload=metadata`}
-                        title={currentVideo.title}
-                        allow="autoplay; fullscreen; picture-in-picture"
-                        allowFullScreen
-                      />
-                    )
+                    <iframe
+                      key={`twitch-${currentVideo.videoId}`}
+                      className="w-full h-full border-0"
+                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
+                      title={currentVideo.title}
+                      allow="autoplay; fullscreen; picture-in-picture"
+                      allowFullScreen
+                    />
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
                       <img
@@ -5271,8 +2534,8 @@ function YediHubAppContent() {
                 </div>
 
                 {/* Sub-Player Controls & Fast Stash Deck */}
-                <div className="gachi-player-footer p-4 sm:p-5 bg-[#141926] flex flex-col gap-4">
-                  <div className="gachi-player-meta w-full min-w-0 space-y-1">
+                <div className="p-4 sm:p-5 bg-[#141926] flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="min-w-0 space-y-1 flex-1">
                     <div className="flex items-center gap-2">
                       <h2 className="text-base sm:text-lg font-extrabold text-white truncate">
                         {currentVideo.title}
@@ -5284,7 +2547,7 @@ function YediHubAppContent() {
                         Requester: <strong className="text-purple-300 font-semibold">@{currentVideo.requestedBy}</strong>
                       </span>
                       <span>•</span>
-                      <span title={formatAbsoluteTimestamp(currentVideo.timestamp)}>Requested {formatRelativeTimestamp(currentVideo.timestamp, statsNow)}</span>
+                      <span>Added {currentVideo.addedAt}</span>
                       {currentVideo.note && (
                         <>
                           <span>•</span>
@@ -5295,48 +2558,94 @@ function YediHubAppContent() {
                   </div>
 
                   {/* Player Quick Action Bar */}
-                  <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
-                    {/* Pause, mute and volume are available in the native embed
-                         and existing keyboard shortcuts, not duplicated in this bar. */}
-                    {currentVideo.platform === 'twitch' &&
-                      twitchClipPlayback.requestId === String(currentVideo.id) &&
-                      twitchClipPlayback.status === 'native' && (
-                      <span className="self-center px-2 text-[10px] text-slate-500" title="This Twitch Clip has no source VOD available for shared player controls.">
-                        Twitch native controls
-                      </span>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {currentVideo.platform === 'tiktok' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const frame = tiktokIframeRef.current?.contentWindow;
+                            if (!frame) {
+                              addToast('TikTok player is not ready yet. Try again in a moment.', 'warning');
+                              return;
+                            }
+                            frame.postMessage({ type: 'unMute', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                            frame.postMessage({ type: 'play', value: null, 'x-tiktok-player': true }, 'https://www.tiktok.com');
+                          }}
+                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-bold"
+                        >Enable TikTok sound</button>
+                        <a
+                          href={/^https?:\/\//i.test(String(currentVideo.url || '')) && !/\/player\/v1\//i.test(String(currentVideo.url || '')) ? currentVideo.url : `https://www.tiktok.com/video/${currentVideo.videoId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold"
+                        >Open TikTok</a>
+                      </>
+                    )}
+                    {/* Instant Category Tag Override */}
+                    {isStaff && (
+                      <div className="flex items-center gap-1.5 bg-[#0e121a] px-2.5 py-1.5 rounded-xl border border-slate-700">
+                        <span className="text-[10px] uppercase font-bold text-slate-400">Category:</span>
+                        <select
+                          value={currentVideo.category}
+                          onChange={(e) => handleCategoryChange(currentVideo.id, e.target.value)}
+                          className="bg-transparent text-xs font-bold text-purple-300 focus:outline-none cursor-pointer"
+                        >
+                          {Object.keys(CATEGORY_META).map((cat) => (
+                            <option key={cat} value={cat} className="bg-[#141926] text-white">
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     )}
 
                     {/* Voting changes the order of waiting requests; an already-playing video cannot be voted up. */}
-                    {currentVideo.status !== 'playing' && (
-                      <button
-                        onClick={() => handleUpvote(currentVideo.id)}
-                        disabled={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
-                        title={normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                          votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
-                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                            : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
-                        }`}
-                      >
-                        <ThumbsUp className="w-4 h-4" />
-                        <span>Upvote ({currentVideo.upvotes || 0})</span>
-                      </button>
-                    )}
+                    <button
+                      onClick={() => handleUpvote(currentVideo.id)}
+                      disabled={currentVideo.status !== 'queue' || normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`])}
+                      title={currentVideo.status === 'playing' ? 'This video is already playing' : normalizeTwitchLogin(currentVideo.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote to increase this queued video’s priority'}
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                        votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${currentVideo.id}`]
+                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                          : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700 text-slate-200'
+                      }`}
+                    >
+                      <Flame className="w-4 h-4 text-amber-400" />
+                      <span>{currentVideo.status === 'playing' ? 'Playing' : `Upvote (${currentVideo.upvotes || 0})`}</span>
+                    </button>
 
                     {/* Watch Later Quick Stash */}
-                    {isModerator && <button
+                    <button
                       onClick={() => handleMoveToWatchLater(currentVideo)}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-semibold transition-colors"
                       title="Stash to Watch Later list without interrupting stream"
                     >
                       <Bookmark className="w-3.5 h-3.5" />
                       <span>Watch Later</span>
-                    </button>}
+                    </button>
 
-                    <TransportNavigation isStaff={isStaff} onPrevious={handlePreviousTrack} onNext={handleSkipNext} />
+                    {/* Previous / Skip / Next Track */}
+                    {isStaff && (
+                      <>
+                      <button
+                        onClick={handlePreviousTrack}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181e2e] hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all active:scale-95"
+                        title="Return to the most recently played video"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Previous</span>
+                      </button>
+                      <button
+                        onClick={handleSkipNext}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all active:scale-95"
+                      >
+                        <SkipForward className="w-4 h-4" />
+                        <span>Next Track</span>
+                      </button>
+                      </>
+                    )}
                   </div>
-                  <div className="flex w-full justify-end"><KeyboardShortcutHint isStaff={isStaff} /></div>
-
                 </div>
               </div>
             ) : (
@@ -5344,36 +2653,119 @@ function YediHubAppContent() {
                 <ListVideo className="w-12 h-12 text-slate-600 mx-auto" />
                 <h3 className="text-base font-bold text-slate-300">Queue is currently empty</h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Paste a video URL in Twitch chat, use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code>, or click Request Video above to add media!
+                  Use <code className="text-purple-400 font-mono">!assr &lt;url&gt;</code> in Twitch chat or click Request Video above to add media!
                 </p>
               </div>
             )}
           </section>
 
-        </div>
-
-        <div className="gachi-queue-column min-w-0" style={{ display: workspaceLayout.visible.queue ? undefined : 'none' }}>
           {/* ==========================================
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
-          <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
-            <QueueToolbar
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              counts={counts}
-              setMediaTypeFilter={setMediaTypeFilter}
-              sortBy={sortBy}
-              setSortBy={setSortBy}
-              selectedCategory={selectedCategory}
-              setSelectedCategory={setSelectedCategory}
-              categoryMeta={CATEGORY_META}
-              categoryCounts={categoryCounts}
-              searchQuery={searchQuery}
-              setSearchQuery={setSearchQuery}
-            />
+          <section className="bg-[#10141f] border border-slate-800/90 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl">
+            {/* Nav Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { id: 'queue', label: 'Active Queue', icon: ListVideo, count: counts.queue, badge: 'bg-purple-500/20 text-purple-300' },
+                  { id: 'watch_later', label: 'Watch Later', icon: Bookmark, count: counts.watch_later, badge: 'bg-cyan-500/20 text-cyan-300' },
+                  { id: 'watched', label: 'History', icon: CheckCircle2, count: counts.watched, badge: 'bg-emerald-500/20 text-emerald-300' }
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                        active
+                          ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
+                          : 'bg-[#151a27] hover:bg-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span>{tab.label}</span>
+                      <span className={`px-1.5 py-0.2 rounded-md text-[11px] font-extrabold ${active ? 'bg-black/30 text-white' : tab.badge}`}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Sorter */}
+              <select
+                value={activeTab === 'queue' ? 'priority' : sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                disabled={activeTab === 'queue'}
+                title={activeTab === 'queue' ? 'Queue order follows pinned priority, then votes, then request time' : 'Sort this non-queue list'}
+                className="bg-[#151a27] border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-purple-500 disabled:opacity-70"
+              >
+                <option value="priority">Sort: Playback priority</option>
+                <option value="upvotes">Sort: Most Hype (Votes)</option>
+                <option value="newest">Sort: Recently Added</option>
+              </select>
+            </div>
+
+            {/* Category Filter Pills & Search */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+              {/* Category Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+                <button
+                  onClick={() => setSelectedCategory('All')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    selectedCategory === 'All'
+                      ? 'bg-white/10 border border-purple-500 text-white'
+                      : 'bg-[#141926] text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  <span>All Categories</span>
+                </button>
+
+                {Object.entries(CATEGORY_META).map(([catKey, catData]) => {
+                  const Icon = catData.icon;
+                  const active = selectedCategory === catKey;
+                  return (
+                    <button
+                      key={catKey}
+                      onClick={() => setSelectedCategory(catKey)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${
+                        active
+                          ? 'bg-white/10 border-purple-500 text-white'
+                          : 'bg-[#141926] border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" style={{ color: catData.colorHex }} />
+                      <span>{catData.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Search */}
+              <div className="relative min-w-[220px]">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search title or @requester..."
+                  className="w-full bg-[#141926] border border-slate-800 rounded-xl pl-9 pr-7 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
 
             {/* Video Cards Feed */}
-            <div className="gachi-queue-feed space-y-3 pt-1">
+            <div className="space-y-3 pt-1">
               {filteredVideos.length === 0 ? (
                 <div className="p-10 border border-dashed border-slate-800 rounded-2xl text-center space-y-2 bg-[#121622]/40">
                   <Sparkles className="w-8 h-8 text-slate-600 mx-auto" />
@@ -5383,34 +2775,227 @@ function YediHubAppContent() {
                   </p>
                 </div>
               ) : (
-                filteredVideos.map((video, idx) => (
-                  <QueueVideoCard
-                    key={video.id}
-                    video={video}
-                    index={idx}
-                    activeTab={activeTab}
-                    currentVideo={currentVideo}
-                    queueRankById={queueRankById}
-                    isStaff={isModerator}
-                    draggedQueueId={draggedQueueId}
-                    setDraggedQueueId={setDraggedQueueId}
-                    dragOverQueueId={dragOverQueueId}
-                    setDragOverQueueId={setDragOverQueueId}
-                    handleDropReorder={handleDropReorder}
-                    handlePlayNow={handlePlayNow}
-                    handleCategoryChange={handleCategoryChange}
-                    handleUpvote={handleUpvote}
-                    twitchUsername={twitchAuth.username}
-                    votedIds={votedIds}
-                    normalizeTwitchLogin={normalizeTwitchLogin}
-                    syncDeleteVideo={syncDeleteVideo}
-                    handleMoveOrder={handleMoveOrder}
-                    handleTogglePin={handleTogglePin}
-                    handleMoveToWatchLater={handleMoveToWatchLater}
-                    handleRequeue={handleRequeue}
-                    now={statsNow}
-                  />
-                ))
+                filteredVideos.map((video, idx) => {
+                  const isCurrent = currentVideo && currentVideo.id === video.id;
+                  const catObj = CATEGORY_META[video.category] || CATEGORY_META.General;
+
+                  return (
+                    <div
+                      key={video.id}
+                      className={`group relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-3.5 rounded-2xl border transition-all ${
+                        isCurrent
+                          ? 'bg-purple-950/20 border-purple-500/50 shadow-lg shadow-purple-950/40'
+                          : video.pinned
+                          ? 'bg-amber-950/15 border-amber-500/30'
+                          : 'bg-[#131722] hover:bg-[#181d2a] border-slate-800/90'
+                      }`}
+                    >
+                      {/* Left: Thumbnail + Metadata */}
+                      <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1 w-full">
+                        {/* Order indicator */}
+                        <div className="hidden sm:flex flex-col items-center justify-center w-7 text-center shrink-0">
+                          {video.pinned ? (
+                            <Pin className="w-4 h-4 text-amber-400 fill-current" />
+                          ) : (
+                            <span className="text-xs font-mono font-bold text-slate-500">#{queueRankById.get(String(video.id)) ?? (idx + 1)}</span>
+                          )}
+                        </div>
+
+                        {/* Thumbnail */}
+                        <div
+                          onClick={() => handlePlayNow(video)}
+                          className="relative w-28 sm:w-36 h-20 rounded-xl overflow-hidden bg-slate-900 shrink-0 cursor-pointer border border-white/5"
+                        >
+                          <img
+                            src={video.thumbnail}
+                            alt=""
+                            onError={(e) => {
+                              e.target.src = 'https://placehold.co/640x360/18181b/a1a1aa?text=Yedi+Hub';
+                            }}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                            <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-lg">
+                              <Play className="w-4 h-4 fill-current ml-0.5" />
+                            </div>
+                          </div>
+                          <span className="absolute bottom-1 right-1 px-1.5 py-0.2 rounded bg-black/80 text-[10px] font-mono font-bold text-slate-200">
+                            {video.duration}
+                          </span>
+                        </div>
+
+                        {/* Details */}
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {/* Editable Category Dropdown for 1-Click Fixes */}
+                            {isStaff ? (
+                              <select
+                                value={video.category}
+                                onChange={(e) => handleCategoryChange(video.id, e.target.value)}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border cursor-pointer focus:outline-none ${catObj.badgeBg}`}
+                                title="Click to fix or change category"
+                              >
+                                {Object.keys(CATEGORY_META).map((cat) => (
+                                  <option key={cat} value={cat} className="bg-[#141926] text-white">
+                                    {cat}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${catObj.badgeBg}`}>
+                                {video.category}
+                              </span>
+                            )}
+
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ (video.mediaType || detectMusicType(video.url, video.title, video.note)) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                              {video.mediaType || detectMusicType(video.url, video.title, video.note)}
+                            </span>
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
+                              {video.platform}
+                            </span>
+
+                            {video.pinned && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                Pinned Priority
+                              </span>
+                            )}
+                          </div>
+
+                          <h4
+                            onClick={() => handlePlayNow(video)}
+                            className="text-sm font-bold text-slate-100 hover:text-purple-300 cursor-pointer truncate"
+                            title={video.title}
+                          >
+                            {video.title}
+                          </h4>
+
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-400">
+                            <span>
+                              by <strong className="text-slate-200 font-semibold">@{video.requestedBy}</strong>
+                            </span>
+                            <span>•</span>
+                            <span>{video.addedAt}</span>
+                            {video.watchedAt && (
+                              <>
+                                <span>•</span>
+                                <span className="text-emerald-400 font-medium">Played {video.watchedAt}</span>
+                              </>
+                            )}
+                            {video.note && (
+                              <>
+                                <span>•</span>
+                                <span className="text-slate-300 italic truncate max-w-xs">"{video.note}"</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Arena Control Buttons */}
+                      <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center shrink-0">
+                        {/* Hype Vote */}
+                        <button
+                          onClick={() => handleUpvote(video.id)}
+                          disabled={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) || (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || Boolean(votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`])}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                            (Array.isArray(video.voters) && video.voters.some((name) => normalizeTwitchLogin(name) === normalizeTwitchLogin(twitchAuth.username))) || votedIds[`${normalizeTwitchLogin(twitchAuth.username)}:${video.id}`]
+                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                              : 'bg-[#181e2e] hover:bg-slate-800 border-slate-700/80 text-slate-300'
+                          }`}
+                          title={normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) ? 'You cannot upvote your own request' : 'Upvote this video to move it higher in the queue'}
+                        >
+                          <ThumbsUp className="w-3.5 h-3.5" />
+                          <span>{video.upvotes || 0}</span>
+                        </button>
+
+                        {/* Every request is immediately playable; no approval state. */}
+                        <>
+                            {video.status === 'queue' && normalizeTwitchLogin(video.requestedBy) === normalizeTwitchLogin(twitchAuth.username) && (
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Remove your request "${String(video.title || 'this video').slice(0, 80)}" from the queue?`)) {
+                                    void syncDeleteVideo(video.id);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-rose-950/60 text-rose-300 border border-rose-500/20"
+                                title="Remove your own waiting request"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handlePlayNow(video)}
+                              className="px-2.5 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition-colors"
+                            >
+                              Play Now
+                            </button>
+
+                            {isStaff && (
+                              <>
+                                {video.status === 'queue' && (
+                                  <>
+                                    <button
+                                      onClick={() => handleMoveOrder(video.id, 'up')}
+                                      className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-slate-300"
+                                      title="Move Up"
+                                    >
+                                      <ArrowUp className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleMoveOrder(video.id, 'down')}
+                                      className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-slate-300"
+                                      title="Move Down"
+                                    >
+                                      <ArrowDown className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleTogglePin(video)}
+                                      className={`p-1.5 rounded-lg border transition-colors ${
+                                        video.pinned
+                                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                                          : 'bg-[#181e2e] border-transparent hover:bg-slate-700 text-slate-400'
+                                      }`}
+                                      title="Pin Priority"
+                                    >
+                                      <Pin className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+
+                                {video.status !== 'watch_later' && (
+                                  <button
+                                    onClick={() => handleMoveToWatchLater(video)}
+                                    className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-cyan-400"
+                                    title="Stash to Watch Later"
+                                  >
+                                    <Bookmark className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                                {video.status === 'watched' && (
+                                  <button
+                                    onClick={() => handleRequeue(video)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>Re-Queue</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => syncDeleteVideo(video.id)}
+                                  className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
+                                  title="Delete video request"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                        </>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>
@@ -5418,68 +3003,6 @@ function YediHubAppContent() {
 
         {/* Twitch IRC runs invisibly as a command bridge; incoming chat is not rendered. */}
       </div>
-
-      {isModerator && showLayoutCustomizer && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowLayoutCustomizer(false); }}>
-          <div role="dialog" aria-modal="true" aria-labelledby="workspace-layout-title" className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-rose-500/35 bg-[#0d0a12] p-4 shadow-2xl shadow-black/70 sm:p-6">
-            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
-              <div>
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-rose-300"><Layers className="h-4 w-4" /> Workspace builder</div>
-                <h2 id="workspace-layout-title" className="mt-1 text-xl font-black text-white">Build your layout</h2>
-                <p className="mt-1 max-w-lg text-xs leading-5 text-slate-400">Drag panels into your preferred order, use the arrows for precise placement, or hide panels you don't use. Your setup saves in this browser and doesn't change anyone else's view.</p>
-              </div>
-              <button type="button" onClick={() => setShowLayoutCustomizer(false)} aria-label="Close layout customizer" className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white"><X className="h-4 w-4" /></button>
-            </div>
-
-            <div className="mt-4 space-y-2">
-              {workspaceLayout.order.map((panelId, index) => {
-                const meta = WORKSPACE_PANEL_META[panelId];
-                const isVisible = workspaceLayout.visible[panelId];
-                const onlyVisiblePanel = isVisible && workspaceVisiblePanelCount <= 1;
-                return (
-                  <div
-                    key={panelId}
-                    draggable
-                    onDragStart={(event) => { setDraggedWorkspacePanel(panelId); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', panelId); }}
-                    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      const sourcePanel = draggedWorkspacePanel || event.dataTransfer.getData('text/plain');
-                      if (sourcePanel && sourcePanel !== panelId) moveWorkspacePanel(sourcePanel, index);
-                      setDraggedWorkspacePanel('');
-                    }}
-                    onDragEnd={() => setDraggedWorkspacePanel('')}
-                    className={`flex items-center gap-3 rounded-xl border p-3 transition ${draggedWorkspacePanel === panelId ? 'border-rose-400/70 bg-rose-500/10 opacity-60' : 'border-slate-800 bg-[#12101a] hover:border-rose-500/35'}`}
-                  >
-                    <div className="flex shrink-0 flex-col gap-1">
-                      <button type="button" disabled={index === 0} onClick={() => moveWorkspacePanel(panelId, index - 1)} aria-label={`Move ${meta.title} up`} title="Move up" className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-20"><ArrowUp className="h-3.5 w-3.5" /></button>
-                      <button type="button" disabled={index === workspaceLayout.order.length - 1} onClick={() => moveWorkspacePanel(panelId, index + 1)} aria-label={`Move ${meta.title} down`} title="Move down" className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-20"><ArrowDown className="h-3.5 w-3.5" /></button>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-black text-white">{meta.title}</span>
-                        <span className={`rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider ${isVisible ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200' : 'border-slate-700 bg-slate-800/50 text-slate-500'}`}>{isVisible ? 'Visible' : 'Hidden'}</span>
-                      </div>
-                      <p className="mt-0.5 text-[10px] leading-4 text-slate-500">{meta.detail}</p>
-                    </div>
-                    <label className="flex shrink-0 items-center gap-2 text-[10px] font-bold text-slate-300">
-                      <input type="checkbox" checked={isVisible} disabled={onlyVisiblePanel} onChange={() => toggleWorkspacePanel(panelId)} className="h-4 w-4 accent-rose-500" />
-                      Show
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4">
-              <button type="button" onClick={() => { setWorkspaceLayout(normalizeWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT)); setDraggedWorkspacePanel(''); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#16131d] px-3 py-2 text-[10px] font-black text-slate-200 hover:border-rose-500/40">
-                <RotateCcw className="h-3.5 w-3.5" /> Reset layout
-              </button>
-              <button type="button" onClick={() => setShowLayoutCustomizer(false)} className="rounded-lg bg-rose-600 px-5 py-2.5 text-[10px] font-black text-white transition hover:bg-rose-500">Done</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ==========================================
           MODAL 1: SUBMIT VIDEO REQUEST (WEB)
@@ -5508,61 +3031,24 @@ function YediHubAppContent() {
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!reqUrl.trim() || requestSubmitting) return;
-                setRequestSubmitting(true);
-                setViewerRequestHealth({ status: 'submitting', at: Date.now(), code: '', message: 'Submitting to the shared queue…' });
-                try {
-                  const response = await fetch('/api/public-request', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      url: reqUrl.trim(),
-                      title: reqTitle.trim(),
-                      note: reqNote.trim(),
-                      requestedBy: reqUsername || twitchAuth.username || '',
-                      category: reqCategory,
-                      startSeconds: reqStartAt.trim() ? parseMediaStartSeconds(reqStartAt) : null,
-                    }),
-                  });
-                  const result = await response.json().catch(() => ({}));
-                  if (!response.ok || !result.ok) {
-                    const code = String(result.code || 'http_' + response.status);
-                    const message = String(result.message || result.error || 'The server did not confirm this viewer request.');
-                    setViewerRequestHealth({ status: 'error', at: Date.now(), code, message });
-                    addToast('Request failed (' + code + '): ' + message, 'warning');
-                    return;
-                  }
-                  setViewerRequestHealth({ status: 'confirmed', at: Date.now(), code: 'queue_write_confirmed', message: 'Saved in the shared queue.' });
-                  addToast(`Request added to the shared queue: ${result.title || 'video'}`, 'success');
+                if (!reqUrl.trim()) return;
+                const ok = await processAndQueueRequest({
+                  url: reqUrl,
+                  title: reqTitle,
+                  note: reqNote,
+                  requestedBy: reqUsername || twitchAuth.username,
+                  userRole: twitchAuth.authenticated ? twitchAuth.role : 'viewer',
+                  manualCategory: reqCategory
+                });
+                if (ok) {
                   setReqUrl('');
-                  setReqStartAt('');
                   setReqTitle('');
                   setReqNote('');
                   setShowRequestModal(false);
-                } catch (error) {
-                  console.warn('Public video request failed.', error);
-                  setViewerRequestHealth({ status: 'error', at: Date.now(), code: 'network_error', message: 'Could not reach the request service.' });
-                  addToast('Could not reach the request service. Please try again.', 'warning');
-                } finally {
-                  setRequestSubmitting(false);
                 }
               }}
               className="space-y-4"
             >
-              {viewerRequestHealth && (
-                <div role="status" aria-live="polite" className={`rounded-lg border px-3 py-2 text-xs ${viewerRequestHealth.status === 'error'
-                  ? 'border-rose-500/50 bg-rose-500/10 text-rose-100'
-                  : 'border-cyan-500/35 bg-cyan-500/10 text-cyan-100'}`}>
-                  <span className="font-bold">Request {viewerRequestHealth.status}</span>
-                  {viewerRequestHealth.code ? <span> · {viewerRequestHealth.code}</span> : null}
-                  <p className="mt-1 break-words">{viewerRequestHealth.message}</p>
-                </div>
-              )}
-              {!twitchAuth.authenticated && (
-                <p className="text-[10px] text-slate-400">Guest requests are limited to three attempts per minute and are credited to web_viewer. To request with your Twitch name, post the link in 2o3a's chat.</p>
-              )}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   Video or Clip URL *
@@ -5575,22 +3061,6 @@ function YediHubAppContent() {
                   placeholder="YouTube, Twitch Clip, or TikTok share/video URL…"
                   className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
                 />
-                <p className="mt-1 text-[10px] text-slate-500">YouTube links can include ?t=83 or #t=1m23s. You can also set the start time below.</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Start at (YouTube only, optional)
-                </label>
-                <input
-                  type="text"
-                  value={reqStartAt}
-                  onChange={(e) => setReqStartAt(e.target.value)}
-                  placeholder="1:23, 1:02:03, or 83s"
-                  aria-label="YouTube start timestamp"
-                  className="w-full bg-[#0d1017] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500"
-                />
-                <p className="mt-1 text-[10px] text-slate-500">Examples: 1:23 (83 seconds), 1:02:03, or 83s. This overrides a timestamp in the URL.</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -5618,8 +3088,8 @@ function YediHubAppContent() {
                   >
                     <option value="Auto">✨ Auto-Detect via Engine</option>
                     <option value="Music">🎵 Music / Beats</option>
-                    <option value="Gaming">🎮 Blind Playthroughs</option>
-                    <option value="Memes">😂 Shitposts</option>
+                    <option value="Gaming">🎮 Gaming / Highlights</option>
+                    <option value="Memes">😂 Memes / Comedy</option>
                     <option value="Clips">🎬 Twitch Clips</option>
                     <option value="IRL">🎙️ IRL / Podcast</option>
                   </select>
@@ -5662,10 +3132,9 @@ function YediHubAppContent() {
                 </button>
                 <button
                   type="submit"
-                  disabled={requestSubmitting}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30 disabled:cursor-wait disabled:opacity-60"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30"
                 >
-                  {requestSubmitting ? 'SUBMITTING…' : 'LET HIM COOK'}
+                  LET HIM COOK
                 </button>
               </div>
             </form>
@@ -5705,13 +3174,13 @@ function YediHubAppContent() {
       {/* ==========================================
           MODAL 3: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
-      {isModerator && showSettingsModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
-          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121622] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Moderator Queue Rules & Recovery</h3>
+                <h3 className="text-base font-bold text-white">Streamer Safety & Queue Rules</h3>
               </div>
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -5728,8 +3197,8 @@ function YediHubAppContent() {
               </div>
 
               {[
-                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow direct video links, !assr Twitch requests, and web submissions' },
-                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next video when playback ends where supported' }
+                { key: 'queueOpen', label: 'Accepting New Requests', desc: 'Allow !assr Twitch requests and web submissions' },
+                { key: 'autoPlayNext', label: 'Auto-Advance to Next Video', desc: 'Automatically move to the next track when playback ends where supported' }
               ].map((item) => (
                 <label
                   key={item.key}
@@ -5756,48 +3225,13 @@ function YediHubAppContent() {
                 </label>
               ))}
 
-              <section className="p-3 rounded-xl bg-[#0b0e15] border border-purple-500/25 space-y-3">
-                <div className="flex items-center gap-2">
-                  <FolderSync className="w-4 h-4 text-purple-300" />
-                  <h4 className="font-black text-white">Queue backup & recovery</h4>
-                </div>
-                <p className="text-[11px] leading-5 text-slate-400">
-                  Backups include queue, history, votes, and stream settings—not Twitch login credentials. A safety snapshot is kept in this browser while there are waiting requests.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleDownloadBackup} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-white">
-                    <Download className="w-3.5 h-3.5" /> Download backup
-                  </button>
-                  <button type="button" onClick={() => backupFileInputRef.current?.click()} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 px-3 py-2 text-[11px] font-bold text-slate-100">
-                    <Upload className="w-3.5 h-3.5" /> Restore file
-                  </button>
-                  <button type="button" onClick={handleRecoverSafetySnapshot} disabled={backupBusy || !safetySnapshot?.videos?.length} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-3 py-2 text-[11px] font-bold text-slate-100">
-                    <History className="w-3.5 h-3.5" /> Recover last snapshot
-                  </button>
-                </div>
-                <input
-                  ref={backupFileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={handleImportBackupFile}
-                  aria-label="Choose a Whale Cum queue backup JSON file"
-                />
-                <p className="text-[10px] text-slate-500">
-                  {safetySnapshot?.videos?.length
-                    ? `Last local snapshot: ${safetySnapshot.videos.length} items · ${safetySnapshot.savedAt ? new Date(safetySnapshot.savedAt).toLocaleString() : 'saved earlier'}`
-                    : 'No local recovery snapshot yet. Download a backup before making major queue changes.'}
-                </p>
-                {backupBusy && <p className="text-[11px] text-amber-200" role="status">Restoring backup…</p>}
-                {backupMessage && <p className="text-[11px] leading-5 text-slate-200 break-words" role="status">{backupMessage}</p>}
-              </section>
             </div>
 
             <div className="flex justify-end">
               <button
                 onClick={() => {
                   setShowSettingsModal(false);
-                  addToast('Moderator queue settings updated!', 'success');
+                  addToast('Streamer Queue Rules updated!', 'success');
                 }}
                 className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
               >
@@ -5841,7 +3275,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('whale cum render failure', error, info);
+    console.error('Yedi Hub render failure', error, info);
     this.setState({ errorMessage: String(error?.name ? error.name + ': ' : '') + String(error?.message || 'Unknown render error'), componentStack: String(info?.componentStack || '') });
   }
 
@@ -5850,7 +3284,7 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
+            <h1 className="text-lg font-black">Yedi Hub hit a rendering error</h1>
             <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
             <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
