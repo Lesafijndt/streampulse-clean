@@ -498,6 +498,7 @@ function YediHubAppContent() {
     lastWebhookResult: 'none', lastWebhookQueued: 0, receiptCode: 'unknown',
   });
   const [webhookSetupBusy, setWebhookSetupBusy] = useState(false);
+  const webhookAutoSetupAttemptedRef = useRef(false);
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 65, muted: false, playerState: -1 });
@@ -2275,7 +2276,7 @@ function YediHubAppContent() {
     return () => { alive = false; window.clearInterval(id); };
   }, [moderatorLogin]);
 
-  const activateTwitchWebhook = async () => {
+  const activateTwitchWebhook = async ({ automatic = false } = {}) => {
     if (!moderatorLogin || webhookSetupBusy) return;
     setWebhookSetupBusy(true);
     try {
@@ -2293,16 +2294,32 @@ function YediHubAppContent() {
         lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
         receiptCode: String(data.receiptCode || previous.receiptCode || 'unknown'),
       }));
-      addToast(response.ok
-        ? 'Server webhook configured. Twitch will verify the callback before it is active.'
-        : 'Webhook setup failed: ' + String(data.code || response.status) +
-          (data.code === 'moderator_chat_scopes_missing' ? ' — authorize moderator chat intake first.' : ''),
-        response.ok ? 'success' : 'warning');
+      if (!automatic || !response.ok) {
+        addToast(response.ok
+          ? (data.active ? 'Twitch chat intake is active.' : 'Twitch is verifying the chat webhook.')
+          : 'Webhook setup failed: ' + String(data.code || response.status) +
+            (data.code === 'moderator_chat_scopes_missing' ? ' — authorize moderator chat intake first.' : ''),
+          response.ok ? 'success' : 'warning');
+      }
     } catch {
       setWebhookHealth(previous => ({ ...previous, code: 'setup_network_error', active: false }));
       addToast('Could not reach the server-side Twitch webhook setup.', 'warning');
     } finally { setWebhookSetupBusy(false); }
   };
+
+  // A moderator who already granted chat scopes should not need a manual
+  // activation step after every deploy. Twitch EventSub still enforces its
+  // own grant/moderator checks; never auto-authorize OAuth scopes.
+  useEffect(() => {
+    if (!moderatorLogin) {
+      webhookAutoSetupAttemptedRef.current = false;
+      return;
+    }
+    if (webhookHealth.loading || webhookHealth.code !== 'webhook_not_subscribed' ||
+        webhookAutoSetupAttemptedRef.current || webhookSetupBusy) return;
+    webhookAutoSetupAttemptedRef.current = true;
+    void activateTwitchWebhook({ automatic: true });
+  }, [moderatorLogin, webhookHealth.loading, webhookHealth.code, webhookSetupBusy]);
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -3760,7 +3777,7 @@ function YediHubAppContent() {
                     </a>
                   )}
                   <button type="button" disabled={webhookSetupBusy}
-                    onClick={() => { setTopMenuOpen(false); void activateTwitchWebhook(); }}
+                    onClick={() => { setTopMenuOpen(false); void activateTwitchWebhook({ automatic: false }); }}
                     className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:opacity-50">
                     <RefreshCw className="h-3 w-3" />
                     {webhookSetupBusy ? 'Configuring Twitch…' : 'Activate persistent chat requests'}
