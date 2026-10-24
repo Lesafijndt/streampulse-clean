@@ -48,3 +48,27 @@ test('activity log requests are never cacheable', async () => {
   assert.equal(res.headers.Vary, 'Cookie');
   assert.ok([401, 503].includes(res.statusCode), 'unauthenticated request is denied without relying on live Twitch');
 });
+
+
+test('activity log API uses stable paginated Firestore reads, not full-history scans', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const api = await readFile(new URL('../api/activity-log.js', import.meta.url), 'utf8');
+  assert.match(api, /const PAGE_SIZE = 200/);
+  assert.match(api, /orderBy\('at', 'asc'\)/);
+  assert.match(api, /orderBy\(FieldPath\.documentId\(\), 'asc'\)/);
+  assert.match(api, /startAfter\(at, afterId\)/);
+  assert.match(api, /query\.limit\(PAGE_SIZE\)\.get\(\)/);
+  assert.match(api, /nextCursor, hasMore:/);
+  assert.doesNotMatch(api, /events\.orderBy\('at', 'asc'\)\.get\(\)/);
+});
+
+test('moderator activity refresh accumulates only new records, without rereading the collection', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /const activityCursorRef = useRef\(\{ at: 0, id: '' \}\)/);
+  assert.match(app, /params\.set\('afterAt', String\(cursor\.at\)\)/);
+  assert.match(app, /params\.set\('afterId', cursor\.id\)/);
+  assert.match(app, /activityCloudIdsRef\.current\.add\(String\(event\.id\)\)/);
+  assert.match(app, /setInterval\(loadActivityEvents, 120000\)/);
+  assert.doesNotMatch(app, /setInterval\(loadActivityEvents, 30000\)/);
+});

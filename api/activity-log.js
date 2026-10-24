@@ -152,9 +152,30 @@ export default async function handler(req, res) {
     const events = firestore.collection('artifacts').doc(appId).collection('public').doc('data').collection('queue_events');
 
     if (req.method === 'GET') {
-      const snapshot = await events.orderBy('at', 'asc').get();
-      const rows = snapshot.docs.map((entry) => normalizeActivityEvent({ ...entry.data(), id: entry.id })).filter(Boolean);
-      return res.status(200).json({ events: rows });
+      // A full-collection query every 30 seconds exhausted Firestore's daily
+      // quota and starved the live video queue. Page in stable at/id order and
+      // let each moderator session request only new records afterwards.
+      const at = Number(req.query?.afterAt || 0);
+      const afterId = String(req.query?.afterId || '');
+      if (!Number.isSafeInteger(at) || at < 0 ||
+          (afterId && !/^[A-Za-z0-9_-]{1,140}$/.test(afterId)) ||
+          (at > 0 && !afterId) || (afterId && at === 0)) {
+        return res.status(400).json({ code: 'invalid_activity_cursor' });
+      }
+      const { FieldPath } = await import('firebase-admin/firestore');
+      const PAGE_SIZE = 200;
+      let query = events.orderBy('at', 'asc')
+        .orderBy(FieldPath.documentId(), 'asc');
+      if (afterId) query = query.startAfter(at, afterId);
+      const snapshot = await query.limit(PAGE_SIZE).get();
+      const rows = snapshot.docs.map(entry =>
+        normalizeActivityEvent({ ...entry.data(), id: entry.id })).filter(Boolean);
+      const last = snapshot.docs[snapshot.docs.length - 1];
+      const nextCursor = last
+        ? { at: Number(last.get('at')) || 0, id: last.id } : null;
+      return res.status(200).json({
+        events: rows, nextCursor, hasMore: snapshot.size === PAGE_SIZE,
+      });
     }
 
     const event = normalizeActivityEvent(body.event);

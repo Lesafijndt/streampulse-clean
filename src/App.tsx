@@ -403,6 +403,7 @@ function YediHubAppContent() {
   const activityEventsRef = useRef(activityEvents);
   activityEventsRef.current = activityEvents;
   const activityCloudIdsRef = useRef(new Set());
+  const activityCursorRef = useRef({ at: 0, id: '' });
   const activityCloudReadyRef = useRef(false);
   const activitySyncInFlightRef = useRef(new Set());
   const [activityCloudReady, setActivityCloudReady] = useState(false);
@@ -1460,6 +1461,7 @@ function YediHubAppContent() {
     if (!moderatorLogin) {
       activityCloudReadyRef.current = false;
       activityCloudIdsRef.current = new Set();
+      activityCursorRef.current = { at: 0, id: '' };
       setActivityCloudReady(false);
       return undefined;
     }
@@ -1469,41 +1471,56 @@ function YediHubAppContent() {
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
     const loadActivityEvents = async () => {
-      if (!moderatorLogin || !active || loading || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      if (!moderatorLogin || !active || loading ||
+          (typeof navigator !== 'undefined' && !navigator.onLine)) return;
       loading = true;
       try {
-        const response = await fetch('/api/activity-log?appId=' + encodeURIComponent(appId), {
-          credentials: 'same-origin',
-          cache: 'no-store'
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !Array.isArray(result.events)) {
-          throw new Error(result.error || 'Activity log sync is unavailable');
+        // Read at most 800 records per refresh. Subsequent refreshes only
+        // fetch documents after the last seen at/id cursor, not lifetime data.
+        for (let page = 0; page < 4 && active; page++) {
+          const cursor = activityCursorRef.current;
+          const params = new URLSearchParams({ appId });
+          if (cursor.at > 0 && cursor.id) {
+            params.set('afterAt', String(cursor.at));
+            params.set('afterId', cursor.id);
+          }
+          const response = await fetch('/api/activity-log?' + params, {
+            credentials: 'same-origin', cache: 'no-store',
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !Array.isArray(result.events)) {
+            throw new Error(result.code || result.error || 'Activity log sync is unavailable');
+          }
+          if (!active) return;
+          const cloudEvents = result.events.map(event => normalizeActivityEvent(event)).filter(Boolean);
+          cloudEvents.forEach(event => activityCloudIdsRef.current.add(String(event.id)));
+          const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
+          activityEventsRef.current = merged;
+          setActivityEvents(merged);
+          const next = result.nextCursor;
+          if (next && Number.isSafeInteger(next.at) && next.at > 0 &&
+              /^[A-Za-z0-9_-]{1,140}$/.test(String(next.id || ''))) {
+            activityCursorRef.current = { at: next.at, id: String(next.id) };
+          } else if (result.hasMore) {
+            throw new Error('Activity history pagination could not advance');
+          }
+          if (!result.hasMore) {
+            activityCloudReadyRef.current = true;
+            setActivityCloudReady(true);
+            break;
+          }
         }
-        const cloudEvents = result.events.map((event) => normalizeActivityEvent(event)).filter(Boolean);
-        activityCloudIdsRef.current = new Set(cloudEvents.map((event) => String(event.id)));
-        activityCloudReadyRef.current = true;
-        setActivityCloudReady(true);
         setActivitySyncError(false);
-        const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
-        activityEventsRef.current = merged;
-        setActivityEvents(merged);
-            merged.forEach((event) => {
-          if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
-        });
       } catch (error) {
         if (active) {
-          console.warn('Activity log sync will retry automatically:', error);
-          setActivityCloudReady(false);
-          activityCloudReadyRef.current = false;
+          console.warn('Incremental activity sync will retry:', error);
           setActivitySyncError(true);
+          // Do not lose successfully loaded cursor/history on a quota error.
         }
-      } finally {
-        loading = false;
-      }
+      } finally { loading = false; }
     };
     void loadActivityEvents();
-    const interval = window.setInterval(loadActivityEvents, 30000);
+    const interval = window.setInterval(loadActivityEvents, 120000);
     return () => {
       active = false;
       window.clearInterval(interval);
