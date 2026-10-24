@@ -3079,6 +3079,26 @@ function YediHubAppContent() {
     ) || matchingItems.sort((a, b) => (Number(b.playedAt) || Date.parse(b.watchedAt || '') || 0) -
       (Number(a.playedAt) || Date.parse(a.watchedAt || '') || 0))[0] || null;
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
+    // An optimistic item can be visible only in this browser after a failed cloud
+    // write. It is NOT a confirmed queue duplicate. A repeated chat request
+    // should retry the same stable document ID immediately, not block the viewer.
+    const strandedItem = existingItem && existingItem.status !== 'watched'
+      ? pendingQueueAddsRef.current.get(String(existingItem.id))
+      : null;
+    if (strandedItem && !requestAlreadyPending) {
+      pendingMediaRequestKeysRef.current.add(identityKey);
+      let recovered = false;
+      try {
+        recovered = await syncAddVideo(strandedItem, { retryOnly: true });
+      } finally {
+        pendingMediaRequestKeysRef.current.delete(identityKey);
+      }
+      if (String(note).toLowerCase().includes('twitch chat')) {
+        updateChatBridgeHealth({ lastRequestResult: recovered ? 'recovered_pending_request' : 'pending_cloud_confirmation' });
+      }
+      if (!recovered) addToast('Retrying this request in the shared queue; cloud confirmation is still pending.', 'warning');
+      return recovered;
+    }
     if ((existingItem && existingItem.status !== 'watched') || requestAlreadyPending) {
       addToast('That video is already queued or playing. Duplicate request ignored.', 'warning');
       return false;

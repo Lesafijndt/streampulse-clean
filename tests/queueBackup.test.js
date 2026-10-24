@@ -27,3 +27,12 @@ test('YouTube blocked autoplay shows a visible thumbnail and button', async () =
   assert.match(app, /Click to start video/);
   assert.match(app, /browser blocked autoplay with sound/);
 });
+
+
+test('a prior local-only queue request is retried rather than rejected as a duplicate', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /pendingQueueAddsRef\.current\.get\(String\(existingItem\.id\)\)/);
+  assert.match(app, /syncAddVideo\(strandedItem, \{ retryOnly: true \}\)/);
+  assert.match(app, /lastRequestResult: recovered \? 'recovered_pending_request'/);
+  assert.match(app, /return recovered/);
+});
