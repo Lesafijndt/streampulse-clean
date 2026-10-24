@@ -112,3 +112,68 @@ test('signed webhook uses existing bot-session API endpoint; moderator UI never 
   assert.match(app, /activateTwitchWebhook/);
   assert.doesNotMatch(app, /window\.setTimeout\(\(\) => connectTwitchIrc\(target, \{ silent: true \}\), 150\)/);
 });
+
+
+test('persistent Twitch chat subscriptions use the verified moderator rather than reply-bot privileges', async () => {
+  const [setup, login, app] = await Promise.all([
+    readFile(new URL('../server/twitch-webhook-setup.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/twitch/login.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(setup, /MODERATOR_CHAT_SCOPES = \['user:read:chat', 'user:bot'\]/);
+  assert.match(setup, /condition: \{ broadcaster_user_id: broadcasterId, user_id: staff\.userId \}/);
+  assert.doesNotMatch(setup, /obtainSession\(req, res, 'bot'\)/);
+  assert.match(login, /chat_setup/);
+  assert.match(login, /data\?\.client_id !== clientId/);
+  assert.match(login, /paim_beach_pete/);
+  assert.match(login, /user:read:email user:read:chat user:bot/);
+  assert.match(app, /Authorize moderator chat intake with Twitch/);
+  assert.doesNotMatch(app, /if \(!moderatorLogin \|\| !chatBotSession\.connected\)/);
+});
+
+test('chat setup OAuth rejects everyone except the signed-in moderator', async t => {
+  const { default: login } = await import('../api/twitch/login.js');
+  const original = globalThis.fetch;
+  const oldClient = process.env.TWITCH_CLIENT_ID;
+  process.env.TWITCH_CLIENT_ID = 'test-client';
+  let authLogin = 'viewer';
+  globalThis.fetch = async () => Response.json({
+    login: authLogin, client_id: 'test-client',
+  });
+  t.after(() => {
+    globalThis.fetch = original;
+    if (oldClient === undefined) delete process.env.TWITCH_CLIENT_ID;
+    else process.env.TWITCH_CLIENT_ID = oldClient;
+  });
+  const response = () => ({
+    statusCode: 200, headers: {},
+    setHeader(k,v) {this.headers[k] = v;},
+    status(n) {this.statusCode=n;return this;},
+    send(msg) {this.body=msg;return this;},
+    redirect(n,u) {this.statusCode=n;this.location=u;return this;},
+  });
+  const req = {
+    method:'GET', headers:{host:'streampulse-clean.vercel.app',cookie:'yedi_twitch_access=valid-token'},
+    query:{chat_setup:'1'},
+  };
+  const blocked = response();
+  await login(req, blocked);
+  assert.equal(blocked.statusCode, 403);
+  authLogin = 'paim_beach_pete';
+  const moderator = response();
+  await login(req, moderator);
+  assert.equal(moderator.statusCode, 302);
+  const url = new URL(moderator.location);
+  assert.equal(url.hostname, 'id.twitch.tv');
+  assert.match(url.searchParams.get('scope'), /user:read:chat/);
+  assert.match(url.searchParams.get('scope'), /user:bot/);
+});
+
+test('different URL spellings of the same video are never created twice in one webhook delivery', async () => {
+  const event = {
+    broadcaster_user_login:'2o3a', chatter_user_login:'normal_chatter',
+    message:{text:'!assr https://youtu.be/dQw4w9WgXcQ and https://www.youtube.com/watch?v=dQw4w9WgXcQ'},
+  };
+  const { items } = await makeQueueItems(event);
+  assert.equal(items.length, 1);
+});

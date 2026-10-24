@@ -85,6 +85,7 @@ export async function makeQueueItems(event) {
   }
   if (!incoming.length) return { items: [], reason: 'not_a_request' };
   const items = [];
+  const mediaIdentities = new Set();
   for (const item of incoming) {
     let url = item.url;
     let media = parseMediaUrl(url);
@@ -96,6 +97,8 @@ export async function makeQueueItems(event) {
     }
     if (!media.videoId || media.platform === 'web') continue;
     const identity = getMediaIdentityKey(media.platform, media.videoId, url);
+    if (mediaIdentities.has(identity)) continue;
+    mediaIdentities.add(identity);
     const id = getStableMediaDocumentId('2o3a|' + identity);
     const title = item.title ||
       (media.platform === 'youtube' ? 'YouTube Media (' + media.videoId + ')' :

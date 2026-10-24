@@ -2,7 +2,7 @@ import { obtainSession } from './chat-subscribe.js';
 import { getVerifiedFirestore, getQueueNamespace } from './firebase-guard.js';
 
 const CALLBACK_PATH = '/api/twitch/bot-session?action=webhook';
-const BOT_SCOPES = ['user:read:chat', 'user:bot'];
+const MODERATOR_CHAT_SCOPES = ['user:read:chat', 'user:bot'];
 
 async function appAccessToken() {
   const id = process.env.TWITCH_CLIENT_ID;
@@ -39,17 +39,36 @@ function expectedCallback() {
   return origin + CALLBACK_PATH;
 }
 
+let lastReceiptProbe = { at: 0, value: null };
 async function recentWebhookDelivery() {
-  const db = await getVerifiedFirestore();
-  const base = db.collection('artifacts').doc(getQueueNamespace())
-    .collection('public').doc('data').collection('twitch_eventsub_receipts');
-  const snapshot = await base.orderBy('receivedAt', 'desc').limit(1).get();
-  const latest = snapshot.docs?.[0]?.data() || {};
-  return {
-    lastWebhookAt: Number(latest.receivedAt) || 0,
-    lastWebhookResult: String(latest.status || 'none').slice(0, 50),
-    lastWebhookQueued: Number(latest.queued) || 0,
-  };
+  // Cache moderator health reads for five minutes so the status panel never
+  // burns through the Firestore free tier simply by remaining open.
+  if (lastReceiptProbe.value && Date.now() - lastReceiptProbe.at < 5 * 60_000) {
+    return lastReceiptProbe.value;
+  }
+  let value;
+  try {
+    const db = await getVerifiedFirestore();
+    const base = db.collection('artifacts').doc(getQueueNamespace())
+      .collection('public').doc('data').collection('twitch_eventsub_receipts');
+    const snapshot = await base.orderBy('receivedAt', 'desc').limit(1).get();
+    const latest = snapshot.docs?.[0]?.data() || {};
+    value = {
+      lastWebhookAt: Number(latest.receivedAt) || 0,
+      lastWebhookResult: String(latest.status || 'none').slice(0, 50),
+      lastWebhookQueued: Number(latest.queued) || 0,
+      receiptCode: 'ok',
+    };
+  } catch (error) {
+    const diagnostic = String(error?.code || error?.message || '');
+    value = {
+      lastWebhookAt: 0, lastWebhookResult: 'unknown', lastWebhookQueued: 0,
+      receiptCode: /RESOURCE_EXHAUSTED|quota|\b8\b/i.test(diagnostic)
+        ? 'firestore_quota_exceeded' : 'firestore_receipts_unavailable',
+    };
+  }
+  lastReceiptProbe = { at: Date.now(), value };
+  return value;
 }
 
 async function getSubscriptions(headers) {
@@ -77,16 +96,20 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
     const callback = expectedCallback();
     const headers = await appAccessToken();
     const broadcasterId = await getBroadcasterId(headers);
-    const bot = await obtainSession(req, res, 'bot');
-    if (!bot) return res.status(401).json({ ok: false, code: 'bot_login_required' });
-    if (!BOT_SCOPES.every(scope => bot.scopes.includes(scope))) {
-      return res.status(403).json({ ok: false, code: 'bot_webhook_scopes_missing', missing: BOT_SCOPES.filter(scope => !bot.scopes.includes(scope)) });
+    // The Twitch viewer-listening principal is the verified channel
+    // moderator, not the reply bot. Twitch permits moderator status in place
+    // of a broadcaster channel:bot grant for an app-token webhook.
+    if (!MODERATOR_CHAT_SCOPES.every(scope => staff.scopes.includes(scope))) {
+      return res.status(403).json({
+        ok: false, code: 'moderator_chat_scopes_missing',
+        missing: MODERATOR_CHAT_SCOPES.filter(scope => !staff.scopes.includes(scope)),
+      });
     }
     const all = await getSubscriptions(headers);
     const existing = all.find(entry =>
       entry.type === 'channel.chat.message' &&
       String(entry.condition?.broadcaster_user_id) === broadcasterId &&
-      String(entry.condition?.user_id) === bot.userId &&
+      String(entry.condition?.user_id) === staff.userId &&
       entry.transport?.method === 'webhook' &&
       entry.transport?.callback === callback &&
       ['enabled', 'webhook_callback_verification_pending'].includes(entry.status));
@@ -104,7 +127,7 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
       method: 'POST', headers, signal: AbortSignal.timeout(8000), cache: 'no-store',
       body: JSON.stringify({
         type: 'channel.chat.message', version: '1',
-        condition: { broadcaster_user_id: broadcasterId, user_id: bot.userId },
+        condition: { broadcaster_user_id: broadcasterId, user_id: staff.userId },
         transport: { method: 'webhook', callback, secret: process.env.TWITCH_EVENTSUB_SECRET },
       }),
     });
@@ -115,7 +138,7 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
       });
       return res.status(502).json({
         ok: false, code: 'twitch_webhook_subscription_rejected',
-        reason: created.status === 403 ? 'bot_must_be_channel_moderator_or_have_channel_bot_grant' : 'twitch_rejected_request',
+        reason: created.status === 403 ? 'moderator_chat_grant_or_channel_status_missing' : 'twitch_rejected_request',
       });
     }
     return res.status(202).json({ ok: true, active: false,

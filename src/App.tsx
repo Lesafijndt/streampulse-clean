@@ -2215,10 +2215,9 @@ function YediHubAppContent() {
 
   // Refresh only the moderator's server-verified webhook/Firestore status.
   useEffect(() => {
-    if (!moderatorLogin || !chatBotSession.connected) {
+    if (!moderatorLogin) {
       setWebhookHealth(previous => ({
-        ...previous, loading: false, active: false,
-        code: !moderatorLogin ? 'moderator_only' : 'bot_reauthorization_required',
+        ...previous, loading: false, active: false, code: 'moderator_only',
       }));
       return undefined;
     }
@@ -2246,7 +2245,7 @@ function YediHubAppContent() {
     void refresh();
     const id = window.setInterval(refresh, 60000);
     return () => { alive = false; window.clearInterval(id); };
-  }, [moderatorLogin, chatBotSession.connected, chatBotSession.canReadChat]);
+  }, [moderatorLogin]);
 
   const activateTwitchWebhook = async () => {
     if (!moderatorLogin || webhookSetupBusy) return;
@@ -2267,7 +2266,9 @@ function YediHubAppContent() {
       }));
       addToast(response.ok
         ? 'Server webhook configured. Twitch will verify the callback before it is active.'
-        : 'Webhook setup failed: ' + String(data.code || response.status), response.ok ? 'success' : 'warning');
+        : 'Webhook setup failed: ' + String(data.code || response.status) +
+          (data.code === 'moderator_chat_scopes_missing' ? ' — authorize moderator chat intake first.' : ''),
+        response.ok ? 'success' : 'warning');
     } catch {
       setWebhookHealth(previous => ({ ...previous, code: 'setup_network_error', active: false }));
       addToast('Could not reach the server-side Twitch webhook setup.', 'warning');
@@ -3719,6 +3720,16 @@ function YediHubAppContent() {
                       {webhookHealth.loading ? 'CHECKING' : webhookHealth.active ? 'ACTIVE' : 'NOT ACTIVE'}
                     </span>
                   </div>
+                  {['moderator_chat_scopes_missing', 'webhook_not_subscribed'].includes(webhookHealth.code) && (
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      The moderator authorizes channel intake; a separate bot login is optional for chat replies.
+                    </div>
+                  )}
+                  {(webhookHealth.code === 'moderator_chat_scopes_missing') && (
+                    <a href="/api/twitch/login?chat_setup=1" className="mt-2 block rounded-lg border border-cyan-500/40 bg-cyan-900/30 px-3 py-2 text-center text-xs font-bold text-cyan-100">
+                      Authorize moderator chat intake with Twitch
+                    </a>
+                  )}
                   <button type="button" disabled={webhookSetupBusy}
                     onClick={() => { setTopMenuOpen(false); void activateTwitchWebhook(); }}
                     className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10 disabled:opacity-50">
@@ -3755,11 +3766,9 @@ function YediHubAppContent() {
                     {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
                     {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
                   </button>
-                  {chatBotSession.connected && !webhookHealth.active && (
-                    <a href="/api/twitch/bot-login" className="mt-2 block rounded-lg border border-amber-400/40 bg-amber-900/30 px-3 py-2 text-center text-[10px] font-bold text-amber-100">
-                      Reauthorize @gachibot69 for Twitch chat webhook permissions
-                    </a>
-                  )}
+                  <div className="mt-2 text-[10px] text-slate-400">
+                    This bot sends replies. The moderator's Twitch authorization handles incoming requests.
+                  </div>
                 </div>}
                 <div className="my-2 border-t border-white/10" />
                 <button type="button" onClick={() => {
