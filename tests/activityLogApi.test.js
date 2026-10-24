@@ -72,3 +72,17 @@ test('moderator activity refresh accumulates only new records, without rereading
   assert.match(app, /setInterval\(loadActivityEvents, 120000\)/);
   assert.doesNotMatch(app, /setInterval\(loadActivityEvents, 30000\)/);
 });
+
+
+test('quota exhaustion signals clients to back off instead of retrying activity reads', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const [api, app] = await Promise.all([
+    readFile(new URL('../api/activity-log.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(api, /res\.setHeader\('Retry-After', '3600'\)/);
+  assert.match(api, /code: 'firestore_quota_exceeded'/);
+  assert.match(app, /result\.code === 'firestore_quota_exceeded'/);
+  assert.match(app, /Date\.now\(\) < nextAllowedFetchAt/);
+  assert.match(app, /Math\.max\(3600, retrySeconds\)/);
+});
