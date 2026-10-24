@@ -80,6 +80,7 @@ import { classifyFirebaseHealthError } from '../api/_lib/firebase-health-diagnos
 import {
   buildCategoryCounts,
   buildNextTrackTransition,
+  buildHistoryRequeuePatch,
   buildPreviousTrackTransition,
   filterVideosForView,
   formatMediaDuration,
@@ -1069,6 +1070,7 @@ function YediHubAppContent() {
   // ==========================================
   const initializedCloudRoomsRef = useRef(new Set());
   const legacyVoteMigrationRef = useRef(new Set());
+  const historyRequeueInFlightRef = useRef(new Set());
 
   useEffect(() => {
     if (!db || !firebaseUser || !normalizeRoomName(channelRoom)) return;
@@ -1159,13 +1161,12 @@ function YediHubAppContent() {
 
           const visibleRoomList = mergePendingQueueAdds(roomList, pendingRoomAdds);
 
-          // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
-          // so a future refresh or deletion cannot make a duplicate reappear.
+          // Do not delete other Firestore documents while handling a live snapshot.
+          // Re-requests from History can coexist with legacy documents using
+          // different IDs. A snapshot deduplication decision must never trigger a
+          // destructive cloud write or erase a newly queued request.
           if (dedupedRoomList.duplicateIds.length > 0) {
-            void Promise.all(dedupedRoomList.duplicateIds.map((duplicateId) =>
-              deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', duplicateId))
-                .catch((error) => console.warn('Could not delete a duplicate queue document.', error))
-            ));
+            console.debug('Older duplicate media documents hidden from queue presentation:', dedupedRoomList.duplicateIds.length);
           }
 
           if (visibleRoomList.length > 0) {
@@ -4259,15 +4260,59 @@ function YediHubAppContent() {
     addToast(`Saved "${video.title.slice(0, 24)}..." to Watch Later list.`, 'info');
   };
 
-  const handleRequeue = (video) => {
-    const requestedAt = Date.now();
-    syncUpdateVideo(video.id, {
-      status: 'queue',
-      queueOrder: getNextQueueOrder(),
-      timestamp: requestedAt,
-      addedAt: new Date(requestedAt).toISOString()
-    });
-    addToast(`Re-added "${video.title.slice(0, 24)}..." to active queue.`, 'info');
+  const handleRequeue = async (video) => {
+    // History replays must be saved to the *shared* queue before reporting
+    // success. An optimistic local-only status change gets overwritten on the
+    // next Firestore snapshot and looks like the video disappeared instantly.
+    if (!isModerator || !video?.id) return false;
+    const id = String(video.id);
+    if (historyRequeueInFlightRef.current.has(id)) return false;
+    const current = (videosRef.current || []).find((item) => String(item.id) === id);
+    if (!current || current.status !== 'watched') {
+      addToast('This video is no longer in History. Refresh the queue to see its current status.', 'warning');
+      return false;
+    }
+    if (!db || !firebaseUser) {
+      addToast('Cannot re-add yet: the shared queue is offline. Reconnect Firebase and retry.', 'warning');
+      return false;
+    }
+    const identity = getMediaIdentityKey(current.platform, current.videoId, current.url);
+    if ((videosRef.current || []).some((item) => String(item.id) !== id &&
+      ['queue', 'playing', 'watch_later'].includes(String(item.status)) &&
+      getMediaIdentityKey(item.platform, item.videoId, item.url) === identity)) {
+      addToast('This video already has an active request. Duplicate replay ignored.', 'warning');
+      return false;
+    }
+    const updates = buildHistoryRequeuePatch(current, getNextQueueOrder(), Date.now());
+    if (!updates) return false;
+    historyRequeueInFlightRef.current.add(id);
+    try {
+      // This transaction also bumps room queueVersion. If another staff session
+      // already moved the item, persistQueuePatches rejects the stale status.
+      await persistQueuePatches(new Map([[id, updates]]), [...videosRef.current], false);
+      const apply = (items) => items.map((item) => {
+        if (String(item.id) !== id) return item;
+        // The Firestore listener (or auto-start) may already have moved the
+        // committed request into 'playing'. Do not downgrade that newer state
+        // back to 'queue' after the transaction promise resolves.
+        return item.status === 'watched' ? { ...item, ...updates } : item;
+      });
+      videosRef.current = apply(videosRef.current);
+      setVideos((previous) => apply(previous));
+      addToast(`Re-added "${String(current.title || 'video').slice(0, 36)}" to the shared queue.`, 'success');
+      return true;
+    } catch (error) {
+      console.warn('History re-queue could not commit to the shared queue:', error);
+      const stale = String(error?.message || '').includes('QUEUE_VERSION_CONFLICT');
+      addToast(stale
+        ? 'History changed on another dashboard. Refresh and retry this request.'
+        : 'Could not save the replay to the shared queue. No change was made.', 'warning');
+      setCloudSynced(false);
+      setSyncStatusText('History re-queue could not be confirmed');
+      return false;
+    } finally {
+      historyRequeueInFlightRef.current.delete(id);
+    }
   };
 
   const handleTogglePin = (video) => {
@@ -5251,53 +5296,8 @@ function YediHubAppContent() {
 
                   {/* Player Quick Action Bar */}
                   <div className="gachi-player-controlbar w-full min-w-0 flex flex-wrap items-center justify-end gap-2">
-                    {(['youtube', 'tiktok'].includes(currentVideo.platform) ||
-                      (currentVideo.platform === 'twitch' && twitchPlayerReadyId === String(currentVideo.id))) && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={togglePlaybackFromKeyboard}
-                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
-                          title={playerIsPaused ? 'Resume video playback' : 'Pause video playback'}
-                          aria-label={playerIsPaused ? 'Play video' : 'Pause video'}
-                        >
-                          {playerIsPaused ? <Play className="h-4 w-4 fill-current" /> : <Pause className="h-4 w-4" />}
-                          <span>{playerIsPaused ? 'Play' : 'Pause'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={toggleMuteFromKeyboard}
-                          className="gachi-control-btn flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active:scale-95"
-                          title={playerIsMuted ? 'Unmute video audio' : 'Mute video audio'}
-                          aria-label={playerIsMuted ? 'Unmute video' : 'Mute video'}
-                        >
-                          {playerIsMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                          <span>{playerIsMuted ? 'Unmute' : 'Mute'}</span>
-                        </button>
-                        {currentVideo.platform !== 'tiktok' && (
-                          <label className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-[10px] font-bold text-slate-300">
-                            <Volume2 className="h-3.5 w-3.5" />
-                            <span className="sr-only">Player volume</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max="100"
-                              step="1"
-                              value={playerVolume}
-                              onChange={(event) => setPlayerVolume(Number(event.target.value))}
-                              aria-label="Player volume"
-                              className="w-20 accent-purple-500"
-                            />
-                            <span className="min-w-8 text-right tabular-nums">{playerVolume}%</span>
-                          </label>
-                        )}
-                      </>
-                    )}
-                    {currentVideo.platform === 'tiktok' && (
-                      <span className="self-center px-2 text-[10px] text-slate-500" title="TikTok reports the volume level, but its documented embed API does not let the host restore it.">
-                        Volume is controlled inside TikTok
-                      </span>
-                    )}
+                    {/* Pause, mute and volume are available in the native embed
+                         and existing keyboard shortcuts, not duplicated in this bar. */}
                     {currentVideo.platform === 'twitch' &&
                       twitchClipPlayback.requestId === String(currentVideo.id) &&
                       twitchClipPlayback.status === 'native' && (

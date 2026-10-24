@@ -36,3 +36,39 @@ test('a prior local-only queue request is retried rather than rejected as a dupl
   assert.match(app, /lastRequestResult: recovered \? 'recovered_pending_request'/);
   assert.match(app, /return recovered/);
 });
+
+
+test('History requeue confirms Firestore before updating the queue or reporting success', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = app.indexOf('  const handleRequeue = async (video) => {');
+  const end = app.indexOf('  const handleTogglePin = (video) => {', start);
+  assert.ok(start >= 0 && end > start);
+  const handler = app.slice(start, end);
+  assert.match(handler, /historyRequeueInFlightRef\.current\.has\(id\)/);
+  assert.match(handler, /if \(!db \|\| !firebaseUser\)/);
+  assert.match(handler, /const updates = buildHistoryRequeuePatch\(/);
+  assert.match(handler, /await persistQueuePatches\(new Map\(\[\[id, updates\]\]\), \[\.\.\.videosRef\.current\], false\)/);
+  assert.ok(handler.indexOf('await persistQueuePatches') < handler.indexOf('setVideos((previous)'));
+  assert.match(handler, /return item\.status === 'watched' \? \{ \.\.\.item, \.\.\.updates \} : item/);
+  assert.match(handler, /finally \{/);
+  assert.doesNotMatch(handler, /syncUpdateVideo\(/);
+});
+
+test('cloud listener only hides duplicate media, never deletes live documents', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /dedupeMediaVideos\(rawRoomList\)/);
+  assert.doesNotMatch(app, /deleteDoc\(doc\(db, 'artifacts', appId, 'public', 'data', 'queue_videos', duplicateId\)/);
+  assert.match(app, /Remove legacy duplicate|snapshot deduplication decision must never trigger/);
+});
+
+test('player quick actions have no duplicate pause, mute or volume slider', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = app.indexOf('{/* Player Quick Action Bar */}');
+  const end = app.indexOf('{/* Watch Later Quick Stash */}', start);
+  assert.ok(start >= 0 && end > start);
+  const bar = app.slice(start, end);
+  assert.doesNotMatch(bar, /togglePlaybackFromKeyboard|toggleMuteFromKeyboard|setPlayerVolume/);
+  assert.doesNotMatch(bar, /type="range"|aria-label="Player volume"|aria-label="Pause video"|aria-label="Mute video"/);
+  assert.match(app, /<TransportNavigation isStaff=\{isStaff\}/);
+  assert.match(app, /if \(!event\.repeat\) togglePlaybackFromKeyboard\(\)/);
+});

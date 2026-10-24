@@ -28,14 +28,24 @@ test('stable media document IDs are deterministic for a given identity', () => {
   assert.match(getStableMediaDocumentId(identity), /^media-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/);
 });
 
-test('dedupe prefers the item already farther through the playback lifecycle', () => {
-  const input = [
-    { id: 'queued-copy', url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'queue', timestamp: 1 },
-    { id: 'played-copy', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'watched', timestamp: 2 }
+test('a re-requested video in the queue wins over the same video in History, regardless of snapshot order', () => {
+  const queued = { id: 'queued-copy', url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'queue', timestamp: 200 };
+  const watched = { id: 'played-copy', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'watched', timestamp: 100 };
+  for (const input of [[queued, watched], [watched, queued]]) {
+    const result = dedupeMediaVideos(input);
+    assert.deepEqual(result.videos.map((video) => video.id), ['queued-copy']);
+    assert.deepEqual(result.duplicateIds, ['played-copy']);
+  }
+});
+
+test('the currently playing video takes precedence over an older queue or History copy', () => {
+  const base = { url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ' };
+  const items = [
+    { ...base, id: 'history', status: 'watched', timestamp: 100 },
+    { ...base, id: 'waiting', status: 'queue', timestamp: 200 },
+    { ...base, id: 'current', status: 'playing', timestamp: 150 },
   ];
-  const result = dedupeMediaVideos(input);
-  assert.deepEqual(result.videos.map((video) => video.id), ['played-copy']);
-  assert.deepEqual(result.duplicateIds, ['queued-copy']);
+  assert.deepEqual(dedupeMediaVideos(items).videos.map(x => x.id), ['current']);
 });
 
 test('manual category is authoritative and auto music detection remains consistent', () => {

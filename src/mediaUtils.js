@@ -271,10 +271,12 @@ export function getStableMediaDocumentId(identityKey = '') {
 
 function getMediaStatusPriority(video) {
   const status = String(video?.status || '').toLowerCase();
+  // An active request must never be hidden by or deleted in favor of an old
+  // History row for the same URL. Replay from History is explicitly allowed.
   if (status === 'playing') return 4;
-  if (status === 'watched') return 3;
-  if (status === 'queue') return 2;
-  if (status === 'watch_later') return 1;
+  if (status === 'queue') return 3;
+  if (status === 'watch_later') return 2;
+  if (status === 'watched') return 1;
   return 0;
 }
 
@@ -297,8 +299,8 @@ export function dedupeMediaVideos(items) {
       return;
     }
 
-    // Prefer the item that's already playing or further along in history. On ties,
-    // keep the oldest request so an accidental second request cannot replay it.
+    // Prefer the active queue over History, which is no longer a cooldown
+    // or duplicate blocker. Among equally active copies keep the oldest request.
     const existingPriority = getMediaStatusPriority(existing);
     const incomingPriority = getMediaStatusPriority(video);
     const existingTime = Number(existing.timestamp) || Number(existing.createdAt) || Number.MAX_SAFE_INTEGER;

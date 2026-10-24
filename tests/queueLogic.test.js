@@ -5,6 +5,7 @@ import {
   buildNextTrackTransition,
   buildPreviousTrackTransition,
   buildQueueSyncWrites,
+  buildHistoryRequeuePatch,
   filterVideosForView,
   formatMediaDuration,
   getDurationLabel,
@@ -287,4 +288,17 @@ test('track transition persists the real playback timestamp instead of a static 
   assert.equal(outgoing.playedAt, transitionAt);
   assert.equal(outgoing.watchedAt, new Date(transitionAt).toISOString());
   assert.notEqual(outgoing.watchedAt, 'Just now');
+});
+
+test('History requeue creates a fresh waiting request without completed playback and vote state', () => {
+  const patch = buildHistoryRequeuePatch({
+    id: 'played', status: 'watched', watchedAt: '2026-10-24T00:00:00.000Z',
+    playedAt: 900, pinned: true, upvotes: 13, voters: ['viewer1'],
+  }, 1200, 1000);
+  assert.deepEqual(patch, {
+    status: 'queue', queueOrder: 1200, timestamp: 1000, addedAt: new Date(1000).toISOString(),
+    watchedAt: null, playedAt: null, nextTrackOverrideId: null,
+    pinned: false, upvotes: 0, voters: [],
+  });
+  assert.equal(buildHistoryRequeuePatch({ status: 'playing' }, 1, 1000), null);
 });

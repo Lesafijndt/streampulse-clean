@@ -111,6 +111,24 @@ export function selectPreviousVideoCandidate(videos, outgoing) {
     )[0] || null;
 }
 
+/** Replay a History item as a new waiting request without carrying finished
+ * playback state, pin/vote priority, or old History timestamps into the queue. */
+export function buildHistoryRequeuePatch(video, queueOrder, now = Date.now()) {
+  if (!video || String(video.status) !== 'watched') return null;
+  return {
+    status: 'queue',
+    queueOrder: Number(queueOrder),
+    timestamp: now,
+    addedAt: new Date(now).toISOString(),
+    watchedAt: null,
+    playedAt: null,
+    nextTrackOverrideId: null,
+    pinned: false,
+    upvotes: 0,
+    voters: [],
+  };
+}
+
 export function buildNextTrackTransition(latestVideos, outgoing, compareQueueOrder, transitionAt = Date.now()) {
   const nextOne = selectNextVideoCandidate(latestVideos, outgoing, compareQueueOrder);
   const updatesById = new Map();
