@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractSupportedMediaUrl,
+  extractSupportedMediaUrls,
   isSupportedMediaUrlMessage,
   parseTwitchPrivmsgLine,
   splitTwitchIrcFrame,
@@ -68,4 +69,22 @@ test('unsupported hosts and ordinary chat are not mistaken for media requests', 
   assert.equal(extractSupportedMediaUrl('hello everyone'), '');
   assert.equal(extractSupportedMediaUrl('https://notyoutube.com/watch?v=dQw4w9WgXcQ'), '');
   assert.equal(extractSupportedMediaUrl('https://example.com/watch?v=dQw4w9WgXcQ'), '');
+});
+
+
+test('two different video links seconds apart are never parser-throttled or merged', () => {
+  const urls = [
+    'https://youtu.be/dQw4w9WgXcQ',
+    'https://youtu.be/jfKfPfyJRdk',
+  ];
+  assert.deepEqual(extractSupportedMediaUrls(urls.join('  ')), urls);
+  assert.equal(extractSupportedMediaUrl(urls[1]), urls[1]);
+  assert.deepEqual(extractSupportedMediaUrls(urls[0] + ' ' + urls[0]), [urls[0]]);
+});
+
+test('zero-width chat characters and mixed TikTok/YouTube links are normalized', () => {
+  const text = 'please play https://youtu.be/dQw4w9WgXcQ\u200b and vt.tiktok.com/ZMExample/';
+  assert.deepEqual(extractSupportedMediaUrls(text), [
+    'https://youtu.be/dQw4w9WgXcQ', 'https://vt.tiktok.com/ZMExample/',
+  ]);
 });

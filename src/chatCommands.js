@@ -68,11 +68,15 @@ export function parseTwitchPrivmsgLine(line = '') {
  * Find supported media links anywhere in a chat message, including a sentence
  * around the URL, and normalize naked host/path links to an https URL.
  */
-export function extractSupportedMediaUrl(rawText = '') {
-  const text = String(rawText || '');
+/** Collect distinct video links in the order Twitch delivered them.
+ * A single chatter may paste several URLs in one message; do not silently
+ * discard all but the first. Limit per-message parsing for safety. */
+export function extractSupportedMediaUrls(rawText = '', maxLinks = 8) {
+  const text = String(rawText || '').replace(/[\u200b-\u200d\ufeff]/g, '');
   const matches = text.matchAll(new RegExp(MEDIA_LINK_PATTERN.source, 'gi'));
+  const urls = [];
+  const seen = new Set();
   for (const match of matches) {
-    // Strip sentence punctuation and closing wrappers commonly added after pasted links.
     const candidate = String(match[0] || '').replace(/[.,!?;:)\]}>']+$/g, '');
     if (!candidate) continue;
     try {
@@ -80,12 +84,19 @@ export function extractSupportedMediaUrl(rawText = '') {
       const parsed = new URL(normalized);
       const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
       if (!['http:', 'https:'].includes(parsed.protocol) || !ALLOWED_MEDIA_HOSTS.has(hostname)) continue;
-      return parsed.href;
+      if (seen.has(parsed.href)) continue;
+      seen.add(parsed.href);
+      urls.push(parsed.href);
+      if (urls.length >= Math.max(1, Math.min(8, Number(maxLinks) || 8))) break;
     } catch {
-      // Keep scanning in case a message contains an unrelated or malformed candidate first.
+      // Keep scanning for valid media URLs after malformed links.
     }
   }
-  return '';
+  return urls;
+}
+
+export function extractSupportedMediaUrl(rawText = '') {
+  return extractSupportedMediaUrls(rawText, 1)[0] || '';
 }
 
 export function isSupportedMediaUrlMessage(rawText = '') {

@@ -95,7 +95,8 @@ test('the restricted viewer request path uses a rate limit and cannot impersonat
   const { readFile } = await import('node:fs/promises');
   const handler = await readFile(new URL('../api/_lib/public-request-handler.js', import.meta.url), 'utf8');
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(handler, /maxGuestRequestsPerWindow = 3/);
+  assert.match(handler, /maxGuestRequestsPerWindow = 120/);
+  assert.match(handler, /if \(source !== 'twitch-chat-bridge'\)/);
   assert.match(handler, /requester = staff \? suppliedRequester : 'web_viewer'/);
   assert.match(handler, /source = staff && String\(body\.source/);
   assert.match(handler, /req\.headers\.origin/);
@@ -112,4 +113,13 @@ test('portrait video is centered in a dedicated 9:16 shell without iframe auto w
   assert.match(css, /\.gachi-portrait-shell/);
   assert.match(css, /aspect-ratio: 9 \/ 16/);
   assert.match(css, /\.gachi-portrait-shell > \.gachi-tiktok-player/);
+});
+
+
+test('authenticated chat requests bypass the shared moderator rate limiter', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const handlerSource = await readFile(new URL('../api/_lib/public-request-handler.js', import.meta.url), 'utf8');
+  assert.match(handlerSource, /source = staff && String\(body\.source/);
+  assert.match(handlerSource, /if \(source !== 'twitch-chat-bridge'\)/);
+  assert.doesNotMatch(handlerSource, /maxGuestRequestsPerWindow = 3/);
 });

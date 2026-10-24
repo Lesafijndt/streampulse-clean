@@ -5,7 +5,7 @@ import { processEventSubChatMessage } from './cloud-chat-requests.js';
 
 const requestWindowMs = 60_000;
 const maxRequestsPerWindow = 120;
-const maxGuestRequestsPerWindow = 3;
+const maxGuestRequestsPerWindow = 120;
 const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
 const requestAttempts = new Map();
@@ -183,21 +183,23 @@ export default async function handler(req, res) {
   }
   const guest = !staff;
   const requester = staff ? suppliedRequester : 'web_viewer';
-  const rateKey = guest ? 'guest:' + getClientKey(req) : 'staff:' + staff.login;
-  if (!checkRateLimit(rateKey, Date.now(), guest ? maxGuestRequestsPerWindow : maxRequestsPerWindow)) {
-    res.setHeader('Retry-After', '60');
-    return sendJson(res, 429, {
-      ok: false,
-      code: 'rate_limited',
-      message: guest
-        ? 'Viewer requests are limited to three attempts per minute. Try again shortly.'
-        : 'The request bridge is receiving too many additions at once. Wait a moment and try again.',
-    });
-  }
-
-  // Only the already authenticated moderator can relay a Twitch request.
-  // Website submissions never acquire a bot/moderator identity or trigger chat replies.
+  // Twitch chat is already governed by Twitch's moderation and anti-spam rules.
+  // Do not funnel hundreds of individual viewers into one moderator IP/session
+  // throttle: two different chat requests a second apart must both proceed.
   const source = staff && String(body.source || '') === 'twitch-chat-bridge' ? 'twitch-chat-bridge' : 'website';
+  if (source !== 'twitch-chat-bridge') {
+    const rateKey = guest ? 'guest:' + getClientKey(req) : 'staff:' + staff.login;
+    if (!checkRateLimit(rateKey, Date.now(), guest ? maxGuestRequestsPerWindow : maxRequestsPerWindow)) {
+      res.setHeader('Retry-After', '60');
+      return sendJson(res, 429, {
+        ok: false,
+        code: 'rate_limited',
+        message: 'The website request endpoint is receiving unusually many submissions. Try again shortly.',
+      });
+    }
+  }
+  // Website guests still have no staff access. The bot/moderator bridge alone
+  // can request an elevated source flag, after an approved Twitch staff login.
 
   try {
     const result = await processEventSubChatMessage({

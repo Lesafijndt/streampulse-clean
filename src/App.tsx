@@ -104,7 +104,7 @@ import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from
 import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute, shouldPersistYouTubePausedEvent } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
-import { extractSupportedMediaUrl, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
+import { extractSupportedMediaUrl, extractSupportedMediaUrls, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
 import { canHostLocalChatBridge, hasVerifiedCloudChatIntake } from './chatBridgeAccess.js';
 import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
@@ -610,7 +610,7 @@ function YediHubAppContent() {
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
   // Live diagnostics for the authenticated moderator Twitch chat bridge.
   const [chatBridgeHealth, setChatBridgeHealth] = useState({
-    status: 'idle', code: '', lastMessageAt: 0, lastRequestAt: 0, lastRequestResult: '',
+    status: 'idle', code: '', lastMessageAt: 0, lastRequestAt: 0, lastRequestResult: '', lastMessageKind: 'none',
   });
   const updateChatBridgeHealth = (patch) => {
     setChatBridgeHealth((previous) => ({ ...previous, ...patch }));
@@ -2855,19 +2855,31 @@ function YediHubAppContent() {
       if (!event || !id || seen.has(id)) return;
       seen.add(id);
       if (seen.size > 300) seen.clear();
-      updateChatBridgeHealth({ lastMessageAt: Date.now() });
       const login = normalizeTwitchLogin(event.chatter_user_login);
-      const text = String(event.message?.text || '').trim();
-      // Webhook state can look healthy even when it has stopped receiving new
-      // events. Always accept authenticated WebSocket chat deliveries as a backup;
-      // the stable media ID and Firestore transaction prevent active duplicates.
-      // Ordinary chatters are treated as viewers, not rejected by role.
-      if (normalizeTwitchLogin(event.broadcaster_user_login) !== PRIVATE_CHANNEL ||
-          !login || KNOWN_CHAT_BOTS.has(login) || !text) return;
-      if (/^!assr(?:\s|$)/i.test(text) || isSupportedMediaUrlMessage(text)) {
-        updateChatBridgeHealth({ lastRequestAt: Date.now(), lastRequestResult: 'received_from_twitch' });
-        const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
-        handleIncomingChatCommandRef.current?.(login, role, text);
+      const textFromEvent = String(event.message?.text || '').trim();
+      const textFromFragments = Array.isArray(event.message?.fragments)
+        ? event.message.fragments.map((fragment) => String(fragment?.text || '')).join('').trim()
+        : '';
+      // A URL can be present in Twitch's fragments even when message.text has
+      // been sanitized. Do not store raw chat messages in diagnostics.
+      const text = extractSupportedMediaUrls(textFromEvent).length || !textFromFragments
+        ? textFromEvent : textFromFragments;
+      const allowedSender = normalizeTwitchLogin(event.broadcaster_user_login) === PRIVATE_CHANNEL &&
+        Boolean(login) && !KNOWN_CHAT_BOTS.has(login);
+      const links = allowedSender ? extractSupportedMediaUrls(text) : [];
+      const assr = allowedSender && /^!assr(?:\s|$)/i.test(text);
+      updateChatBridgeHealth({
+        lastMessageAt: Date.now(),
+        lastMessageKind: allowedSender ? (links.length ? 'video_links' : assr ? 'title_request' : 'ordinary_chat') : 'ignored_sender',
+      });
+      if (!allowedSender || !text || (!links.length && !assr)) return;
+      // Each distinct link is processed independently, including when two
+      // URLs arrive in a single Twitch message. Twitch itself decides whether
+      // chat messages held by AutoMod are delivered at all.
+      updateChatBridgeHealth({ lastRequestAt: Date.now(), lastRequestResult: 'received_from_twitch' });
+      const role = event.chatter_is_broadcaster ? 'streamer' : event.chatter_is_moderator ? 'moderator' : 'viewer';
+      for (const requestedUrl of links.length ? links : [text]) {
+        void handleIncomingChatCommandRef.current?.(login, role, requestedUrl);
       }
     };
     socket.onerror = () => {
@@ -4830,6 +4842,16 @@ function YediHubAppContent() {
                 Last chat request: {formatTechnicalTimestamp(chatBridgeHealth.lastRequestAt)}
                 {chatBridgeHealth.lastRequestResult ? ' · ' + chatBridgeHealth.lastRequestResult.replaceAll('_', ' ') : ''}
               </div>
+              {isModerator && (
+                <div className="mt-1 break-words text-[9px] text-slate-400">
+                  Latest chat classification: {String(chatBridgeHealth.lastMessageKind || 'none').replaceAll('_', ' ')}
+                </div>
+              )}
+              {isModerator && chatBridgeHealth.lastMessageAt > 0 && !chatBridgeHealth.lastRequestAt && (
+                <div className="mt-1 text-[9px] text-amber-200">
+                  If normal viewers' links never arrive, check Twitch Creator Dashboard → Moderation → Block Hyperlinks. Held links are not delivered as normal chat requests.
+                </div>
+              )}
               {!chatBotSession.connected && <a href="/api/twitch/bot-login" className="mt-1 inline-block text-[10px] font-bold text-cyan-200 underline underline-offset-2">Connect @gachibot69 to receive chat requests</a>}
             </div>
             <div>
@@ -4999,6 +5021,10 @@ function YediHubAppContent() {
                       : 'aspect-video h-auto max-h-none'
                   }`}
                   style={!isPlayerFullscreen ? {
+                    width: '100%',
+                    aspectRatio: '16 / 9',
+                    height: 'auto',
+                    minWidth: 0,
                     maxWidth: isTheatreMode ? 'min(100%, 153vh)' : 'min(100%, 116vh)',
                     marginInline: 'auto',
                   } : undefined}
@@ -5033,12 +5059,12 @@ function YediHubAppContent() {
                   )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (
                     <div className={isVerticalMedia(currentVideo)
-                      ? "relative z-10 h-full aspect-[9/16] max-w-full overflow-hidden rounded-xl shadow-2xl"
-                      : "absolute inset-1 h-[calc(100%-0.5rem)] w-[calc(100%-0.5rem)] overflow-hidden rounded-sm border border-[#5d277d]"}>
+                      ? 'gachi-portrait-shell gachi-shorts-shell'
+                      : 'gachi-landscape-shell'}>
                     <iframe
                       key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
-                      className="absolute inset-0 h-full w-full border-0"
+                      className="gachi-video-embed border-0"
                       src={youtubePlayerSrc}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
@@ -5084,7 +5110,7 @@ function YediHubAppContent() {
                         <iframe
                           key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
                           ref={tiktokIframeRef}
-                          className="gachi-tiktok-player border-0"
+                          className="gachi-tiktok-player gachi-video-embed border-0"
                           src={tiktokPlayerSrc}
                           title={currentVideo.title}
                           allow="autoplay; encrypted-media; picture-in-picture; web-share"

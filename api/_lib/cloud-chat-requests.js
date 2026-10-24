@@ -1,4 +1,4 @@
-import { extractSupportedMediaUrl } from '../../src/chatCommands.js';
+import { extractSupportedMediaUrl, extractSupportedMediaUrls } from '../../src/chatCommands.js';
 import {
   detectMusicType,
   detectVideoCategory,
@@ -705,12 +705,32 @@ export async function processEventSubChatMessage({ event, messageId, requestOpti
   if (broadcaster !== PRIVATE_CHANNEL || !requester || !rawText || KNOWN_CHAT_BOTS.has(requester)) {
     return { ignored: true };
   }
-  const extractedUrl = extractSupportedMediaUrl(rawText);
+  const allUrls = extractSupportedMediaUrls(rawText);
+  const extractedUrl = allUrls[0] || '';
   const isAssrCommand = /^!assr(?:\s|$)/i.test(rawText);
   if (extractedUrl || isAssrCommand) {
+    const db = await getFirebaseAdminDb();
+    const appId = getFirebaseNamespace();
+    // Handle each distinct URL as its own durable request. A message containing
+    // multiple links must not silently discard all but the first. Message-scoped
+    // event IDs remain deterministic for retries / duplicate webhook deliveries.
+    if (allUrls.length > 1) {
+      const outcomes = [];
+      for (const [index, link] of allUrls.entries()) {
+        outcomes.push(await processChatMediaRequest({
+          db, appId, event,
+          messageId: messageId + '-link-' + index,
+          requester, rawText: link, extractedUrl: link, requestOptions,
+        }));
+      }
+      return {
+        queued: outcomes.some((outcome) => outcome?.queued),
+        results: outcomes.map((outcome) => ({ queued: Boolean(outcome?.queued), reason: outcome?.reason || '' })),
+        reason: outcomes.every((outcome) => outcome?.reason === 'duplicate') ? 'duplicate' : 'multi_request',
+      };
+    }
     return processChatMediaRequest({
-      db: await getFirebaseAdminDb(),
-      appId: getFirebaseNamespace(),
+      db, appId,
       event, messageId, requester, rawText, extractedUrl, requestOptions,
     });
   }

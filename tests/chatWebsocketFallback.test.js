@@ -57,6 +57,22 @@ test('chat bridge exposes failed subscription stages and last received request',
 test('normal Twitch chatters can request media even when the cloud webhook health flag is stale', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /event\.chatter_is_moderator \? 'moderator' : 'viewer'/);
-  assert.match(app, /handleIncomingChatCommandRef\.current\?\.\(login, role, text\)/);
+  assert.match(app, /handleIncomingChatCommandRef\.current\?\.\(login, role, requestedUrl\)/);
   assert.doesNotMatch(app, /!text \|\| cloudChatListenerReadyRef\.current/);
+});
+
+
+test('Twitch WebSocket handles all distinct URLs and diagnoses ordinary chat separately', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /const links = allowedSender \? extractSupportedMediaUrls\(text\) : \[\]/);
+  assert.match(app, /for \(const requestedUrl of links\.length \? links : \[text\]\)/);
+  assert.match(app, /lastMessageKind: allowedSender/);
+  assert.match(app, /Block Hyperlinks/);
+});
+
+test('server EventSub route also supports several URLs in one approved message', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const pipeline = await readFile(new URL('../api/_lib/cloud-chat-requests.js', import.meta.url), 'utf8');
+  assert.match(pipeline, /extractSupportedMediaUrls\(rawText\)/);
+  assert.match(pipeline, /messageId: messageId \+ '-link-' \+ index/);
 });
