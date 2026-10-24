@@ -6,17 +6,50 @@ function isHttpsRequest(req) {
   return process.env.NODE_ENV === 'production' || forwardedProto === 'https' || host.endsWith('.vercel.app');
 }
 
+// Twitch returns via a top-level GET, so SameSite=Lax works without requiring
+// third-party cookies. Secure is still mandatory for HTTPS.
 function setStaffStateCookie(res, req, value, maxAge = 600) {
-  const secure = isHttpsRequest(req);
-  const sameSite = secure ? 'None; Secure' : 'Lax';
-  res.setHeader('Set-Cookie', `yedi_twitch_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}`);
+  const secure = isHttpsRequest(req) ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `yedi_twitch_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`);
+}
+
+// A preview deployment and production cannot share host-only OAuth state cookies.
+// Always start login on the same origin as the configured Twitch callback.
+function canonicalLoginOrigin() {
+  const configured = String(process.env.TWITCH_REDIRECT_URI || process.env.TWITCH_APP_URL || '').trim();
+  if (!configured) return '';
+  try {
+    const url = new URL(configured);
+    const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+    if (!(url.protocol === 'https:' || localHttp) || url.username || url.password) return '';
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
+
+function requestOrigin(req) {
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const proto = String(req.headers['x-forwarded-proto'] || (isHttpsRequest(req) ? 'https' : 'http')).split(',')[0].trim().toLowerCase();
+  return host ? `${proto}://${host}` : '';
+}
+
+function redirectToCanonicalLogin(req, res, action) {
+  const canonical = canonicalLoginOrigin();
+  const current = requestOrigin(req);
+  if (canonical && current && canonical.toLowerCase() !== current.toLowerCase()) {
+    res.redirect(302, new URL(`/api/twitch/${action}`, canonical).toString());
+    return true;
+  }
+  return false;
 }
 
 function staffLogin(req, res) {
   if (req.method !== 'GET') return res.status(405).send('Method not allowed');
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!clientId) return res.status(500).send('Twitch OAuth is not configured: set TWITCH_CLIENT_ID in Vercel.');
-  const origin = process.env.TWITCH_APP_URL || `https://${req.headers.host}`;
+  if (redirectToCanonicalLogin(req, res, 'login')) return;
+  const origin = canonicalLoginOrigin() || requestOrigin(req);
   const redirectUri = process.env.TWITCH_REDIRECT_URI || `${origin}/api/twitch/callback`;
   const state = randomBytes(32).toString('hex');
   setStaffStateCookie(res, req, state, 600);
@@ -50,7 +83,8 @@ function botLogin(req, res) {
   if (req.method !== 'GET') return res.status(405).send('Method not allowed');
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!clientId) return res.status(500).send('Twitch OAuth is not configured: set TWITCH_CLIENT_ID in Vercel.');
-  const origin = process.env.TWITCH_APP_URL || `https://${req.headers.host}`;
+  if (redirectToCanonicalLogin(req, res, 'bot-login')) return;
+  const origin = canonicalLoginOrigin() || requestOrigin(req);
   const redirectUri = process.env.TWITCH_REDIRECT_URI || `${origin}/api/twitch/callback`;
   const state = randomBytes(32).toString('hex');
   setBotCookie(res, 'yedi_twitch_bot_oauth_state', state, 600);
