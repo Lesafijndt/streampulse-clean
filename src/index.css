@@ -2369,16 +2369,20 @@ body { background: #03070b; }
    stage. The provider iframe itself cannot use auto width: that allowed
    intrinsic sizing to overflow and clip against the right-hand side. */
 .gachi-theme .gachi-player-stage > .gachi-portrait-shell {
-  position: relative;
+  /* Absolute centering establishes a definite height even though the
+     widescreen stage itself is sized by aspect-ratio rather than height. */
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: block;
-  flex: 0 1 auto;
-  align-self: center;
+  flex: none;
   height: 100%;
   width: auto;
   aspect-ratio: 9 / 16;
   max-width: 100%;
   min-width: 0;
-  margin-inline: auto;
+  margin: 0;
   overflow: hidden;
   background: #030207;
 }
