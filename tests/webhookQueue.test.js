@@ -48,6 +48,7 @@ test('notification delivery and media writes occur in one idempotent transaction
           if (stored.has(ref.id)) throw Error('already exists');
           patches.push([ref.id, value]);
         },
+        set(ref, value) { patches.push([ref.id, value]); },
       };
       const result = await callback(tx);
       patches.forEach(([key,value]) => stored.set(key,value));
@@ -77,6 +78,18 @@ test('notification delivery and media writes occur in one idempotent transaction
   const c = await persistChatEvent(database,{...args,messageId:'eventB'});
   assert.equal(c.status,'duplicate_media');
   assert.equal(stored.size,3);
+  const queuePath = [...stored.keys()].find(key => key.includes('/queue_videos/'));
+  const original = stored.get(queuePath);
+  stored.set(queuePath, { ...original, status: 'watched', playedAt: 123 });
+  const replay = await persistChatEvent(database, { ...args, subscriptionId: 'replacement-sub', messageId: 'eventC' });
+  assert.equal(replay.status, 'queued');
+  assert.equal(stored.get(queuePath).status, 'queue');
+  const history = [...stored.entries()].filter(([key]) => key.includes('/queue_videos/history-'));
+  assert.equal(history.length, 1);
+  assert.equal(history[0][1].status, 'watched');
+  assert.equal(history[0][1].playedAt, 123);
+  const crossSubscriptionRetry = await persistChatEvent(database, { ...args, subscriptionId: 'replacement-sub' });
+  assert.equal(crossSubscriptionRetry.status, 'duplicate_delivery');
 });
 
 test('stale Firebase service account or web project cannot write into wrong project', () => {

@@ -25,7 +25,7 @@ test('moderator-only backend routes reject streamer tokens', async () => {
   const chat = await read('api/twitch/chat-message.js');
   const bot = await read('api/twitch/bot-session.js');
   const login = await read('api/twitch/bot-login.js');
-  const logout = await read('api/twitch/bot-logout.js');
+  const logout = await read('server/bot-logout.js');
   assert.match(activity, /new Set\(\['paim_beach_pete'\]\)/);
   assert.match(chat, /new Set\(\['paim_beach_pete'\]\)/);
   assert.match(bot, /'moderator_required'/);
@@ -52,7 +52,7 @@ test('viewer requests process all pasted URLs, are not restricted by account rol
   const s = await read('src/App.tsx');
   assert.match(s, /extractChatMediaUrls\(rawText/);
   assert.match(s, /for \(const requestText of requests\)/);
-  assert.match(s, /sendTwitchChatReply\('@' \+ normalizeTwitchLogin\(requestedBy\) \+ ' Request failed to save/);
+  assert.doesNotMatch(s.slice(s.indexOf('const handleIncomingChatCommand ='), s.indexOf('const confirmed = await syncAddVideo(newVideo)')), /sendTwitchChatReply\(/);
   assert.doesNotMatch(s, /if \(role !== 'moderator'\).*handleIncomingChatCommand/);
 });
 

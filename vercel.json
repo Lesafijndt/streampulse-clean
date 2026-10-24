@@ -1,3 +1,14 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json"
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/twitch/bot-logout", "destination": "/api/twitch/bot-session?action=logout" },
+    { "source": "/api/twitch/eventsub", "destination": "/api/twitch/bot-session?action=webhook&legacy=1" }
+  ],
+  "functions": {
+    "api/twitch/bot-session.js": { "maxDuration": 60 },
+    "api/twitch/intake-consumer.js": {
+      "maxDuration": 60,
+      "experimentalTriggers": [{ "type": "queue/v2beta", "topic": "twitch-viewer-requests-v2", "retryAfterSeconds": 60 }]
+    }
+  }
 }

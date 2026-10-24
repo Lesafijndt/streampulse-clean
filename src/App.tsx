@@ -72,6 +72,7 @@ import {
   writeBatch,
   deleteDoc,
   getDocs,
+  runTransaction,
   onSnapshot
 } from 'firebase/firestore';
 import {
@@ -873,14 +874,8 @@ function YediHubAppContent() {
           const cachedRoomList = applyCachedVideoDurations(dedupedRoomList.videos, durationCache);
           const roomList = mergeVideoDurationData(cachedRoomList, videosRef.current);
 
-          // Remove legacy duplicate Firestore documents as well as hiding them in the UI,
-          // so a future refresh or deletion cannot make a duplicate reappear.
-          if (dedupedRoomList.duplicateIds.length > 0) {
-            void Promise.all(dedupedRoomList.duplicateIds.map((duplicateId) =>
-              deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', duplicateId))
-                .catch((error) => console.warn('Could not delete a duplicate queue document.', error))
-            ));
-          }
+          // Snapshot reconciliation is read-only. Never delete requests merely
+          // because a legacy row shares a media URL with another generation.
 
           if (roomList.length > 0) {
             initializedCloudRoomsRef.current.add(normalizeRoomName(channelRoom));
@@ -1415,21 +1410,35 @@ function YediHubAppContent() {
     }
     // Keep the pending item visible until Firestore acknowledges the write,
     // while the synchronous ref blocks overlapping duplicate chat requests.
-    videosRef.current = [localItem, ...videosRef.current];
-    setVideos((prev) => [localItem, ...prev]);
+    const previousItem = videosRef.current.find(video => String(video.id) === String(localItem.id));
+    videosRef.current = [localItem, ...videosRef.current.filter(video => String(video.id) !== String(localItem.id))];
+    setVideos(videosRef.current);
     try {
       // Firestore rejects undefined values; missing duration metadata is normal.
       // JSON serialization drops undefined without changing the media identity.
       const documentData = JSON.parse(JSON.stringify({ ...localItem, createdAt: Date.now() }));
       const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
-      await setDoc(itemRef, documentData, { merge: true });
+      await runTransaction(db, async transaction => {
+        const snapshot = await transaction.get(itemRef);
+        const existing = snapshot.exists() ? snapshot.data() : null;
+        if (existing && existing.status !== 'watched') {
+          throw Object.assign(new Error('already_queued'), { existingItem: existing });
+        }
+        if (existing) {
+          const historyId = 'history-' + getStableMediaDocumentId(String(localItem.id) + '|' + String(existing.timestamp || existing.createdAt || 0));
+          transaction.set(doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', historyId), { ...existing, id: historyId });
+        }
+        transaction.set(itemRef, documentData);
+      });
       recordActivity('request_added', localItem, {
         source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard'
       });
       return true;
     } catch (error) {
+      const restore = error?.existingItem || previousItem;
       videosRef.current = videosRef.current.filter((video) => String(video.id) !== String(localItem.id));
-      setVideos((prev) => prev.filter((video) => String(video.id) !== String(localItem.id)));
+      if (restore) videosRef.current = [...videosRef.current, restore];
+      setVideos(videosRef.current);
       console.warn('Queue request was not confirmed by Firestore:', error?.code || error?.message || error);
       setCloudSynced(false);
       setSyncStatusText('Cloud queue write failed — request was not saved');
@@ -2368,11 +2377,9 @@ function YediHubAppContent() {
     const requester = normalizeTwitchLogin(username);
     const requestText = String(rawText || '').trim().replace(/^!assr\s*/i, '').trim();
     if (!requestText) {
-      sendTwitchChatReply(`@${requester} Use !assr <URL or title>.`);
       return;
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
 
@@ -2384,23 +2391,19 @@ function YediHubAppContent() {
         const response = await fetch(`/api/search-youtube?q=${encodeURIComponent(requestText.slice(0, 180))}`, { credentials: 'same-origin' });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !Array.isArray(result.results) || !result.results.length) {
-          sendTwitchChatReply(`@${requester} No YouTube match. Try a shorter title or URL.`);
           return;
         }
         url = result.results[0].url;
         title = result.results[0].title || '';
       } catch (error) {
         console.warn('Chat title search failed:', error);
-        sendTwitchChatReply(`@${requester} Search unavailable; try a direct URL.`);
         return;
       }
     }
     if (!queueOpenRef.current) {
-      sendTwitchChatReply(`@${requester} Requests are closed.`);
       return;
     }
-    // Keep successful requests quiet in Twitch chat. Failure responses (closed queue,
-    // invalid TikTok links, failed title search, duplicates) are still sent by the request flow.
+    // Media requests remain quiet; failures belong in the moderator dashboard.
     await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
       note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
@@ -2423,7 +2426,6 @@ function YediHubAppContent() {
   }) => {
     if (!normalizeRoomName(channelRoom)) {
       addToast('Set a Twitch channel in the header before adding requests.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Room is not set.');
       return false;
     }
     // A closed queue blocks every new request, including requests sent by staff. Staff can
@@ -2431,7 +2433,6 @@ function YediHubAppContent() {
     // latest setting, not the value captured by an older render.
     if (!queueOpenRef.current) {
       addToast('The media request queue is currently closed by the streamer.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -2448,7 +2449,6 @@ function YediHubAppContent() {
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.videoId || !result.url) {
           addToast(result.error || 'Could not resolve this TikTok link. Open it and copy the full URL containing /video/ followed by the video ID.', 'warning');
-          if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
           return false;
         }
         normalizedUrl = result.url;
@@ -2457,24 +2457,19 @@ function YediHubAppContent() {
       } catch (error) {
         console.warn('TikTok short-link resolution failed.', error);
         addToast('Could not resolve this TikTok share link here. Try copying the full TikTok URL with /video/ followed by its ID.', 'warning');
-        if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' TikTok link failed; try the full /video/ URL.');
         return false;
       }
     }
 
-    // Only allow each media identity once in the room's queue/history, so it can't be
-    // re-requested after playing either. Remove the old entry if it should become requestable again.
+    // Completed history never prevents a new request for that media.
     const identityKey = getMediaIdentityKey(parsed.platform, parsed.videoId, normalizedUrl);
     const alreadyExists = videosRef.current.some((video) =>
+      video.status !== 'watched' &&
       getMediaIdentityKey(video?.platform, video?.videoId, video?.url) === identityKey
     );
     const requestAlreadyPending = pendingMediaRequestKeysRef.current.has(identityKey);
     if (alreadyExists || requestAlreadyPending) {
-      addToast('That video already has an entry in the queue or history. Duplicate request ignored.', 'warning');
-      if (fromChat) {
-        const requester = normalizeTwitchLogin(requestedBy);
-        sendTwitchChatReply(`@${requester || 'viewer'} Already requested (queue/history).`);
-      }
+      addToast('That video is already queued or playing.', 'warning');
       return false;
     }
     // The lock closes the race where the same URL arrives in two chat messages at once,
@@ -2514,7 +2509,6 @@ function YediHubAppContent() {
     if (!queueOpenRef.current) {
       pendingMediaRequestKeysRef.current.delete(identityKey);
       addToast('The media request queue is currently closed by the streamer.', 'warning');
-      if (fromChat) sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Requests are closed.');
       return false;
     }
 
@@ -2590,7 +2584,6 @@ function YediHubAppContent() {
     if (!confirmed) {
       if (fromChat) {
         setChatBridgeStatus('Chat request received; Firestore queue write failed');
-        sendTwitchChatReply('@' + normalizeTwitchLogin(requestedBy) + ' Request failed to save; please retry.');
       }
       addToast('Request could not be saved to the shared queue.', 'warning');
       return false;
@@ -3873,6 +3866,11 @@ function YediHubAppContent() {
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
               <div className="text-slate-200">#{normalizeRoomName(channelRoom)} · {streamSettings.queueOpen ? 'Requests open' : 'Requests closed'}</div>
             </div>
+          </div>
+        )}
+        {isModerator && webhookHealth.receiptCode === 'firestore_quota_exceeded' && (
+          <div className="mx-3 mb-3 rounded-xl border border-rose-400/40 bg-rose-950/40 px-4 py-3 text-xs text-rose-100 sm:mx-5" role="alert">
+            Firestore quota is exhausted. New chat requests are buffered and retried; they appear in the dashboard after cloud storage recovers. Buffer retention is seven days.
           </div>
         )}
         {isModerator && webhookHealth.code === 'moderator_chat_scopes_missing' && (

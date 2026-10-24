@@ -72,12 +72,19 @@ async function recentWebhookDelivery() {
 }
 
 async function getSubscriptions(headers) {
-  const response = await fetch('https://api.twitch.tv/helix/eventsub/subscriptions?type=channel.chat.message', {
+  const subscriptions = [];
+  let cursor = '';
+  do {
+  const response = await fetch('https://api.twitch.tv/helix/eventsub/subscriptions?type=channel.chat.message' +
+    (cursor ? '&after=' + encodeURIComponent(cursor) : ''), {
     headers, signal: AbortSignal.timeout(7000), cache: 'no-store',
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error('Unable to read Twitch subscriptions'), { code: 'subscription_lookup_failed' });
-  return Array.isArray(result.data) ? result.data : [];
+  subscriptions.push(...(Array.isArray(result.data) ? result.data : []));
+  cursor = String(result.pagination?.cursor || '');
+  } while (cursor && subscriptions.length < 1000);
+  return subscriptions;
 }
 
 export default async function configureWebhook(req, res, { statusOnly = false } = {}) {
@@ -90,14 +97,8 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
   try {
     const staff = await obtainSession(req, res, 'staff');
     if (!staff) return res.status(403).json({ ok: false, code: 'moderator_required' });
-    // Check the already-verified user grant BEFORE making unnecessary Twitch
-    // app-token and broadcaster API calls on every status refresh.
-    if (!MODERATOR_CHAT_SCOPES.every(scope => staff.scopes.includes(scope))) {
-      return res.status(403).json({
-        ok: false, code: 'moderator_chat_scopes_missing',
-        missing: MODERATOR_CHAT_SCOPES.filter(scope => !staff.scopes.includes(scope)),
-      });
-    }
+    // An enabled app-token subscription survives browser sessions and token
+    // scopes. Inspect it before asking the user to repeat OAuth consent.
     if (!process.env.TWITCH_EVENTSUB_SECRET || process.env.TWITCH_EVENTSUB_SECRET.length < 10) {
       return res.status(503).json({ ok: false, code: 'webhook_secret_missing' });
     }
@@ -154,7 +155,8 @@ export default async function configureWebhook(req, res, { statusOnly = false } 
         status: created.status, message: String(result.message || '').slice(0, 180),
       });
       return res.status(502).json({
-        ok: false, code: 'twitch_webhook_subscription_rejected',
+        ok: false, code: created.status === 403 && !MODERATOR_CHAT_SCOPES.every(scope => staff.scopes.includes(scope))
+          ? 'moderator_chat_scopes_missing' : 'twitch_webhook_subscription_rejected',
         reason: created.status === 403 ? 'moderator_chat_grant_or_channel_status_missing' : 'twitch_rejected_request',
       });
     }

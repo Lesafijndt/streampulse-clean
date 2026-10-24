@@ -30,6 +30,10 @@ function replyUnauthenticated(res) {
 
 export default async function handler(req, res) {
   const action = String(req.query?.action || '');
+  if (action === 'logout') {
+    const { default: logout } = await import('../../server/bot-logout.js');
+    return logout(req, res);
+  }
   if (req.method === 'POST' && action === 'webhook') {
     const { default: webhook } = await import('../../server/twitch-webhook.js');
     return webhook(req, res);

@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { getVerifiedFirestore } from './firebase-guard.js';
-import { persistChatEvent } from './webhook-queue.js';
+import { bufferRequest } from './durable-intake.js';
 
 export async function readTwitchRawBody(req, maxBytes = 262144) {
   if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
@@ -37,10 +36,12 @@ export function verifyTwitchSignature({ id, timestamp, signature, rawBody, secre
   return timingSafeEqual(expected, Buffer.from(signature.slice(7), 'hex'));
 }
 
-export default async function handleTwitchWebhook(req, res) {
+export default async function handleTwitchWebhook(req, res, dependencies = {}) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   if (req.method !== 'POST') return res.status(405).json({ code: 'method_not_allowed' });
-  const secret = process.env.TWITCH_EVENTSUB_SECRET || '';
+  const secret = String(req.query?.legacy || '') === '1'
+    ? createHmac('sha256', process.env.TWITCH_CLIENT_SECRET || '').update('whale-cum-eventsub-v1:' + process.env.TWITCH_CLIENT_ID).digest('hex')
+    : process.env.TWITCH_EVENTSUB_SECRET || '';
   if (secret.length < 10) return res.status(503).json({ code: 'webhook_not_configured' });
   let raw;
   try { raw = await readTwitchRawBody(req); }
@@ -61,6 +62,10 @@ export default async function handleTwitchWebhook(req, res) {
   try { frame = JSON.parse(raw.toString('utf8')); }
   catch { return res.status(400).json({ code: 'malformed_payload' }); }
   const type = String(req.headers['twitch-eventsub-message-type'] || '');
+  if (type === 'streampulse_transport_probe') {
+    await (dependencies.buffer || bufferRequest)({ kind: 'health', messageId: id });
+    return res.status(202).json({ buffered: true });
+  }
   if (type === 'webhook_callback_verification') {
     const challenge = String(frame?.challenge || '');
     if (!challenge || challenge.length > 500) return res.status(400).json({ code: 'invalid_challenge' });
@@ -83,11 +88,10 @@ export default async function handleTwitchWebhook(req, res) {
   const messageId = String(event.message_id || id);
   const subscriptionId = String(frame.subscription?.id || '');
   try {
-    const db = await getVerifiedFirestore();
-    const result = await persistChatEvent(db, { event, messageId, subscriptionId });
-    // Return 2xx ONLY after durable Firestore confirmation. Twitch retries
-    // transient 5xx responses and our transaction deduplicates redeliveries.
-    console.info('twitch_webhook_committed', { status: result.status, queued: result.queued });
+    const result = await (dependencies.buffer || bufferRequest)({ event, messageId, subscriptionId });
+    // Acknowledge only after the independent durable buffer accepts the event.
+    // Firestore outages are retried by the private consumer, not the browser.
+    console.info('twitch_webhook_buffered', { buffered: result.buffered === true });
     return res.status(204).end();
   } catch (error) {
     console.error('twitch_webhook_write_failed', {

@@ -7,7 +7,7 @@ WHALE CUM is a private Vite + React dashboard for running a community media queu
 - **Shared queue:** Accepts supported YouTube videos and Shorts, TikTok videos, Twitch Clips, and Kick Clips. The dashboard can also add media directly; title-based chat requests search YouTube and use the best match returned by the search route.
 - **Queue management:** Active Queue, Watch Later, and History views; search; category and media-type filters; sorting for non-active lists; upvotes; pinned priority; drag-and-drop ordering and move controls; Play Now; Previous Video and Next Video; and automatic advance when the player reports that media ended.
 - **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
-- **Twitch chat bridge:** An authenticated dashboard tab or OBS browser source listens to chat without rendering a public chat transcript. Requests are accepted through the chat commands below.
+- **Twitch chat intake:** A signed EventSub webhook accepts viewer requests even with every dashboard closed. Vercel Queues buffers accepted messages for up to seven days and retries Firestore failures. No media-request acknowledgments are posted in chat.
 - **Stats & analytics:** Requesters, request totals, completions, skips, votes, top platforms/categories/requesters, estimated queue runway, and media-duration lookup status. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
 - **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
 
@@ -20,7 +20,7 @@ Only the Twitch accounts below are allowed to sign in to the dashboard:
 | `2o3a` | Streamer |
 | `paim_beach_pete` | Moderator |
 
-The allowlist is enforced by the Vercel OAuth/session API, not a client-side role selector. An authenticated session is required to start the private Twitch IRC bridge. The bridge runs in the open dashboard/OBS browser source; Vercel does not keep a browser WebSocket alive after every browser has been closed.
+The allowlist protects dashboard access only. All normal viewers can paste supported URLs without signing into the dashboard or Firebase. `PaIm_Beach_Pete` is Twitch's display name for login `paim_beach_pete`; `palm_beach_pete` is not a verified staff alias. Persistent intake uses a server webhook and private queue consumer; it needs no open browser. Technical diagnostics remain moderator-only.
 
 ## Chat commands
 

@@ -131,7 +131,9 @@ export async function makeQueueItems(event) {
  */
 export async function persistChatEvent(db, { event, messageId, subscriptionId }) {
   const namespace = getQueueNamespace();
-  const eventKey = createHash('sha256').update(String(subscriptionId) + ':' + String(messageId)).digest('hex');
+  // Message identity is independent of subscription: an old and a replacement
+  // webhook may briefly deliver the same Twitch message concurrently.
+  const eventKey = createHash('sha256').update('2o3a:' + String(messageId)).digest('hex');
   const base = db.collection('artifacts').doc(namespace).collection('public').doc('data');
   const receiptRef = base.collection('twitch_eventsub_receipts').doc(eventKey);
   const pending = await makeQueueItems(event);
@@ -151,8 +153,16 @@ export async function persistChatEvent(db, { event, messageId, subscriptionId })
     let duplicates = 0;
     if (roomOpen) {
       for (let i = 0; i < itemRefs.length; i++) {
-        if (reads[i + 2].exists) { duplicates++; continue; }
-        tx.create(itemRefs[i], pending.items[i]);
+        const previous = reads[i + 2].data();
+        if (reads[i + 2].exists && previous?.status !== 'watched') { duplicates++; continue; }
+        if (reads[i + 2].exists) {
+          // Preserve the completed request as history before reusing its active
+          // media slot. The new request receives its own timestamp and sender.
+          const historyId = 'history-' + createHash('sha256').update(pending.items[i].id + ':' +
+            String(previous.timestamp || previous.createdAt || 0)).digest('hex');
+          tx.set(base.collection('queue_videos').doc(historyId), { ...previous, id: historyId });
+          tx.set(itemRefs[i], pending.items[i]);
+        } else tx.create(itemRefs[i], pending.items[i]);
         queued++;
       }
     }

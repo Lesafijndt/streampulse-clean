@@ -28,14 +28,14 @@ test('stable media document IDs are deterministic for a given identity', () => {
   assert.match(getStableMediaDocumentId(identity), /^media-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/);
 });
 
-test('dedupe prefers the item already farther through the playback lifecycle', () => {
+test('history cannot hide or delete a new request for the same media', () => {
   const input = [
     { id: 'queued-copy', url: 'https://youtu.be/dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'queue', timestamp: 1 },
     { id: 'played-copy', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', platform: 'youtube', videoId: 'dQw4w9WgXcQ', status: 'watched', timestamp: 2 }
   ];
   const result = dedupeMediaVideos(input);
-  assert.deepEqual(result.videos.map((video) => video.id), ['played-copy']);
-  assert.deepEqual(result.duplicateIds, ['queued-copy']);
+  assert.deepEqual(result.videos.map((video) => video.id), ['queued-copy', 'played-copy']);
+  assert.deepEqual(result.duplicateIds, []);
 });
 
 test('manual category is authoritative and auto music detection remains consistent', () => {

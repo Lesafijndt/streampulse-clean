@@ -288,9 +288,11 @@ export function dedupeMediaVideos(items) {
     const platform = String(video.platform || 'web').trim().toLowerCase();
     const videoId = String(video.videoId || '').trim().toLowerCase();
     const hasPlatformId = platform !== 'web' && videoId && !videoId.startsWith('ext-');
-    const identityKey = url || hasPlatformId
+    const mediaKey = url || hasPlatformId
       ? getMediaIdentityKey(platform, videoId, url)
       : 'entry:' + String(video.id || index);
+    const identityKey = video.status === 'watched'
+      ? 'history:' + String(video.id || index) : 'active:' + mediaKey;
     const existing = winners.get(identityKey);
     if (!existing) {
       winners.set(identityKey, video);
