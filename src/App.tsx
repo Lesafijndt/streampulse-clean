@@ -3868,6 +3868,25 @@ function YediHubAppContent() {
             </div>
           </div>
         )}
+        {isModerator && webhookHealth.code === 'moderator_chat_scopes_missing' && (
+          <div className="mx-3 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/40 bg-amber-950/40 px-4 py-3 text-xs text-amber-100 sm:mx-5" role="alert">
+            <div className="min-w-0">
+              <div className="font-bold">Twitch chat requests are not connected</div>
+              <div className="mt-1 text-amber-200/90">
+                Your moderator Twitch login needs chat-reading permission. Approve it once; the server will then connect automatically.
+              </div>
+            </div>
+            <a href="/api/twitch/login?chat_setup=1"
+              className="shrink-0 rounded-lg border border-cyan-300/60 bg-cyan-700 px-4 py-2 font-black text-white hover:bg-cyan-600">
+              Authorize Twitch chat requests
+            </a>
+          </div>
+        )}
+        {isModerator && webhookHealth.code === 'webhook_not_subscribed' && webhookSetupBusy && (
+          <div className="mx-3 mb-3 rounded-xl border border-slate-600/30 px-3 py-2 text-xs text-slate-300 sm:mx-5">
+            Configuring the Twitch chat listener…
+          </div>
+        )}
       </header>
 
       {/* ==========================================
