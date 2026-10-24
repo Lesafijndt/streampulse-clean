@@ -9,7 +9,13 @@ WHALE CUM is a private Vite + React dashboard for running a community media queu
 - **Playback:** A large theatre-style player for YouTube and vertical TikTok embeds, plus supported Twitch Clip embeds and source links for media that cannot play inline. Playback, mute, and volume controls vary by provider; the dashboard reports when a provider does not expose a remote control.
 - **Twitch chat intake:** A signed EventSub webhook accepts viewer requests even with every dashboard closed. Vercel Queues buffers accepted messages for up to seven days and retries Firestore failures. No media-request acknowledgments are posted in chat.
 - **Stats & analytics:** Requesters, request totals, completions, skips, votes, top platforms/categories/requesters, estimated queue runway, and media-duration lookup status. Activity can be viewed for lifetime, the last 24 hours, or the current browser-tab session.
-- **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. With Firebase configured, authorized sessions can synchronize the shared queue and activity log across browsers.
+- **Recovery:** Queue and settings are saved locally, with backup export/import and safety-snapshot recovery. Production uses private Postgres storage behind verified Twitch sessions. Existing browser queue rows are imported once without replacing newer cloud requests; the original Firebase project remains a backup.
+
+## Production storage
+
+The connected Neon Free integration supplies server-only `DATABASE_URL`. Queue, history, receipts, settings and activity share an atomic PostgreSQL transaction boundary. Browser reads and writes go through `/api/twitch/session?action=store`; database credentials and private analytics never go to the streamer. Unchanged queue polling fetches only the database version. Stale playback generations cannot overwrite newer requests.
+
+When Postgres is configured, dashboard cloud sync does not require Firebase Authentication, custom-token creation, or Firestore reads/writes. Firebase remains a legacy fallback only when no Postgres connection is configured. Keep `firebase-admin` pinned to the tested version: `npm test` includes a real token-signing check with CommonJS require(ESM) disabled to match production.
 
 ## Access and authentication
 

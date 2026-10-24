@@ -36,6 +36,13 @@ export async function consumeRequest(payload, dependencies = {}) {
     throw new Error('invalid_queue_signature');
   }
   if (payload.kind === 'health') {
+    if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+      const { getQueueNamespace } = await import('./firebase-guard.js');
+      const db = dependencies.db || await getVerifiedFirestore();
+      await db.doc(`artifacts/${getQueueNamespace()}/public/data/system_diagnostics/queue-${payload.messageId}`).set({
+        producer: payload.producer, consumer: process.env.VERCEL_DEPLOYMENT_ID || 'local', storedAt: Date.now(),
+      });
+    }
     console.info('twitch_intake_transport_verified', { producer: payload.producer,
       consumer: process.env.VERCEL_DEPLOYMENT_ID || 'local', probeId: payload.messageId });
     return { transportVerified: true };

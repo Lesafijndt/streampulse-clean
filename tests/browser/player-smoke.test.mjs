@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const baseUrl = process.env.WHALE_CUM_TEST_BASE_URL || 'http://127.0.0.1:5173';
 const chromePath = process.env.CHROME_EXECUTABLE_PATH || 'google-chrome';
 
 function renderInChrome(url, viewport = '1365,900') {
+  const profileRoot = fileURLToPath(new URL('../../node_modules/.cache/browser-tests/', import.meta.url));
+  mkdirSync(profileRoot, { recursive: true });
+  const profile = mkdtempSync(profileRoot + 'profile-');
   const result = spawnSync(chromePath, [
+    '--user-data-dir=' + profile,
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     '--hide-scrollbars', '--window-size=' + viewport, '--virtual-time-budget=8000',
     '--dump-dom', url
@@ -32,4 +38,10 @@ test('provider command bridge sends correctly shaped YouTube and TikTok messages
   const html = renderInChrome(baseUrl + '/tests/browser/player-bridge.html?autotest=1');
   assert.match(html, /data-test-status="pass"/, 'YouTube and TikTok browser command assertions should pass; output: ' + html.slice(-3500));
   assert.doesNotMatch(html, /data-test-status="fail"/, 'provider command assertions failed');
+});
+
+test('actual streamer dashboard imports its queue and persists Next through the private Postgres transport', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/postgres-dashboard.html');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-2000));
+  assert.doesNotMatch(html, /data-test-status="fail"/);
 });

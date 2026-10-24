@@ -27,6 +27,10 @@ export function decodeServiceAccount(raw = process.env.FIREBASE_SERVICE_ACCOUNT_
 }
 
 export async function getVerifiedFirestore() {
+  if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+    const { getPostgresStore } = await import('./postgres-store.js');
+    return getPostgresStore(getQueueNamespace());
+  }
   const serviceAccount = decodeServiceAccount();
   const [{ cert, getApps, initializeApp }, { getFirestore }] = await Promise.all([
     import('firebase-admin/app'), import('firebase-admin/firestore'),

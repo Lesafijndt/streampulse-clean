@@ -1,5 +1,5 @@
 import { sanitizePersonalPreferences } from '../../src/personalPreferences.js';
-import { decodeServiceAccount } from '../../server/firebase-guard.js';
+import { decodeServiceAccount, getVerifiedFirestore, getQueueNamespace } from '../../server/firebase-guard.js';
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 // Sliding, HttpOnly remember-me cookie. Renewed on every successful session check.
 const REMEMBERED_SESSION_MAX_AGE = 60 * 60 * 24 * 400;
@@ -71,7 +71,8 @@ export default async function handler(req, res) {
   res.setHeader('Vary', 'Cookie');
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   const preferencesAction = String(req.query?.action || '') === 'preferences';
-  if (req.method === 'POST' && !preferencesAction) return res.status(405).json({ error: 'Method not allowed' });
+  const storeAction = String(req.query?.action || '') === 'store';
+  if (req.method === 'POST' && !preferencesAction && !storeAction) return res.status(405).json({ error: 'Method not allowed' });
   if (req.method === 'POST') {
     let allowedOrigin;
     try { allowedOrigin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin; }
@@ -139,18 +140,17 @@ export default async function handler(req, res) {
     setCookie(res, 'yedi_twitch_access', accessToken, accessCookieMaxAge);
     if (refreshToken) setCookie(res, 'yedi_twitch_refresh', refreshToken, REMEMBERED_SESSION_MAX_AGE);
 
+    if (storeAction) {
+      const { handlePrivateStore } = await import('../../server/private-store-api.js');
+      return handlePrivateStore(req, res, { login, role });
+    }
+
     if (preferencesAction) {
       // The document key is derived exclusively from the verified Twitch identity,
       // never from a request parameter. This route contains no admin diagnostics.
       try {
-        await getFirebaseAdminAuth();
-        const [{ getApps }, { getFirestore }] = await Promise.all([
-          import('firebase-admin/app'), import('firebase-admin/firestore')
-        ]);
-        const firebase = getApps().find(app => app.name === 'yedi-hub-firebase-admin');
-        if (!firebase) throw new Error('admin_not_initialized');
-        const namespace = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
-        const ref = getFirestore(firebase).collection('artifacts').doc(namespace)
+        const namespace = getQueueNamespace();
+        const ref = (await getVerifiedFirestore()).collection('artifacts').doc(namespace)
           .collection('public').doc('data').collection('user_profiles').doc(login);
         if (req.method === 'GET') {
           const snap = await ref.get();
@@ -171,6 +171,11 @@ export default async function handler(req, res) {
         console.error('Personal preferences storage failed:', error?.code || error?.message || error);
         return res.status(503).json({ ok: false, code: 'preferences_storage_unavailable' });
       }
+    }
+
+    if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+      return res.status(200).json({ authenticated: true, role, storageBackend: 'postgres',
+        user: { id: me.id, login: me.login, display_name: me.display_name, profile_image_url: me.profile_image_url || '' }, channel: '2o3a' });
     }
 
     let firebaseCustomToken = '';

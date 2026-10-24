@@ -63,6 +63,7 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  createPrivateCloudDb,
   collection,
   doc,
   setDoc,
@@ -74,7 +75,7 @@ import {
   getDocs,
   runTransaction,
   onSnapshot
-} from 'firebase/firestore';
+} from './cloudStore.js';
 import {
   buildCategoryCounts,
   buildNextTrackTransition,
@@ -401,6 +402,7 @@ function YediHubAppContent() {
   // Analytics are private to the moderator. Never load a room-wide analytics
   // cache from shared localStorage, including when users switch Twitch accounts.
   const [activityEvents, setActivityEvents] = useState([]);
+  const [cloudBackend, setCloudBackend] = useState('pending');
   const activityEventsRef = useRef(activityEvents);
   activityEventsRef.current = activityEvents;
   const activityCloudIdsRef = useRef(new Set());
@@ -624,6 +626,7 @@ function YediHubAppContent() {
         const allowed = Boolean(session.authenticated && ALLOWED_TWITCH_USERS.has(login));
         authorizedLoginRef.current = allowed ? login : '';
         const customToken = allowed ? String(session.firebaseCustomToken || '') : '';
+        setCloudBackend(session.storageBackend === 'postgres' ? 'postgres' : 'firebase');
         setFirebaseLoginToken(customToken);
         if (allowed) {
           const hasWebFirebaseConfig = Boolean(getFirebaseConfig());
@@ -638,7 +641,9 @@ function YediHubAppContent() {
             firebase_admin_sdk_unavailable: 'Firebase Admin SDK failed to load',
             firebase_custom_token_failed: 'Firebase custom-token creation failed',
           };
-          if (!hasWebFirebaseConfig) {
+          if (session.storageBackend === 'postgres') {
+            setSyncStatusText('Connecting private Postgres queue…');
+          } else if (!hasWebFirebaseConfig) {
             setSyncStatusText('Twitch verified — Firebase web config missing');
           } else if (!customToken || session.firebaseTokenReady !== true) {
             const diagnosticCode = String(session.firebaseDiagnosticCode || '').trim();
@@ -732,6 +737,18 @@ function YediHubAppContent() {
   useEffect(() => {
     let active = true;
     let unsubscribeAuth = null;
+    if (cloudBackend === 'pending') return;
+    if (cloudBackend === 'postgres') {
+      setAuth(null);
+      if (twitchAuth.authenticated && ALLOWED_TWITCH_USERS.has(String(twitchAuth.username || '').toLowerCase())) {
+        setDb(createPrivateCloudDb({ legacyVideos: videosRef.current.filter(video => video.channelRoom === '2o3a' && !String(video.id).startsWith('demo-')) }));
+        // This is an API-session marker, not a Firebase credential. Every read
+        // and write is independently authorized by the server's Twitch session.
+        setFirebaseUser({ uid: 'twitch_' + twitchAuth.username });
+        setSyncStatusText('Connecting private Postgres queue…');
+      } else { setDb(null); setFirebaseUser(null); }
+      return;
+    }
     const config = getFirebaseConfig();
 
     if (!config) {
@@ -805,7 +822,7 @@ function YediHubAppContent() {
       active = false;
       if (unsubscribeAuth) unsubscribeAuth();
     };
-  }, []);
+  }, [cloudBackend, twitchAuth.authenticated, twitchAuth.username]);
 
   // Exchange the server-minted custom token only after the API verifies an allowlisted Twitch login.
   useEffect(() => {
@@ -1075,6 +1092,10 @@ function YediHubAppContent() {
         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', videoId);
         await updateDoc(docRef, updates);
       } catch (e) {
+        if (cloudBackend === 'postgres' && e?.status !== 404) {
+          console.warn('Queue update was not confirmed; retaining the authoritative cloud row.', e?.code || e);
+          return;
+        }
         // Doc might not exist yet if demo item
         try {
           const fullItem = videos.find((v) => v.id === videoId);
@@ -3860,7 +3881,7 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
-              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected && !chatBotSession.canReadChat ? 'Replies only · reauthorize bot for chat reading' : chatBotSession.connected ? 'Online · @gachibot69 (replies enabled)' : 'Offline · chat replies unavailable'}</div>
+              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-slate-300'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69 (optional replies)' : 'Optional replies off · video requests are independent'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>

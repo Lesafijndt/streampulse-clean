@@ -98,6 +98,10 @@ function getAppId(rawValue) {
 }
 
 async function getAdminFirestore() {
+  if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+    const { getVerifiedFirestore } = await import('../server/firebase-guard.js');
+    return getVerifiedFirestore();
+  }
   const [{ cert, getApps, initializeApp }, { getFirestore }] = await Promise.all([
     import('firebase-admin/app'),
     import('firebase-admin/firestore')
