@@ -52,7 +52,7 @@ export default async function handler(req, res) {
 
   // Clear only the state cookie for the OAuth flow being completed.
   if (botFlow) setCookie(res, req, 'yedi_twitch_bot_oauth_state', '', 0, 'Lax');
-  else setCookie(res, req, 'yedi_twitch_oauth_state', '', 0, 'None');
+  else setCookie(res, req, 'yedi_twitch_oauth_state', '', 0, 'Lax');
 
   if (req.query.error) {
     if (botFlow) clearBotCookies(res, req);
