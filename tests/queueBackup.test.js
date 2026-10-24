@@ -19,13 +19,13 @@ test('stale local write warnings clear when a real cloud snapshot confirms no pe
   assert.match(app, /!pendingQueueAddsRef\.current\.size/);
 });
 
-test('YouTube blocked autoplay shows a visible thumbnail and button', async () => {
+test('YouTube blocked autoplay shows only a small non-obstructing play button', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /onAutoplayBlocked/);
   assert.match(app, /youtubeHasRenderedFrameId/);
-  assert.match(app, /currentVideo\.thumbnail/);
-  assert.match(app, /Click to start video/);
-  assert.match(app, /browser blocked autoplay with sound/);
+  assert.match(app, /pointer-events-none absolute bottom-3 left-3 z-30/);
+  assert.match(app, /Play video \(browser blocked autoplay\)/);
+  assert.doesNotMatch(app, /Your browser blocked autoplay with sound\. Click once to enable playback/);
 });
 
 
