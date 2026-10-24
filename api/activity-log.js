@@ -191,7 +191,21 @@ export default async function handler(req, res) {
     });
     return res.status(200).json({ ok: true, duplicate: result.duplicate });
   } catch (error) {
+    // A quota-exhausted project must not trigger rapid, full-history retries
+    // from every open moderator tab. Tell callers to back off explicitly.
+    const diagnostic = String(error?.code || '') + ' ' + String(error?.message || '');
+    if (/RESOURCE_EXHAUSTED|Quota exceeded|\\b8\\b/i.test(diagnostic)) {
+      res.setHeader('Retry-After', '3600');
+      console.warn('Activity log Firestore quota exhausted; client backoff requested.');
+      return res.status(503).json({
+        code: 'firestore_quota_exceeded',
+        error: 'Activity history is temporarily unavailable due to Firestore quota.',
+      });
+    }
     console.error('Activity log API failed:', error?.message || error);
-    return res.status(503).json({ error: 'Activity log storage is temporarily unavailable.' });
+    return res.status(503).json({
+      code: 'activity_storage_unavailable',
+      error: 'Activity log storage is temporarily unavailable.',
+    });
   }
 }
