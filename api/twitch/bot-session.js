@@ -26,6 +26,12 @@ function replyUnauthenticated(res) {
 }
 
 export default async function handler(req, res) {
+  // Keep EventSub subscription setup within the already-deployed bot-session
+  // serverless function. Vercel Hobby only permits 12 API functions.
+  if (req.method === 'POST' && String(req.query?.action || '') === 'subscribe') {
+    const { default: subscribeChat } = await import('../../server/chat-subscribe.js');
+    return subscribeChat(req, res);
+  }
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Vary', 'Cookie');
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });

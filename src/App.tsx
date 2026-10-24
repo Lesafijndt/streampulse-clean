@@ -1998,7 +1998,7 @@ function YediHubAppContent() {
         if (!sessionId) { ws.close(); return; }
         setChatBridgeStatus('Subscribing to channel.chat.message…');
         try {
-          const response = await fetch('/api/twitch/chat-subscribe', {
+          const response = await fetch('/api/twitch/bot-session?action=subscribe', {
             method: 'POST', credentials: 'same-origin', cache: 'no-store',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId }),

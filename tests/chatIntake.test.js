@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import subscribe from '../api/twitch/chat-subscribe.js';
+import subscribe from '../server/chat-subscribe.js';
 import { readFile } from 'node:fs/promises';
 
 function response() {
