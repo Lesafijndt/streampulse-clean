@@ -177,3 +177,28 @@ test('different URL spellings of the same video are never created twice in one w
   const { items } = await makeQueueItems(event);
   assert.equal(items.length, 1);
 });
+
+
+test('real chat URLs from Palm_Beach_Pete are parsed as viewer requests', async () => {
+  const event = {
+    broadcaster_user_login: '2o3a',
+    chatter_user_login: 'palm_beach_pete',
+    message: {
+      text: 'https://www.youtube.com/watch?v=pa6tQxHaUpk https://www.youtube.com/watch?v=2sEX02P64Nc',
+    },
+  };
+  const request = await makeQueueItems(event);
+  assert.equal(request.reason, 'ready');
+  assert.equal(request.items.length, 2);
+  assert.deepEqual(request.items.map(item => item.requestedBy), ['palm_beach_pete', 'palm_beach_pete']);
+  assert.equal((await makeQueueItems({ ...event, chatter_user_login: 'gachibot69' })).reason, 'ignored_sender');
+});
+
+test('moderator setup starts automatically after chat scopes are approved, and storage failures are visible', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /webhookAutoSetupAttemptedRef/);
+  assert.match(app, /webhookHealth\.code !== 'webhook_not_subscribed'/);
+  assert.match(app, /activateTwitchWebhook\(\{ automatic: true \}\)/);
+  assert.match(app, /Firestore quota is exhausted/);
+  assert.match(app, /receiptCode: String\(data\.receiptCode/);
+});
