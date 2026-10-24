@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   extractSupportedMediaUrl,
   extractSupportedMediaUrls,
+  linkFreeYouTubeRequestUrl,
+  getTwitchMessageText,
   isSupportedMediaUrlMessage,
   parseTwitchPrivmsgLine,
   splitTwitchIrcFrame,
@@ -87,4 +89,24 @@ test('zero-width chat characters and mixed TikTok/YouTube links are normalized',
   assert.deepEqual(extractSupportedMediaUrls(text), [
     'https://youtu.be/dQw4w9WgXcQ', 'https://vt.tiktok.com/ZMExample/',
   ]);
+});
+
+
+test('normal viewers can use a link-free YouTube ID when Twitch holds hyperlinks', () => {
+  assert.equal(linkFreeYouTubeRequestUrl('!assr dQw4w9WgXcQ'),
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  assert.equal(linkFreeYouTubeRequestUrl('!assr yt jfKfPfyJRdk'),
+    'https://www.youtube.com/watch?v=jfKfPfyJRdk');
+  assert.equal(linkFreeYouTubeRequestUrl('!assr daft punk discovery'), '');
+  assert.equal(linkFreeYouTubeRequestUrl('hello dQw4w9WgXcQ'), '');
+});
+
+test('EventSub recovers links from fragments including viewer messages', () => {
+  const message = {
+    text: 'here you go',
+    fragments: [{ text: 'here you go ' }, { type: 'text', text: 'https://youtu.be/dQw4w9WgXcQ' }],
+  };
+  assert.equal(getTwitchMessageText(message), 'here you go https://youtu.be/dQw4w9WgXcQ');
+  assert.equal(getTwitchMessageText({ text: '!assr Daft Punk' }), '!assr Daft Punk');
+  assert.equal(getTwitchMessageText({ fragments: [{ text: '!assr dQw4w9WgXcQ' }] }), '!assr dQw4w9WgXcQ');
 });

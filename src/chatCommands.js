@@ -102,3 +102,24 @@ export function extractSupportedMediaUrl(rawText = '') {
 export function isSupportedMediaUrlMessage(rawText = '') {
   return Boolean(extractSupportedMediaUrl(rawText));
 }
+
+
+/** Twitch Block Hyperlinks may hold a viewer's URLs before EventSub sees them.
+ * A !assr command with an 11-character YouTube ID provides a link-free fallback.
+ * The command must still be delivered by Twitch moderation.
+ */
+export function linkFreeYouTubeRequestUrl(rawText = '') {
+  const match = String(rawText || '').trim().match(/^!assr\s+(?:(?:yt|youtube)\s+)?([A-Za-z0-9_-]{11})\s*$/i);
+  return match ? 'https://www.youtube.com/watch?v=' + match[1] : '';
+}
+
+/** Twitch may put the actual link in message.fragments even if message.text
+ * was normalized. Select the representation containing the media link. */
+export function getTwitchMessageText(message = {}) {
+  const raw = String(message?.text || '').trim();
+  const fragments = Array.isArray(message?.fragments)
+    ? message.fragments.map((part) => String(part?.text || '')).join('').trim()
+    : '';
+  if (fragments && !extractSupportedMediaUrl(raw) && extractSupportedMediaUrl(fragments)) return fragments;
+  return raw || fragments;
+}

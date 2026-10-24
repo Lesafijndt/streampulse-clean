@@ -1,4 +1,4 @@
-import { extractSupportedMediaUrl, extractSupportedMediaUrls } from '../../src/chatCommands.js';
+import { extractSupportedMediaUrl, extractSupportedMediaUrls, linkFreeYouTubeRequestUrl, getTwitchMessageText } from '../../src/chatCommands.js';
 import {
   detectMusicType,
   detectVideoCategory,
@@ -263,7 +263,7 @@ async function readRoomQueue(db, appId) {
 export function isEventSubChatCandidate(event) {
   const broadcaster = normalizeLogin(event?.broadcaster_user_login);
   const requester = normalizeLogin(event?.chatter_user_login);
-  const text = String(event?.message?.text || '').trim();
+  const text = getTwitchMessageText(event?.message);
   if (broadcaster !== PRIVATE_CHANNEL || !requester || !text || KNOWN_CHAT_BOTS.has(requester)) return false;
   if (extractSupportedMediaUrl(text) || /^!assr(?:\s|$)/i.test(text)) return true;
   const command = text.match(/^!([a-z0-9_]+)(?:\s|$)/i)?.[1]?.toLowerCase();
@@ -701,12 +701,12 @@ async function processChatMediaRequest({ db, appId, event, messageId, requester,
 export async function processEventSubChatMessage({ event, messageId, requestOptions = null }) {
   const broadcaster = normalizeLogin(event?.broadcaster_user_login);
   const requester = normalizeLogin(event?.chatter_user_login);
-  const rawText = String(event?.message?.text || '').trim();
+  const rawText = getTwitchMessageText(event?.message);
   if (broadcaster !== PRIVATE_CHANNEL || !requester || !rawText || KNOWN_CHAT_BOTS.has(requester)) {
     return { ignored: true };
   }
   const allUrls = extractSupportedMediaUrls(rawText);
-  const extractedUrl = allUrls[0] || '';
+  const extractedUrl = allUrls[0] || linkFreeYouTubeRequestUrl(rawText);
   const isAssrCommand = /^!assr(?:\s|$)/i.test(rawText);
   if (extractedUrl || isAssrCommand) {
     const db = await getFirebaseAdminDb();

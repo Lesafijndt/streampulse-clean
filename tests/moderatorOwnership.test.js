@@ -10,7 +10,8 @@ test('the moderator exclusively owns queue settings and technical setup', async 
   assert.match(app, /\{isModerator && showLayoutCustomizer && \(/);
   assert.match(app, /\{isModerator && \(\s*<button type="button" onClick=\{\(\) => \{ setTopMenuOpen\(false\); setShowSettingsModal\(true\)/);
   assert.match(app, /<QueueVideoCard[\s\S]*?isStaff=\{isModerator\}/);
-  assert.match(app, /Moderator action: open Twitch Mod View/);
+  assert.match(app, /Twitch may be holding normal viewers' links/);
+  assert.match(app, /https:\/\/www\.twitch\.tv\/moderator\/2o3a/);
 });
 
 test('the streamer retains playback transport but does not own chat intake setup', async () => {

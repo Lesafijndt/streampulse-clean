@@ -91,6 +91,10 @@ test('EventSub API candidate filter accepts media requests and supported queue c
     ...overrides,
   });
   assert.equal(isEventSubChatCandidate(makeEvent('!assr Daft Punk 1:23')), true);
+  assert.equal(isEventSubChatCandidate(makeEvent('!assr dQw4w9WgXcQ')), true);
+  assert.equal(isEventSubChatCandidate(makeEvent('', {
+    message: { text: '', fragments: [{ text: 'https://youtu.be/dQw4w9WgXcQ' }] },
+  })), true);
   assert.equal(isEventSubChatCandidate(makeEvent('here is one https://youtu.be/abcdefghijk')), true);
   assert.equal(isEventSubChatCandidate(makeEvent('!queue')), true);
   assert.equal(isEventSubChatCandidate(makeEvent('!bigcock 2')), true);

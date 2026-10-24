@@ -104,7 +104,7 @@ import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from
 import { buildTikTokPlayerUrl, clampPlayerVolume, formatTwitchPlayerTime, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute, shouldPersistYouTubePausedEvent } from './playerBridge.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
-import { extractSupportedMediaUrl, extractSupportedMediaUrls, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
+import { extractSupportedMediaUrl, extractSupportedMediaUrls, linkFreeYouTubeRequestUrl, getTwitchMessageText, parseTwitchPrivmsgLine, splitTwitchIrcFrame } from './chatCommands.js';
 import { canHostLocalChatBridge, hasVerifiedCloudChatIntake } from './chatBridgeAccess.js';
 import { mergePendingQueueAdds, shouldSuppressLocalOnlySyncToast } from './queueSync.js';
 
@@ -2856,14 +2856,8 @@ function YediHubAppContent() {
       seen.add(id);
       if (seen.size > 300) seen.clear();
       const login = normalizeTwitchLogin(event.chatter_user_login);
-      const textFromEvent = String(event.message?.text || '').trim();
-      const textFromFragments = Array.isArray(event.message?.fragments)
-        ? event.message.fragments.map((fragment) => String(fragment?.text || '')).join('').trim()
-        : '';
-      // A URL can be present in Twitch's fragments even when message.text has
-      // been sanitized. Do not store raw chat messages in diagnostics.
-      const text = extractSupportedMediaUrls(textFromEvent).length || !textFromFragments
-        ? textFromEvent : textFromFragments;
+      // Twitch may send rich chat links through message.fragments.
+      const text = getTwitchMessageText(event.message);
       const allowedSender = normalizeTwitchLogin(event.broadcaster_user_login) === PRIVATE_CHANNEL &&
         Boolean(login) && !KNOWN_CHAT_BOTS.has(login);
       const links = allowedSender ? extractSupportedMediaUrls(text) : [];
@@ -2996,7 +2990,7 @@ function YediHubAppContent() {
     // Prefer any supported URL found in the command/message, even when the viewer
     // wraps it in text like "this one: https://youtu.be/...". Bare host/path links
     // are normalized to https by the shared extractor.
-    const extractedUrl = extractSupportedMediaUrl(requestText);
+    const extractedUrl = extractSupportedMediaUrl(requestText) || linkFreeYouTubeRequestUrl(rawText);
     const looksLikeUrl = Boolean(extractedUrl);
     let url = extractedUrl || requestText;
     let title = '';
@@ -4849,7 +4843,8 @@ function YediHubAppContent() {
               )}
               {isModerator && chatBridgeHealth.lastMessageAt > 0 && !chatBridgeHealth.lastRequestAt && (
                 <div className="mt-1 text-[9px] text-amber-200">
-                  Moderator action: open Twitch Mod View → Channel Actions → Manage Moderation Settings → Permitted Terms and add the supported video domains. Blocked viewer links never reach the request queue until Twitch permits them.
+                  Twitch may be holding normal viewers' links. Moderator: permit supported video domains in Mod View, or have viewers send !assr followed by the 11-character YouTube video ID (no URL).
+                  <a className="ml-1 font-bold underline underline-offset-2 text-cyan-200" href="https://www.twitch.tv/moderator/2o3a" target="_blank" rel="noreferrer">Open 2o3a Mod View</a>
                 </div>
               )}
               {!chatBotSession.connected && <a href="/api/twitch/bot-login" className="mt-1 inline-block text-[10px] font-bold text-cyan-200 underline underline-offset-2">Connect @gachibot69 to receive chat requests</a>}
