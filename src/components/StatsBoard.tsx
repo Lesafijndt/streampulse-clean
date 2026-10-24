@@ -11,21 +11,6 @@ function Metric({ icon: Icon, label, value, detail }) {
   </div>;
 }
 
-function Ranking({ title, leader, items, emptyLabel, kind = 'platform' }) {
-  const displayLabel = (label) => kind === 'category'
-    ? ({ Gaming: 'Blind Playthroughs', Memes: 'Shitposts' }[label] || label)
-    : label;
-  const topCount = Math.max(1, items[0]?.count || 1);
-  return <div className="gachi-inset-card min-w-0 rounded-xl border p-3">
-    <div className="mb-2 flex items-center justify-between gap-2 text-[10px]"><span className="font-bold uppercase tracking-wide text-slate-400">{title}</span><span className="truncate font-black text-white">{leader ? displayLabel(leader) : '—'}</span></div>
-    <div className="space-y-2">
-      {items.length ? items.slice(0, 3).map((item) => <div key={item.label}>
-        <div className="mb-1 flex justify-between gap-2 text-[9px] text-slate-400"><span className={kind === 'platform' ? 'capitalize' : 'truncate'}>{displayLabel(item.label)}</span><span className="font-mono text-slate-200">{item.count}</span></div>
-        <div className="gachi-chart-track h-1.5 overflow-hidden rounded-full"><div className="h-full rounded-full" style={{ width: `${Math.max(6, Math.round(item.count / topCount * 100))}%` }} /></div>
-      </div>) : <p className="text-[10px] text-slate-600">{emptyLabel}</p>}
-    </div>
-  </div>;
-}
 
 export default function StatsBoard({
   queueStats, activityEvents = [], currentSessionId = '', statsNow = Date.now(), statsExpanded, onToggle, onRefreshStats,
@@ -85,13 +70,10 @@ export default function StatsBoard({
         <div className="min-w-0"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Queue runway</div><div className="mt-1 text-sm font-black text-white">{runway} <span className="text-[9px] font-semibold text-slate-500">approx.</span></div><div className="mt-1 text-[9px] leading-4 text-slate-500">{queueStats.queueKnownCount} known lengths · {queueStats.queueEstimatedCount} estimated</div></div>
         <Timer className="h-4 w-4 shrink-0 text-amber-200" />
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Ranking title="Top platform" leader={activityStats.platforms[0]?.label} items={activityStats.platforms} emptyLabel="No recorded requests yet" />
-        <Ranking title="Top category" leader={activityStats.genres[0]?.label} items={activityStats.genres} emptyLabel="No recorded categories" kind="category" />
-      </div>
+
       <div className="gachi-inset-card rounded-xl border p-3">
-        <div className="mb-2 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Top requesters</span><span className="text-[9px] text-slate-500">{activityStats.removed} requests removed</span></div>
-        {activityStats.requesters.length ? <div className="space-y-1.5">{activityStats.requesters.slice(0, 3).map((item, index) => <div key={item.label} className="flex items-center justify-between gap-2 text-[10px]"><span className="min-w-0 truncate text-slate-200">{index + 1}. @{item.label}</span><span className="font-mono font-bold text-amber-100">{item.count}</span></div>)}</div> : <p className="text-[10px] text-slate-600">No requester data recorded yet</p>}
+        <div className="mb-2 flex items-center justify-between gap-2"><span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Top 10 requesters</span><span className="text-[9px] text-slate-500">{activityStats.removed} requests removed</span></div>
+        {activityStats.requesters.length ? <div className="space-y-1.5">{activityStats.requesters.slice(0, 10).map((item, index) => <div key={item.label} className="flex items-center justify-between gap-2 text-[10px]"><span className="min-w-0 truncate text-slate-200">{index + 1}. @{item.label}</span><span className="font-mono font-bold text-amber-100">{item.count}</span></div>)}</div> : <p className="text-[10px] text-slate-600">No requester data recorded yet</p>}
       </div>
       {activitySyncError && canRetryActivitySync && <button type="button" onClick={onRetryActivitySync} className="gachi-control-btn flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-bold"><RefreshCw className="h-3.5 w-3.5" /> Retry activity sync</button>}
       <div className="text-[9px] leading-4 text-slate-500">{periodLabel} filters recorded requests, people, completion, skips, votes, and rankings. Waiting count and queue runway always describe the current queue. Events are recorded as they happen; legacy queue/history items may be imported when available, and completion is counted only when the player reports an ended event.</div>

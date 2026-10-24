@@ -169,8 +169,10 @@ export default async function handler(req, res) {
       authenticated: true,
       role,
       firebaseTokenReady,
-      firebaseDiagnostic,
-      ...(firebaseTokenReady ? {} : { firebaseDiagnosticCode }),
+      // Only the moderator may inspect backend configuration diagnostics.
+      ...(role === 'moderator'
+        ? { firebaseDiagnostic, ...(firebaseTokenReady ? {} : { firebaseDiagnosticCode }) }
+        : {}),
       ...(firebaseCustomToken ? { firebaseCustomToken } : {}),
       user: { id: me.id, login: me.login, display_name: me.display_name, profile_image_url: me.profile_image_url || '' },
       channel: '2o3a'

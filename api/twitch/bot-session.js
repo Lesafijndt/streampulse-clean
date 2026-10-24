@@ -35,6 +35,21 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Vary', 'Cookie');
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  // Chat bot controls are IT-only: require a verified moderator login, not
+  // merely a bot OAuth cookie or an untrusted client role.
+  const moderatorCookie = parseCookies(req.headers.cookie).yedi_twitch_access;
+  if (!moderatorCookie) return res.status(403).json({ connected: false, code: 'moderator_required' });
+  try {
+    const result = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { Authorization: 'OAuth ' + moderatorCookie },
+      signal: AbortSignal.timeout(5000),
+    });
+    const verified = result.ok ? await result.json() : null;
+    if (verified?.client_id !== process.env.TWITCH_CLIENT_ID ||
+        String(verified?.login || '').toLowerCase() !== 'paim_beach_pete') {
+      return res.status(403).json({ connected: false, code: 'moderator_required' });
+    }
+  } catch { return res.status(503).json({ connected: false, code: 'authorization_unavailable' }); }
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   const cookies = parseCookies(req.headers.cookie);

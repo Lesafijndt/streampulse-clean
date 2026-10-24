@@ -1,5 +1,5 @@
 const CHAT_BOT_LOGIN = 'gachibot69';
-const ALLOWED_STAFF_LOGINS = new Set(['2o3a', 'paim_beach_pete']);
+const ALLOWED_STAFF_LOGINS = new Set(['paim_beach_pete']);
 
 function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map((value) => value.trim()).filter(Boolean).map((value) => {

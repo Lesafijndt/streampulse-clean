@@ -2347,3 +2347,66 @@ body { background: #03070b; }
     justify-content: flex-start !important;
   }
 }
+
+/* Per-account dashboard layout. Drag by the handle, widen with +/-,
+   and pull the lower-right grip to change the minimum widget height. */
+.gachi-theme .gachi-modular-grid {
+  display: grid !important;
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  align-items: start;
+  grid-auto-flow: row dense;
+  gap: 12px;
+}
+.gachi-theme .gachi-modular-grid > .gachi-modular-item {
+  grid-column: span var(--widget-span);
+  max-width: 100%;
+  align-self: start;
+  min-width: 0;
+}
+.gachi-theme .gachi-modular-item .gachi-widget-content { min-width: 0; }
+.gachi-theme .gachi-modular-item .gachi-widget-content > * { min-width: 0; }
+.gachi-theme .gachi-widget-handle { touch-action: none; }
+@media (max-width: 1180px) {
+  .gachi-theme .gachi-modular-grid > .gachi-modular-item { grid-column: span 12 !important; }
+}
+
+/* Provider shells: explicit iframe constraints remove shorts/TikTok intrinsic
+   sizing overflow while keeping both tall and landscape media centered. */
+.gachi-theme .gachi-player-stage > .gachi-portrait-shell {
+  position: relative !important;
+  display: block !important;
+  flex: 0 1 auto !important;
+  height: 100% !important;
+  width: auto !important;
+  max-width: 100% !important;
+  aspect-ratio: 9 / 16;
+  min-width: 0;
+  margin-inline: auto;
+  overflow: hidden;
+  background: #05020a;
+}
+.gachi-theme .gachi-player-stage > .gachi-landscape-shell {
+  position: absolute;
+  inset: 0.5rem;
+  overflow: hidden;
+}
+.gachi-theme .gachi-player-stage > .gachi-portrait-shell iframe,
+.gachi-theme .gachi-player-stage > .gachi-landscape-shell iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  transform: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+.gachi-theme .gachi-player-stage > .gachi-landscape-embed {
+  display: block;
+  position: absolute;
+  inset: 0;
+  height: 100% !important;
+  width: 100% !important;
+}

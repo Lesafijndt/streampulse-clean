@@ -1,6 +1,6 @@
 import { normalizeActivityEvent } from '../src/activityLog.js';
 
-const ALLOWED_STAFF = new Set(['2o3a', 'paim_beach_pete']);
+const ALLOWED_STAFF = new Set(['paim_beach_pete']);
 const DEFAULT_APP_ID = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
 
 function parseCookies(header = '') {
