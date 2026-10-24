@@ -61,7 +61,11 @@ export default async function handler(req, res) {
       clearBotCookies(res);
       return replyUnauthenticated(res);
     }
-    return res.status(200).json({ connected: true, user: { id: String(validation.user_id), login: BOT_LOGIN } });
+    return res.status(200).json({
+      connected: true,
+      canReadChat: scopes.includes('user:read:chat'),
+      user: { id: String(validation.user_id), login: BOT_LOGIN },
+    });
   } catch (error) {
     console.error('Twitch chat bot session check failed:', error?.message || error);
     return replyUnauthenticated(res);

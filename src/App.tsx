@@ -100,6 +100,7 @@ import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { parseChatNotification, requestLikeChatMessage } from './twitchChatEvents.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 
@@ -456,7 +457,7 @@ function YediHubAppContent() {
   // Track observed player state separately from the viewer's deliberate preference.
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
-  const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, username: '' });
+  const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
@@ -493,8 +494,11 @@ function YediHubAppContent() {
   const [reqNote, setReqNote] = useState('');
   const [reqUsername, setReqUsername] = useState('');
 
-  // Twitch IRC bridge only: no chat transcript or message UI is rendered.
+  // Moderator-owned, authenticated EventSub chat intake. No chat transcript is stored.
   const [ircConnected, setIrcConnected] = useState(false);
+  const [chatBridgeStatus, setChatBridgeStatus] = useState('Not connected');
+  const [chatBridgeLastMessageAt, setChatBridgeLastMessageAt] = useState(0);
+  const [chatBridgeLastRequestAt, setChatBridgeLastRequestAt] = useState(0);
   const ircSocketRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
@@ -638,6 +642,7 @@ function YediHubAppContent() {
           setChatBotSession({
             loading: false,
             connected: Boolean(session.connected && String(session.user?.login || '').toLowerCase() === 'gachibot69'),
+            canReadChat: Boolean(session.canReadChat),
             username: session.connected ? String(session.user?.login || 'gachibot69') : ''
           });
         })
@@ -1296,20 +1301,34 @@ function YediHubAppContent() {
 
   const syncAddVideo = async (videoObj) => {
     const localItem = { ...videoObj, channelRoom: normalizeRoomName(channelRoom) };
-    // Update the ref synchronously so back-to-back chat messages see the new item immediately.
+    // Cloud confirmation is required: a local-only item must not be shown as a
+    // successful chat request when the streamer's queue cannot see it.
+    if (!db || !firebaseUser) {
+      setCloudSynced(false);
+      setSyncStatusText('Cloud queue unavailable — chat intake paused');
+      return false;
+    }
+    // Keep the pending item visible until Firestore acknowledges the write,
+    // while the synchronous ref blocks overlapping duplicate chat requests.
     videosRef.current = [localItem, ...videosRef.current];
     setVideos((prev) => [localItem, ...prev]);
-    recordActivity('request_added', localItem, { source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard' });
-
-    if (db && firebaseUser) {
-      try {
-        const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
-        await setDoc(itemRef, { ...localItem, createdAt: Date.now() }, { merge: true });
-      } catch (error) {
-        console.warn('Firestore add failed; the request is still saved locally.', error);
-        setCloudSynced(false);
-        setSyncStatusText('Cloud write failed — local save is active');
-      }
+    try {
+      // Firestore rejects undefined values; missing duration metadata is normal.
+      // JSON serialization drops undefined without changing the media identity.
+      const documentData = JSON.parse(JSON.stringify({ ...localItem, createdAt: Date.now() }));
+      const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', String(localItem.id));
+      await setDoc(itemRef, documentData, { merge: true });
+      recordActivity('request_added', localItem, {
+        source: String(localItem.note || '').toLowerCase().includes('twitch chat') ? 'twitch-chat' : 'dashboard'
+      });
+      return true;
+    } catch (error) {
+      videosRef.current = videosRef.current.filter((video) => String(video.id) !== String(localItem.id));
+      setVideos((prev) => prev.filter((video) => String(video.id) !== String(localItem.id)));
+      console.warn('Queue request was not confirmed by Firestore:', error?.code || error?.message || error);
+      setCloudSynced(false);
+      setSyncStatusText('Cloud queue write failed — request was not saved');
+      return false;
     }
   };
 
@@ -1918,78 +1937,120 @@ function YediHubAppContent() {
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
 
 
-  // Connects anonymously to the selected channel's Twitch IRC for commands only
-  // ==========================================
+  // Authenticated Twitch chat via EventSub WebSocket, opened only by the
+  // moderator's dashboard. The bot token is never sent to client JavaScript.
   const connectTwitchIrc = (targetChan, options = {}) => {
-    const cleanChan = normalizeRoomName(targetChan || ircTargetRef.current || channelRoom);
-    if (!cleanChan) {
-      addToast('Please enter a valid Twitch channel name.', 'warning');
+    const cleanChan = normalizeRoomName(targetChan || PRIVATE_CHANNEL);
+    if (cleanChan !== PRIVATE_CHANNEL) return;
+    const moderator = twitchAuth.authenticated &&
+      normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete';
+    if (!moderator) {
+      setChatBridgeStatus('Moderator dashboard only');
+      setIrcConnected(false);
       return;
     }
-
+    if (!chatBotSession.connected || !chatBotSession.canReadChat) {
+      setChatBridgeStatus('Reconnect @gachibot69 with user:read:chat permission');
+      setIrcConnected(false);
+      return;
+    }
+    if (!db || !firebaseUser) {
+      setChatBridgeStatus('Waiting for authenticated Firestore queue');
+      setIrcConnected(false);
+      return;
+    }
     shouldReconnectIrcRef.current = true;
     ircTargetRef.current = cleanChan;
-    writeStoredValue(`${STORAGE_PREFIX}:active-room`, cleanChan);
-    if (reconnectTimerRef.current) {
-      window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-
-    const previousSocket = ircSocketRef.current;
-    if (previousSocket) {
-      ircSocketRef.current = null;
-      try { previousSocket.close(); } catch { /* Socket may already be closed. */ }
-    }
-
+    if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    const oldSocket = ircSocketRef.current;
+    ircSocketRef.current = null;
+    try { oldSocket?.close(); } catch { /* Already closed. */ }
+    let ws;
     try {
-      const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
-      ircSocketRef.current = ws;
-
-      ws.onopen = () => {
-        if (ircSocketRef.current !== ws) return;
-        ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
-        ws.send(`NICK justinfan${Math.floor(10000 + Math.random() * 89999)}`);
-        ws.send(`JOIN #${cleanChan}`);
-        reconnectAttemptsRef.current = 0;
-        setIrcConnected(true);
-        if (!options.silent) addToast(`Twitch command bridge connected to #${cleanChan}.`, 'success');
-      };
-
-      ws.onmessage = (event) => {
-        if (ircSocketRef.current !== ws) return;
-        const raw = String(event.data || '');
-        if (raw.startsWith('PING')) {
-          ws.send('PONG :tmi.twitch.tv');
+      const next = String(options.reconnectUrl || '');
+      const uri = next.startsWith('wss://eventsub.wss.twitch.tv/')
+        ? next : 'wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=40';
+      ws = new WebSocket(uri);
+    } catch (error) {
+      setChatBridgeStatus('Twitch WebSocket initialization failed');
+      setIrcConnected(false);
+      return;
+    }
+    ircSocketRef.current = ws;
+    setChatBridgeStatus('Connecting to Twitch EventSub…');
+    setIrcConnected(false);
+    let subscribed = Boolean(options.reconnectUrl);
+    const seen = new Set();
+    ws.onmessage = async (message) => {
+      if (ircSocketRef.current !== ws) return;
+      let frame;
+      try { frame = JSON.parse(String(message.data || '')); } catch { return; }
+      const kind = String(frame?.metadata?.message_type || '');
+      if (kind === 'session_welcome') {
+        if (subscribed) {
+          setIrcConnected(true);
+          setChatBridgeStatus('Subscribed — waiting for chat messages');
+          reconnectAttemptsRef.current = 0;
           return;
         }
-
-        if (!raw.includes('PRIVMSG')) return;
-        const msgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
-        const badgesMatch = raw.match(/badges=([^;]*)/);
-        const moderatorMatch = raw.match(/(?:^|;)mod=([01])/);
-        const tagsMatch = raw.match(/^@([^ ]+) /);
-        const tagMap = Object.fromEntries((tagsMatch?.[1] || '').split(';').filter(Boolean).map((tag) => {
-          const separator = tag.indexOf('=');
-          return separator >= 0 ? [tag.slice(0, separator), tag.slice(separator + 1)] : [tag, ''];
-        }));
-        const prefixLogin = raw.match(/^@[^ ]+ :([^!]+)/)?.[1] || raw.match(/^:([^!]+)/)?.[1] || '';
-        const username = String(tagMap['display-name'] || prefixLogin || 'Viewer');
-        const voterLogin = normalizeTwitchLogin(prefixLogin || username);
-        const text = msgMatch ? msgMatch[1].trim() : '';
-        const usernameKey = voterLogin || normalizeTwitchLogin(username);
-        const taggedAsBot = String(tagMap['user-type'] || '').toLowerCase() === 'bot' || String(tagMap.bot || '') === '1';
-        if (!text || taggedAsBot || KNOWN_CHAT_BOTS.has(usernameKey)) return;
-
-        const badges = (badgesMatch?.[1] || '').split(',').map((badge) => badge.split('/')[0]);
-        const role = badges.includes('broadcaster')
-          ? 'streamer'
-          : (moderatorMatch?.[1] === '1' || badges.includes('moderator'))
-          ? 'moderator'
-          : badges.includes('vip')
-          ? 'vip'
-          : badges.includes('subscriber')
-          ? 'subscriber'
-          : 'viewer';
+        const sessionId = String(frame?.payload?.session?.id || '');
+        if (!sessionId) { ws.close(); return; }
+        setChatBridgeStatus('Subscribing to channel.chat.message…');
+        try {
+          const response = await fetch('/api/twitch/chat-subscribe', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+            signal: AbortSignal.timeout(12000),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (ircSocketRef.current !== ws) return;
+          if (!response.ok || result.ok !== true) {
+            const code = String(result.code || response.status);
+            setChatBridgeStatus('Subscription failed: ' + code);
+            if (['twitch_chat_permission_denied', 'bot_read_scope_missing', 'moderator_login_required', 'bot_login_required'].includes(code)) {
+              // A permission error cannot be fixed by hammering Twitch every 30s.
+              shouldReconnectIrcRef.current = false;
+            }
+            ws.close();
+            return;
+          }
+          subscribed = true;
+          reconnectAttemptsRef.current = 0;
+          setIrcConnected(true);
+          setChatBridgeStatus('Subscribed — waiting for chat messages');
+        } catch (error) {
+          setChatBridgeStatus('Subscription network error');
+          if (ircSocketRef.current === ws) ws.close();
+        }
+        return;
+      }
+      if (kind === 'session_reconnect') {
+        const url = String(frame?.payload?.session?.reconnect_url || '');
+        if (url.startsWith('wss://eventsub.wss.twitch.tv/')) {
+          connectTwitchIrc(cleanChan, { reconnectUrl: url, silent: true });
+        }
+        return;
+      }
+      if (kind === 'revocation') {
+        setChatBridgeStatus('Twitch revoked the chat subscription');
+        ws.close();
+        return;
+      }
+      if (!subscribed || kind !== 'notification') return;
+      const incoming = parseChatNotification(frame);
+      if (!incoming) return;
+      if (seen.has(incoming.id)) return;
+      if (incoming.id) seen.add(incoming.id);
+      if (seen.size > 1000) seen.clear();
+      setChatBridgeLastMessageAt(Date.now());
+      setChatBridgeStatus('Receiving chat');
+      const username = incoming.login;
+      const voterLogin = incoming.login;
+      const usernameKey = incoming.login;
+      const role = incoming.role;
+      const text = incoming.text;
         const lowerText = text.toLowerCase();
         const isRequestCommand = /^!assr(?:\s|$)/i.test(text);
         const isDirectVideoUrl = isSupportedMediaUrlMessage(text);
@@ -2012,31 +2073,25 @@ function YediHubAppContent() {
         } else if (volumeCommand && isStaffRole(role)) {
           handleVolumeCommandRef.current?.(volumeCommand, role);
         }
-      };
-
-      ws.onerror = () => {
-        if (ircSocketRef.current === ws) setIrcConnected(false);
-      };
-
-      ws.onclose = () => {
-        if (ircSocketRef.current !== ws) return;
-        ircSocketRef.current = null;
+    };
+    ws.onerror = () => {
+      if (ircSocketRef.current === ws) {
         setIrcConnected(false);
-        if (shouldReconnectIrcRef.current) {
-          reconnectAttemptsRef.current += 1;
-          const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
-          if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = window.setTimeout(() => {
-            connectTwitchIrc(ircTargetRef.current, { silent: true });
-          }, delay);
-        }
-      };
-    } catch (error) {
+        setChatBridgeStatus('Twitch WebSocket connection error');
+      }
+    };
+    ws.onclose = () => {
+      if (ircSocketRef.current !== ws) return;
+      ircSocketRef.current = null;
       setIrcConnected(false);
-      if (!options.silent) addToast('Could not start the Twitch bridge. It will retry automatically.', 'warning');
-    }
+      if (shouldReconnectIrcRef.current) {
+        reconnectAttemptsRef.current += 1;
+        const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttemptsRef.current, 5)));
+        reconnectTimerRef.current = window.setTimeout(() =>
+          connectTwitchIrc(cleanChan, { silent: true }), delay);
+      }
+    };
   };
-
   const disconnectTwitchIrc = (manual = true) => {
     if (manual) shouldReconnectIrcRef.current = false;
     if (reconnectTimerRef.current) {
@@ -2054,8 +2109,11 @@ function YediHubAppContent() {
   useEffect(() => {
     const target = PRIVATE_CHANNEL;
     ircTargetRef.current = target;
-    shouldReconnectIrcRef.current = Boolean(twitchAuth.authenticated);
-    if (!twitchAuth.authenticated) {
+    const canReceiveChat = twitchAuth.authenticated &&
+      normalizeTwitchLogin(twitchAuth.username) === 'paim_beach_pete' &&
+      chatBotSession.connected && chatBotSession.canReadChat && db && firebaseUser;
+    shouldReconnectIrcRef.current = Boolean(canReceiveChat);
+    if (!canReceiveChat) {
       disconnectTwitchIrc(false);
       return undefined;
     }
@@ -2066,7 +2124,7 @@ function YediHubAppContent() {
     };
     // The private bridge always joins 2o3a, and is never started for public/unauthenticated visitors.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twitchAuth.authenticated]);
+  }, [twitchAuth.authenticated, twitchAuth.username, chatBotSession.connected, chatBotSession.canReadChat, db, firebaseUser]);
 
   useEffect(() => {
     // Only rebuild Firestore/activity listeners when connectivity actually returns.
@@ -2332,8 +2390,14 @@ function YediHubAppContent() {
         })
       }));
     }
-    void syncAddVideo(newVideo);
+    const confirmed = await syncAddVideo(newVideo);
     pendingMediaRequestKeysRef.current.delete(identityKey);
+    if (!confirmed) {
+      if (fromChat) setChatBridgeStatus('Chat request received; Firestore queue write failed');
+      addToast('Request could not be saved to the shared queue.', 'warning');
+      return false;
+    }
+    if (fromChat) setChatBridgeLastRequestAt(Date.now());
 
     if (deferredMetadataPromise && !resolvedDurationSec) {
       const newVideoId = String(newVideo.id);
@@ -3452,11 +3516,17 @@ function YediHubAppContent() {
                 <div className="rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wide text-slate-300"><span className={`h-2 w-2 rounded-full ${ircConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />Twitch command bridge</span>
-                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'LIVE' : 'RECONNECTING'}</span>
+                    <span className={ircConnected ? 'text-[9px] font-bold text-emerald-300' : 'text-[9px] font-bold text-amber-200'}>{ircConnected ? 'SUBSCRIBED' : 'OFFLINE'}</span>
                   </div>
                   <button type="button" onClick={() => { setTopMenuOpen(false); connectTwitchIrc(channelRoom); }} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-[#171420] px-3 py-2 text-[10px] font-bold text-slate-200 transition hover:border-purple-400/40 hover:bg-purple-500/10">
                     <RefreshCw className="h-3 w-3" /> Restart command bridge
                   </button>
+                  <div className="mt-2 break-words text-[10px] text-slate-300">{chatBridgeStatus}</div>
+                  <div className="mt-1 text-[9px] text-slate-400">
+                    Last chat received: {chatBridgeLastMessageAt ? new Date(chatBridgeLastMessageAt).toLocaleTimeString() : 'Never'}
+                    {' · '}
+                    Last request: {chatBridgeLastRequestAt ? new Date(chatBridgeLastRequestAt).toLocaleTimeString() : 'Never'}
+                  </div>
                 </div>
                 <div className="mt-1 rounded-xl px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
@@ -3475,6 +3545,11 @@ function YediHubAppContent() {
                     {chatBotSession.connected ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
                     {chatBotSession.loading ? 'Checking bot…' : chatBotSession.connected ? 'Disconnect @gachibot69' : 'Connect @gachibot69'}
                   </button>
+                  {chatBotSession.connected && !chatBotSession.canReadChat && (
+                    <a href="/api/twitch/bot-login" className="mt-2 block rounded-lg border border-amber-400/40 bg-amber-900/30 px-3 py-2 text-center text-[10px] font-bold text-amber-100">
+                      Reauthorize @gachibot69 to read Twitch chat
+                    </a>
+                  )}
                 </div>
                 <div className="my-2 border-t border-white/10" />
                 <button type="button" onClick={() => {
@@ -3502,11 +3577,11 @@ function YediHubAppContent() {
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch command bridge</div>
-              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{ircConnected ? 'Connected' : 'Reconnecting / offline'}</div>
+              <div className={ircConnected ? 'text-emerald-300' : 'text-amber-200'}>{chatBridgeStatus}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
-              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69' : 'Offline · chat replies unavailable'}</div>
+              <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-rose-200'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected && !chatBotSession.canReadChat ? 'Replies only · reauthorize bot for chat reading' : chatBotSession.connected ? 'Online · @gachibot69 (read/write)' : 'Offline · chat intake unavailable'}</div>
             </div>
             <div>
               <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Room and request queue</div>
