@@ -258,6 +258,6 @@ test('chat OAuth upgrade preserves refreshed cookies and rejects requests withou
 test('moderator can authorize missing chat scopes from the visible header without opening settings', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /Twitch chat requests are not connected/);
-  assert.match(app, /href="\\/api\\/twitch\\/login\\?chat_setup=1"/);
+  assert.ok(app.includes('href="/api/twitch/login?chat_setup=1"'));
   assert.match(app, /Authorize Twitch chat requests/);
 });
