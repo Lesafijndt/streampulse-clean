@@ -618,6 +618,7 @@ function YediHubAppContent() {
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 });
+  const youtubeProgressSignalRef = useRef({ videoId: '', lastTime: null, advancing: false });
   // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
   // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
   const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null, volume: 100 });
@@ -2376,20 +2377,17 @@ function YediHubAppContent() {
     return queued[0] || null;
   }, [videos]);
 
-  // Replace a black YouTube viewport with an explicit start control if autoplay is blocked.
+  // Do not infer autoplay failure from a timer: cross-origin YouTube can play
+  // while its IFrame API is still connecting, which produced a false black overlay.
+  // Prompt only when YouTube explicitly reports onAutoplayBlocked and playback
+  // has not been observed. The iframe remains directly clickable at all times.
   useEffect(() => {
     setYoutubeNeedsGesture('');
     setYoutubeHasRenderedFrameId('');
+    youtubeProgressSignalRef.current = {
+      videoId: String(currentVideo?.id || ''), lastTime: null, advancing: false,
+    };
     youtubeStartupMuteRef.current = { videoId: String(currentVideo?.id || ''), pending: false };
-    if (!currentVideo || currentVideo.platform !== 'youtube') return undefined;
-    const videoId = String(currentVideo.id);
-    const timer = window.setTimeout(() => {
-      if (String(currentVideoRef.current?.id || '') !== videoId) return;
-      const intent = getPlaybackIntentForVideo(videoId, 'youtube');
-      const state = Number(youtubePlaybackInfoRef.current.playerState);
-      if (!intent.paused && state !== 1 && state !== 3) setYoutubeNeedsGesture(videoId);
-    }, 2500);
-    return () => window.clearTimeout(timer);
   }, [currentVideo?.id, currentVideo?.platform]);
 
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
@@ -3777,7 +3775,9 @@ function YediHubAppContent() {
       }
       if (!payload || typeof payload !== 'object') return;
       if (payload.event === 'onAutoplayBlocked' && currentVideoRef.current?.id === video.id &&
-          !getPlaybackIntentForVideo(video.id, 'youtube').paused) {
+          !getPlaybackIntentForVideo(video.id, 'youtube').paused &&
+          youtubePlaybackInfoRef.current.playerState !== 1 &&
+          !youtubeProgressSignalRef.current.advancing) {
         setYoutubeNeedsGesture(String(video.id));
       }
 
@@ -3816,6 +3816,20 @@ function YediHubAppContent() {
         const now = Number(info.currentTime);
         const duration = Number(info.duration);
         if (Number.isFinite(now) && now >= 0 && currentVideoRef.current?.id === video.id) {
+          // Some embeds emit currentTime updates but never deliver onStateChange.
+          // Advancing timestamps prove actual playback, including when the
+          // cross-origin iframe API state remains stale at -1.
+          const progress = youtubeProgressSignalRef.current;
+          if (progress.videoId !== String(video.id)) {
+            youtubeProgressSignalRef.current = { videoId: String(video.id), lastTime: now, advancing: false };
+          } else {
+            if (progress.lastTime !== null && now > progress.lastTime + 0.15) {
+              progress.advancing = true;
+              setYoutubeNeedsGesture('');
+              setYoutubeHasRenderedFrameId(String(video.id));
+            }
+            progress.lastTime = now;
+          }
           recordPlaybackPosition(video.id, now);
         }
         if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
@@ -4662,6 +4676,7 @@ function YediHubAppContent() {
     if (intent.muted === true) postYouTubePlayerCommand(playerWindow, 'mute');
     else postYouTubePlayerCommand(playerWindow, 'unMute');
     postYouTubePlayerCommand(playerWindow, 'playVideo');
+    setYoutubeNeedsGesture('');
     updatePlaybackIntent(video.id, { paused: false }, 'youtube');
     youtubeIframeRef.current?.focus();
   };
@@ -5034,22 +5049,15 @@ function YediHubAppContent() {
                   )}
                   {currentVideo.platform === 'youtube' && youtubeNeedsGesture === String(currentVideo.id) &&
                     youtubeHasRenderedFrameId !== String(currentVideo.id) && (
-                    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 overflow-hidden bg-[#06040b]">
-                      {currentVideo.thumbnail && (
-                        <img src={currentVideo.thumbnail} alt="" aria-hidden="true"
-                          className="absolute inset-0 h-full w-full object-contain opacity-45"
-                        />
-                      )}
-                      <div className="absolute inset-0 bg-black/35 pointer-events-none" />
+                    <div className="pointer-events-none absolute bottom-3 left-3 z-30 max-w-[calc(100%-1.5rem)]">
                       <button
                         type="button"
                         onClick={startYouTubeFromPrompt}
-                        className="relative z-10 flex items-center gap-3 rounded-xl border border-purple-300/50 bg-[#180d25]/95 px-6 py-4 text-sm font-black text-white shadow-2xl shadow-purple-950/50 transition hover:bg-purple-700"
+                        className="pointer-events-auto flex items-center gap-2 rounded-xl border border-purple-300/50 bg-[#180d25]/90 px-4 py-2 text-xs font-bold text-white shadow-xl hover:bg-purple-700"
                         aria-label="Start YouTube playback"
                       >
-                        <Play className="h-5 w-5 fill-current" /> Click to start video
+                        <Play className="h-4 w-4 fill-current" /> Play video (browser blocked autoplay)
                       </button>
-                      <span className="relative z-10 text-xs text-slate-200">Your browser blocked autoplay with sound. Click once to enable playback.</span>
                     </div>
                   )}
                   {currentVideo.platform === 'youtube' && currentVideo.videoId ? (

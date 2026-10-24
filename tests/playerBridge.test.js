@@ -203,3 +203,15 @@ test('YouTube startup pause does not overwrite user autoplay preference', () => 
   assert.equal(shouldPersistYouTubePausedEvent({ hasPlayed: true, visible: false }), false);
   assert.equal(shouldPersistYouTubePausedEvent({ hasPlayed: true, visible: true }), true);
 });
+
+
+test('YouTube autoplay warnings never cover a video or assume failure from a timer', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(app, /if \(!intent\.paused && state !== 1 && state !== 3\) setYoutubeNeedsGesture\(videoId\)/);
+  assert.match(app, /payload\.event === 'onAutoplayBlocked'/);
+  assert.match(app, /youtubeProgressSignalRef\.current\.advancing/);
+  assert.match(app, /now > progress\.lastTime \+ 0\.15/);
+  assert.match(app, /pointer-events-none absolute bottom-3 left-3 z-30/);
+  assert.doesNotMatch(app, /absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 overflow-hidden bg-\[#06040b\]/);
+  assert.match(app, /setYoutubeNeedsGesture\(''\);\s*updatePlaybackIntent\(video\.id, \{ paused: false \}, 'youtube'\)/);
+});
