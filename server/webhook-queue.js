@@ -4,7 +4,7 @@ import { parseMediaUrl, getMediaIdentityKey, getStableMediaDocumentId,
 import { getQueueNamespace } from './firebase-guard.js';
 
 const SUPPORTED = new Set([
-  'youtube.com','m.youtube.com','music.youtube.com','youtu.be',
+  'youtube.com','www.youtube.com','m.youtube.com','music.youtube.com','youtu.be',
   'tiktok.com','www.tiktok.com','vm.tiktok.com','vt.tiktok.com',
   'twitch.tv','www.twitch.tv','clips.twitch.tv',
   'kick.com','www.kick.com','clip.kick.com',
