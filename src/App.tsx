@@ -1468,10 +1468,11 @@ function YediHubAppContent() {
 
     let active = true;
     let loading = false;
+    let nextAllowedFetchAt = 0;
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
     const loadActivityEvents = async () => {
-      if (!moderatorLogin || !active || loading ||
+      if (!moderatorLogin || !active || loading || Date.now() < nextAllowedFetchAt ||
           (typeof navigator !== 'undefined' && !navigator.onLine)) return;
       loading = true;
       try {
@@ -1489,6 +1490,14 @@ function YediHubAppContent() {
           });
           const result = await response.json().catch(() => ({}));
           if (!response.ok || !Array.isArray(result.events)) {
+            if (result.code === 'firestore_quota_exceeded') {
+              const retrySeconds = Number(response.headers.get('Retry-After'));
+              nextAllowedFetchAt = Date.now() +
+                (Number.isFinite(retrySeconds) && retrySeconds > 0
+                  ? Math.max(3600, retrySeconds) : 3600) * 1000;
+            } else {
+              nextAllowedFetchAt = Date.now() + 5 * 60_000;
+            }
             throw new Error(result.code || result.error || 'Activity log sync is unavailable');
           }
           if (!active) return;
@@ -1513,7 +1522,8 @@ function YediHubAppContent() {
         setActivitySyncError(false);
       } catch (error) {
         if (active) {
-          console.warn('Incremental activity sync will retry:', error);
+          if (!nextAllowedFetchAt) nextAllowedFetchAt = Date.now() + 5 * 60_000;
+          console.warn('Incremental activity sync paused until retry window:', error);
           setActivitySyncError(true);
           // Do not lose successfully loaded cursor/history on a quota error.
         }
