@@ -3738,7 +3738,7 @@ function YediHubAppContent() {
 
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
         {isModerator && <WorkspacePanel id="stats" title="Statistics">
-        <aside> className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
+        <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents}
