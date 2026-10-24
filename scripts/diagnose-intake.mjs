@@ -51,7 +51,7 @@ try {
     let status = created.data?.[0]?.status;
     for (let attempt = 0; attempt < 15 && status === 'webhook_callback_verification_pending'; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      const result = await json('https://api.twitch.tv/helix/eventsub/subscriptions?subscription_id=' + encodeURIComponent(id), { headers });
+      const result = await json('https://api.twitch.tv/helix/eventsub/subscriptions?type=channel.chat.message', { headers });
       status = result.data?.find(x => x.id === id)?.status || 'missing';
     }
     console.log(JSON.stringify({ check: 'webhook_signing_repair', id, status, oauthActionNeeded: status !== 'enabled' }));
