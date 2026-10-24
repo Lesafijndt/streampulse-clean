@@ -72,7 +72,6 @@ import {
   writeBatch,
   deleteDoc,
   getDocs,
-  getDoc,
   onSnapshot
 } from 'firebase/firestore';
 import {
@@ -1006,20 +1005,24 @@ function YediHubAppContent() {
       });
   }, [db, firebaseUser, appId, channelRoom, streamSettings, roomConfigLoadedFor, moderatorLogin]);
 
-  // User-specific cloud settings are independent from shared moderation/queue state.
-  // The app NEVER writes widget geometry or audio volume/mute to this document.
+  // Each account's cloud profile is stored through a verified Twitch session
+  // action (on an existing Vercel function). No new Hobby function is needed,
+  // and old Firestore client-side rules cannot block profile persistence.
   useEffect(() => {
     const login = String(twitchAuth.username || '').toLowerCase();
-    if (!db || !firebaseUser || !twitchAuth.authenticated || !ALLOWED_TWITCH_USERS.has(login)) {
+    if (!twitchAuth.authenticated || !ALLOWED_TWITCH_USERS.has(login)) {
       setProfileLoadedFor('');
       return;
     }
     let valid = true;
     setProfileLoadedFor('');
-    const reference = doc(db, 'artifacts', appId, 'public', 'data', 'user_profiles', login);
-    void getDoc(reference).then((snapshot) => {
+    void fetch('/api/twitch/session?action=preferences', {
+      credentials: 'same-origin', cache: 'no-store'
+    }).then(async response => {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok !== true) throw new Error(result.code || 'profile_read_failed');
       if (!valid) return;
-      const prefs = sanitizePersonalPreferences(snapshot.data()?.preferences || {});
+      const prefs = sanitizePersonalPreferences(result.preferences || {});
       if (prefs.activeTab !== undefined) setActiveTab(prefs.activeTab);
       if (prefs.selectedCategory !== undefined) setSelectedCategory(prefs.selectedCategory);
       if (prefs.mediaTypeFilter !== undefined) setMediaTypeFilter(prefs.mediaTypeFilter);
@@ -1031,23 +1034,31 @@ function YediHubAppContent() {
         setStreamSettings(current => ({ ...current, ...prefs.streamSettings, queueOpen: current.queueOpen }));
       }
       setProfileLoadedFor(login);
-    }).catch(error => console.warn('Could not load personal cloud preferences:', error?.code || error));
+    }).catch(error => console.warn('Personal cloud preferences could not load:', error?.message || error));
     return () => { valid = false; };
-  }, [db, firebaseUser, twitchAuth.authenticated, twitchAuth.username, appId]);
+  }, [twitchAuth.authenticated, twitchAuth.username]);
+
   useEffect(() => {
     const login = String(twitchAuth.username || '').toLowerCase();
-    if (!db || !firebaseUser || profileLoadedFor !== login || !ALLOWED_TWITCH_USERS.has(login)) return;
+    if (profileLoadedFor !== login || !ALLOWED_TWITCH_USERS.has(login)) return;
     const prefs = sanitizePersonalPreferences({
       activeTab, selectedCategory, mediaTypeFilter, sortBy, searchQuery,
       isTheatreMode, statsExpanded, streamSettings,
     });
     const pending = window.setTimeout(() => {
-      void setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'user_profiles', login),
-        { preferences: prefs, updatedAt: Date.now() }, { merge: true })
-        .catch(error => console.warn('Personal cloud settings update failed:', error?.code || error));
+      void fetch('/api/twitch/session?action=preferences', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences: prefs }),
+      }).then(async response => {
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          throw new Error(result.code || 'profile_write_failed');
+        }
+      }).catch(error => console.warn('Personal cloud preferences could not save:', error?.message || error));
     }, 650);
     return () => window.clearTimeout(pending);
-  }, [db, firebaseUser, appId, twitchAuth.username, profileLoadedFor,
+  }, [twitchAuth.username, profileLoadedFor,
       activeTab, selectedCategory, mediaTypeFilter, sortBy, searchQuery, isTheatreMode, statsExpanded, streamSettings]);
 
   // Sync Video Changes Helper (updates Firestore if online, updates state locally)

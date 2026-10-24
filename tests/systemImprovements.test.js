@@ -36,7 +36,12 @@ test('moderator-only backend routes reject streamer tokens', async () => {
 test('personal cloud profiles only allow owner fields, and shared queue writes remain separate', async () => {
   const s = await read('src/App.tsx');
   const rules = await read('firestore.rules');
-  assert.match(s, /'user_profiles', login/);
+  assert.match(s, /\/api\/twitch\/session\?action=preferences/);
+  const backend = await read('api/twitch/session.js');
+  assert.match(backend, /collection\('user_profiles'\)\.doc\(login\)/);
+  assert.match(backend, /if \(preferencesAction\)/);
+  assert.match(backend, /sanitizePersonalPreferences\(body\.preferences\)/);
+  assert.match(backend, /req\.headers\.origin !== allowedOrigin/);
   assert.match(s, /sanitizePersonalPreferences\(/);
   assert.match(rules, /isPersonalOwner\(login\)/);
   assert.match(rules, /request\.auth\.token\.twitchLogin == login/);
