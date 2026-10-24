@@ -26,6 +26,45 @@ try {
   } while (cursor && subscriptions.length < 1000);
   console.log(JSON.stringify({ check: 'subscriptions', subscriptions: subscriptions.map(x => ({ id: x.id, status: x.status,
     condition: x.condition, method: x.transport?.method, callback: x.transport?.callback })) }));
+  if (process.argv.includes('--repair-webhook')) {
+    const broadcaster = users.data.find(x => x.login === '2o3a');
+    const moderator = users.data.find(x => x.login === 'paim_beach_pete');
+    const callback = 'https://streampulse-clean.vercel.app/api/twitch/bot-session?action=webhook';
+    const secret = process.env.TWITCH_EVENTSUB_SECRET || '';
+    if (!broadcaster || !moderator || secret.length < 10 || secret.length > 100) throw Error('Invalid repair configuration');
+    const matching = subscriptions.filter(x => x.transport?.method === 'webhook' && x.transport.callback === callback &&
+      x.condition?.broadcaster_user_id === broadcaster.id && x.condition?.user_id === moderator.id);
+    if (matching.length > 1) throw Error('Ambiguous subscriptions require review');
+    if (matching.length) {
+      await json('https://api.twitch.tv/helix/eventsub/subscriptions?id=' + encodeURIComponent(matching[0].id), {
+        method: 'DELETE', headers,
+      });
+    }
+    const created = await json('https://api.twitch.tv/helix/eventsub/subscriptions', {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({
+        type: 'channel.chat.message', version: '1',
+        condition: { broadcaster_user_id: broadcaster.id, user_id: moderator.id },
+        transport: { method: 'webhook', callback, secret },
+      }),
+    });
+    const id = created.data?.[0]?.id;
+    let status = created.data?.[0]?.status;
+    for (let attempt = 0; attempt < 15 && status === 'webhook_callback_verification_pending'; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const result = await json('https://api.twitch.tv/helix/eventsub/subscriptions?subscription_id=' + encodeURIComponent(id), { headers });
+      status = result.data?.find(x => x.id === id)?.status || 'missing';
+    }
+    console.log(JSON.stringify({ check: 'webhook_signing_repair', id, status, oauthActionNeeded: status !== 'enabled' }));
+    if (status !== 'enabled') throw Error('Webhook verification did not complete');
+    // Retire only this project's obsolete bot callback after its replacement is
+    // enabled. It otherwise produces rejected duplicate deliveries on every chat.
+    const bot = users.data.find(x => x.login === 'gachibot69');
+    for (const old of subscriptions.filter(x => x.transport?.callback === 'https://streampulse-clean.vercel.app/api/twitch/eventsub' &&
+      x.condition?.broadcaster_user_id === broadcaster.id && x.condition?.user_id === bot?.id)) {
+      await json('https://api.twitch.tv/helix/eventsub/subscriptions?id=' + encodeURIComponent(old.id), { method: 'DELETE', headers });
+      console.log(JSON.stringify({ check: 'retired_obsolete_callback', id: old.id }));
+    }
+  }
 } catch (error) { console.log(JSON.stringify({ check: 'twitch', ok: false, status: error.status, code: error.code })); }
 try {
   const key = decodeServiceAccount();
