@@ -104,8 +104,9 @@ test('queue writes discard undefined duration and require cloud confirmation', a
   assert.match(app, /const confirmed = await syncAddVideo\(newVideo\)/);
   assert.match(app, /if \(!confirmed\) \{/);
   assert.match(app, /setChatBridgeStatus\('Chat request received; Firestore queue write failed'\)/);
-  assert.match(app, /chatBotSession\.canReadChat && db && firebaseUser/);
-  assert.match(app, /connectTwitchIrc\(target, \{ silent: true \}\)/);
+  assert.match(app, /action=webhook-status/);
+  assert.match(app, /action=webhook-setup/);
+  assert.match(app, /shouldReconnectIrcRef\.current = false/);
   assert.doesNotMatch(app, /NICK justinfan/);
   assert.match(app, /chatBridgeLastMessageAt/);
 });
