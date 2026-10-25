@@ -20,6 +20,21 @@ test('Twitch webhook signature covers raw bytes and checks replay window', () =>
   assert.equal(verifyTwitchSignature({ ...args, now: Date.now() + 11 * 60 * 1000 }), false);
 });
 
+test('Twitch opaque notification IDs are authenticated without imposing a UUID alphabet', () => {
+  const secret = '0123456789abcdefghijklmnopqrstuv';
+  const timestamp = new Date().toISOString(), rawBody = Buffer.from('{"request":"video"}');
+  for (const id of ['opaque:notification/abc+123==', '12345678', 'delivery.part:2', 'a'.repeat(300)]) {
+    const signature = 'sha256=' + createHmac('sha256', secret).update(id).update(timestamp).update(rawBody).digest('hex');
+    const args = { id, timestamp, rawBody, secret, signature };
+    assert.equal(verifyTwitchSignature(args), true);
+    assert.equal(verifyTwitchSignature({ ...args, id: id + 'tampered' }), false);
+  }
+  for (const id of ['', 'a'.repeat(513), 'id\nheader']) {
+    const signature = 'sha256=' + createHmac('sha256', secret).update(id).update(timestamp).update(rawBody).digest('hex');
+    assert.equal(verifyTwitchSignature({ id, timestamp, rawBody, secret, signature }), false);
+  }
+});
+
 test('any Twitch viewer can request multiple distinct URLs without an account allowlist', async () => {
   const event = {
     broadcaster_user_login: '2o3a',

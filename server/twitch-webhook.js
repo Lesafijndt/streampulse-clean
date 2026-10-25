@@ -26,7 +26,7 @@ export async function readTwitchRawBody(req, maxBytes = 262144) {
 
 export function verifyTwitchSignature({ id, timestamp, signature, rawBody, secret, now = Date.now() }) {
   if (!secret || secret.length < 10 || secret.length > 100 ||
-      !/^[\w-]{10,180}$/.test(String(id || '')) ||
+      typeof id !== 'string' || id.length < 1 || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id) ||
       typeof timestamp !== 'string' || !signature?.startsWith('sha256=') ||
       !/^[0-9a-f]{64}$/.test(signature.slice(7))) return false;
   const age = Math.abs(now - Date.parse(timestamp));
@@ -57,7 +57,7 @@ export default async function handleTwitchWebhook(req, res, dependencies = {}) {
       hasMessageId: Boolean(id), payloadBytes: raw.length,
       timestampAgeSeconds: Number.isFinite(Date.parse(timestamp)) ? Math.round((Date.now() - Date.parse(timestamp)) / 1000) : null,
       signatureShapeValid: /^sha256=[0-9a-f]{64}$/.test(signature),
-      messageIdShapeValid: /^[\w-]{10,180}$/.test(id),
+      messageIdShapeValid: id.length >= 1 && id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(id),
     });
     return res.status(403).json({ code: 'invalid_signature' });
   }
