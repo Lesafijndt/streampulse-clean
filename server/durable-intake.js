@@ -55,7 +55,7 @@ export async function consumeRequest(payload, dependencies = {}) {
     if (parseServerCommand(payload.event)) {
       if (Date.now() - Number(payload.receivedAt || 0) > 120000) return { status: 'command_expired', queued: 0 };
       const result = await persistChatCommand(db, payload, { sendReply: dependencies.sendReply });
-      console.info('twitch_chat_command', { status: result.status, command: result.command, duplicate: result.duplicate === true });
+      console.info('twitch_chat_command', { status: result.status, command: result.command, duplicate: result.duplicate === true, replyDelivery: result.replyDelivery || 'none' });
       return result;
     }
     return await persistChatEvent(db, payload);
