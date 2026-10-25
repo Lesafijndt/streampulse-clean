@@ -148,15 +148,14 @@ export function buildNextTrackTransition(latestVideos, outgoing, compareQueueOrd
 export function buildPreviousTrackTransition(latestVideos, outgoing, now = Date.now()) {
   const previouslyPlayed = selectPreviousVideoCandidate(latestVideos, outgoing);
   if (!previouslyPlayed) return { previouslyPlayed: null, updates: new Map(), nextVideos: latestVideos };
-  const updates = new Map([
-    [String(outgoing.id), { status: 'queue', pinned: false, nextTrackOverrideId: null }],
-    [String(previouslyPlayed.id), {
+  const updates = new Map();
+  if (outgoing) updates.set(String(outgoing.id), { status: 'queue', pinned: false, nextTrackOverrideId: null });
+  updates.set(String(previouslyPlayed.id), {
       status: 'playing',
       pinned: false,
       playedAt: now,
-      nextTrackOverrideId: String(outgoing.id)
-    }]
-  ]);
+      nextTrackOverrideId: outgoing ? String(outgoing.id) : null
+    });
   const nextVideos = (latestVideos || []).map((video) => {
     const change = updates.get(String(video.id));
     return change ? { ...video, ...change } : video;

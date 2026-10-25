@@ -31,6 +31,17 @@ test('Previous followed by Next returns to the exact video that was playing', ()
   assert.equal(next.nextVideos.find((video) => video.id === 'a').status, 'watched');
 });
 
+test('Previous replays the latest history item when the active queue is empty', () => {
+  const history = [{ id: 'older', status: 'watched', playedAt: 100 }, { id: 'latest', status: 'watched', playedAt: 200 }];
+  const transition = buildPreviousTrackTransition(history, null, 300);
+  assert.equal(transition.previouslyPlayed.id, 'latest');
+  assert.equal(transition.updates.size, 1);
+  assert.equal(transition.nextVideos.find(item => item.id === 'latest').status, 'playing');
+  assert.equal(transition.nextVideos.find(item => item.id === 'latest').nextTrackOverrideId, null);
+  assert.equal(transition.nextVideos.find(item => item.id === 'older').status, 'watched');
+  assert.equal(buildPreviousTrackTransition([], null).previouslyPlayed, null);
+});
+
 test('Next honors the Previous return target ahead of regular queue order', () => {
   const videos = [
     { id: 'previous', status: 'playing', nextTrackOverrideId: 'return', queueOrder: 50 },

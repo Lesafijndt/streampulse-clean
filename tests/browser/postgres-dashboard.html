@@ -7,6 +7,7 @@ const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'st
 const login=mode==='moderator'?'paim_beach_pete':'2o3a';
 const cleared=new URLSearchParams(location.search).get('cleared')==='1';
 const resetTest=new URLSearchParams(location.search).get('reset')==='1';
+const previousTest=new URLSearchParams(location.search).get('previous')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:'youtube',videoId:id==='a'?'dQw4w9WgXcQ':'abcdefghijk',
 url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
 timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
@@ -76,6 +77,22 @@ const next=[...document.querySelectorAll('button')].find(button=>/next video/i.t
 if(!next)throw Error('Next video control missing');next.click();
 await wait(()=>docs[base+'queue_videos/a']?.status==='watched'&&docs[base+'queue_videos/b']?.status==='playing');
 if(!commits)throw Error('Playback did not persist through private API');
+if(previousTest){
+await new Promise(resolve=>setTimeout(resolve,60));
+const skip=()=>[...document.querySelectorAll('button')].find(button=>/next video/i.test((button.title||'')+' '+(button.getAttribute('aria-label')||'')+' '+button.textContent)).click();
+skip();await wait(()=>Object.values(docs).filter(v=>v.status==='watched').length===2&&!Object.values(docs).some(v=>v.status==='playing'));
+await wait(()=>document.body.textContent.includes('Queue is currently empty'));await new Promise(resolve=>setTimeout(resolve,60));
+// Navigation shortcuts still work when a dashboard control has keyboard focus.
+const control=document.querySelector('[aria-label="Enter player fullscreen"]');control.focus();control.dispatchEvent(new KeyboardEvent('keydown',{key:'p',code:'KeyP',bubbles:true,cancelable:true}));
+await wait(()=>docs[base+'queue_videos/b']?.status==='playing');
+await new Promise(resolve=>setTimeout(resolve,60));
+if(docs[base+'queue_videos/a']?.status!=='watched')throw Error('Previous changed unrelated history');
+if(docs[base+'queue_videos/b'].nextTrackOverrideId!==null)throw Error('Empty queue created a phantom return target');
+skip();await wait(()=>!Object.values(docs).some(v=>v.status==='playing'));
+await new Promise(resolve=>setTimeout(resolve,60));
+document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',code:'ArrowLeft',bubbles:true,cancelable:true}));
+await wait(()=>docs[base+'queue_videos/b']?.status==='playing');
+}
 }
 }
 expired=true;await new Promise(r=>setTimeout(r,50));

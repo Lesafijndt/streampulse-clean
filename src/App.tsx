@@ -2928,8 +2928,6 @@ function YediHubAppContent() {
       latestVideos.find((video) => video.status === 'playing') ||
       latestVideos.filter((video) => video.status === 'queue').sort(compareQueueOrder)[0] ||
       null;
-    if (!outgoing) return;
-
     const transition = buildPreviousTrackTransition(latestVideos, outgoing);
     const { previouslyPlayed, updates, nextVideos } = transition;
     if (previouslyPlayed) recordActivity('track_replayed', previouslyPlayed, { actor: twitchAuth.username, source: 'dashboard' });
@@ -3038,12 +3036,13 @@ function YediHubAppContent() {
     const onKeyDown = (event) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       const target = event.target;
+      const key = String(event.key || '').toLowerCase();
       const isTyping = target instanceof HTMLElement && (
         target.isContentEditable ||
-        target.closest('input, textarea, select, button, a, video, audio, iframe, [contenteditable="true"]')
+        target.closest('input, textarea, select, video, audio, iframe, [contenteditable="true"]') ||
+        ([' ', 'enter'].includes(key) && target.closest('button, a, [role="button"]'))
       );
       if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen || resetScope) return;
-      const key = String(event.key || '').toLowerCase();
       if (event.code === 'Space' || key === ' ') {
         event.preventDefault();
         if (!event.repeat) togglePlaybackFromKeyboard();
