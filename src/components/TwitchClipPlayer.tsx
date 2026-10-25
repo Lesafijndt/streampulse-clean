@@ -36,7 +36,6 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
   const intent = useRef({ paused: false, seconds: 0 });
   const completed = useRef(false);
   const started = useRef(false);
-  const nativeGesture = useRef(0);
   const fallbackAudio = useMemo(() => muted, [generation]);
   const [mode, setMode] = useState('loading');
   const [mediaUrl, setMediaUrl] = useState('');
@@ -121,7 +120,8 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
         player.addEventListener(Twitch.Player.PLAYBACK_BLOCKED, () => { if (!disposed) setBlocked(true); });
         player.addEventListener(Twitch.Player.PLAYING, () => {
           if (disposed) return;
-          if (intent.current.paused) { player.pause();return; }
+          if (intent.current.paused && !started.current && document.activeElement !== host.current?.querySelector('iframe')) { player.pause();return; }
+          if (intent.current.paused) choosePaused(false);
           started.current = true;setBlocked(false);setPaused(false);
         });
         player.addEventListener(Twitch.Player.PAUSE, () => {
@@ -172,9 +172,7 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
         if (intent.current.paused) media.pause();else playNative();
       }}
       onCanPlay={() => { if (!started.current && !intent.current.paused) playNative(); }}
-      onPointerDown={() => { nativeGesture.current = Date.now(); }}
-      onKeyDown={event => { if (event.key === ' ' || event.key === 'k') nativeGesture.current = Date.now(); }}
-      onPlay={() => { if (intent.current.paused) { if (Date.now() - nativeGesture.current < 600) choosePaused(false);else native.current?.pause(); } }}
+      onPlay={() => { if (intent.current.paused) choosePaused(false); }}
       onPlaying={() => { if (intent.current.paused) { native.current?.pause();return; } started.current = true;setPaused(false);setBlocked(false); }}
       onPause={() => { if (started.current && !completed.current && !native.current?.ended && !native.current?.error && document.visibilityState !== 'hidden') choosePaused(true); }}
       onTimeUpdate={() => { if (native.current && started.current) { intent.current.seconds = native.current.currentTime;persist(); } }}

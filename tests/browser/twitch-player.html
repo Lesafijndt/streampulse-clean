@@ -29,6 +29,7 @@ try {
  flushSync(()=>root.render(React.createElement(Harness,{id:'first'})));await sleep(100);
  const first=instances[0];assert(first?.playCalls===1&&first.time===100,'READY must seek and autoplay source segment');
  first.pause();await sleep(1600);assert(ended===0,'Paused segment must not advance after duration wall time');
+ first.play();await sleep(50);assert(!first.paused,'Twitch player controls must resume after a deliberate pause');first.pause();
  first.volume=.27;first.muted=true;await sleep(300);assert(audio.volume===27&&audio.muted,'Player audio changes must update saved preferences');
  flushSync(()=>root.render(React.createElement(Harness,{id:'second'})));await sleep(100);
  const second=instances[1];assert(second.volume===.27&&second.muted,'Next clip must retain volume and mute preferences');

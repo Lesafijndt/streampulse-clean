@@ -3039,7 +3039,7 @@ function YediHubAppContent() {
       const target = event.target;
       const isTyping = target instanceof HTMLElement && (
         target.isContentEditable ||
-        target.closest('input, textarea, select, [contenteditable="true"]')
+        target.closest('input, textarea, select, button, a, video, audio, iframe, [contenteditable="true"]')
       );
       if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen || resetScope) return;
       const key = String(event.key || '').toLowerCase();
@@ -3169,7 +3169,9 @@ function YediHubAppContent() {
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId);
         const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused;
+        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
+          document.activeElement !== iframe && restoreGuard.videoId === videoId &&
+          restoreGuard.paused && Date.now() < restoreGuard.until;
         if (stateFromEvent === 2 && (hasStarted || intent.paused)) {
           // Providers can report a synthetic pause when the browser backgrounds an iframe.
           // Do not persist that as the viewer's deliberate pause preference.
@@ -3178,10 +3180,11 @@ function YediHubAppContent() {
             keyboardPausedRef.current = { videoId, paused: true };
           }
         } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
-          // Only an explicit host Resume command clears a deliberate pause.
-          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
+          // Guard restoration only. A focused player's own Play control is an
+          // explicit resume and must never be locked out by the saved pause.
           postCommand('pauseVideo');
         } else if (stateFromEvent === 1) {
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           updatePlaybackIntent(videoId, { paused: false });
           keyboardPausedRef.current = { videoId, paused: false };
         }
@@ -3343,16 +3346,18 @@ function YediHubAppContent() {
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId, 'tiktok');
         const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = state === 1 && intent.paused;
+        const suppressUnexpectedResume = state === 1 && intent.paused &&
+          document.activeElement !== tiktokIframeRef.current && restoreGuard.videoId === videoId &&
+          restoreGuard.paused && Date.now() < restoreGuard.until;
         if (state === 2 && (playbackConfirmed || intent.paused)) {
           if (document.visibilityState !== 'hidden') {
             updatePlaybackIntent(videoId, { paused: true }, 'tiktok');
             keyboardPausedRef.current = { videoId, paused: true };
           }
         } else if (state === 1 && suppressUnexpectedResume) {
-          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           sendCommand('pause');
         } else if (state === 1) {
+          playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           playbackConfirmed = true;
           if (currentVideoRef.current?.id === video.id) {
             setTikTokPlayerState({ requestId: video.id, status: 'playing' });
@@ -4062,9 +4067,6 @@ function YediHubAppContent() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {currentVideo && ['youtube', 'tiktok'].includes(currentVideo.platform) && <button type="button" onClick={togglePlaybackFromKeyboard} aria-label={playbackPaused ? 'Resume current video' : 'Pause current video'} className="flex items-center gap-1 rounded-lg bg-purple-800 px-2 py-1.5 text-xs text-white">
-                  {playbackPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{playbackPaused ? 'Resume' : 'Pause'}
-                </button>}
                 <button type="button" onClick={togglePlayerFullscreen} aria-label={playerFullscreen || fullscreenFallback ? 'Exit player fullscreen' : 'Enter player fullscreen'} aria-pressed={playerFullscreen || fullscreenFallback} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Fullscreen player (persists across tracks)">
                   {playerFullscreen || fullscreenFallback ? <Shrink className="inline w-3.5 h-3.5 mr-1" /> : <Expand className="inline w-3.5 h-3.5 mr-1" />}<span className="text-xs">{playerFullscreen || fullscreenFallback ? 'Exit fullscreen' : 'Fullscreen'}</span>
                 </button>
