@@ -354,6 +354,7 @@ function YediHubAppContent() {
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
   const moderatorLogin = twitchAuth.authenticated && String(twitchAuth.username || '').toLowerCase() === 'paim_beach_pete';
+  const statisticsAccess = twitchAuth.authenticated && ALLOWED_TWITCH_USERS.has(String(twitchAuth.username || '').toLowerCase());
   const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
   const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
   const authorizedLoginRef = useRef('');
@@ -409,7 +410,7 @@ function YediHubAppContent() {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
     return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
   });
-  // Analytics are private to the moderator. Never load a room-wide analytics
+  // Analytics are private to the two approved staff accounts. Never load a room-wide analytics
   // cache from shared localStorage, including when users switch Twitch accounts.
   const [activityEvents, setActivityEvents] = useState([]);
   const [cloudBackend, setCloudBackend] = useState('pending');
@@ -1381,7 +1382,7 @@ function YediHubAppContent() {
   };
 
   const syncActivityEventToCloud = async (event) => {
-    if (!twitchAuth.authenticated || String(twitchAuth.username).toLowerCase() !== 'paim_beach_pete' || !activityCloudReadyRef.current || !event?.id ||
+    if (!statisticsAccess || !activityCloudReadyRef.current || !event?.id ||
         activityCloudIdsRef.current.has(String(event.id)) ||
         activitySyncInFlightRef.current.has(String(event.id)) || !networkOnline) return false;
     const eventId = String(event.id);
@@ -1428,7 +1429,7 @@ function YediHubAppContent() {
       if (activityCloudReadyRef.current) void syncActivityEventToCloud(event);
     } else if (twitchAuth.authenticated && db && firebaseUser) {
       // The streamer may append validated playback events through Firebase
-      // create-only rules without reading any IT analytics or backend endpoint.
+      // create-only rules independently of statistics loading or retries.
       void setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'queue_events', String(event.id)), event)
         .catch(error => console.warn('Playback event cloud append failed:', error?.code || error));
     }
@@ -1436,7 +1437,7 @@ function YediHubAppContent() {
   };
 
   const flushPendingActivityEvents = () => {
-    if (!twitchAuth.authenticated || String(twitchAuth.username).toLowerCase() !== 'paim_beach_pete' || !activityCloudReadyRef.current || !networkOnline) return;
+    if (!statisticsAccess || !activityCloudReadyRef.current || !networkOnline) return;
     activityEventsRef.current.forEach((event) => {
       if (!activityCloudIdsRef.current.has(String(event.id))) void syncActivityEventToCloud(event);
     });
@@ -1449,7 +1450,7 @@ function YediHubAppContent() {
   };
 
   const handleRefreshStats = () => {
-    if (!moderatorLogin) return;
+    if (!statisticsAccess) return;
     const merged = mergeActivityEvents(activityEventsRef.current);
     activityEventsRef.current = merged;
     setActivityEvents(merged);
@@ -1530,7 +1531,7 @@ function YediHubAppContent() {
   };
 
   useEffect(() => {
-    if (!moderatorLogin) {
+    if (!statisticsAccess) {
       activityCloudReadyRef.current = false;
       activityCloudIdsRef.current = new Set();
       activityCursorRef.current = { at: 0, id: '' };
@@ -1544,7 +1545,7 @@ function YediHubAppContent() {
     activityCloudReadyRef.current = false;
     setActivityCloudReady(false);
     const loadActivityEvents = async () => {
-      if (!moderatorLogin || !active || loading || Date.now() < nextAllowedFetchAt ||
+      if (!statisticsAccess || !active || loading || Date.now() < nextAllowedFetchAt ||
           (typeof navigator !== 'undefined' && !navigator.onLine)) return;
       loading = true;
       try {
@@ -1608,7 +1609,7 @@ function YediHubAppContent() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [twitchAuth.authenticated, moderatorLogin, appId, channelRoom, activityReconnectTick]);
+  }, [twitchAuth.authenticated, statisticsAccess, appId, channelRoom, activityReconnectTick]);
 
   // Import records for existing saved items which pre-date the event stream.
   // Stable IDs ensure that several signed-in dashboards can backfill the same queue safely.
@@ -4018,7 +4019,7 @@ function YediHubAppContent() {
       </section>
 
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
-        {isModerator && <WorkspacePanel id="stats" title="Statistics">
+        {statisticsAccess && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="aspect-[3/2] w-full rounded-xl object-cover object-top opacity-85" />
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard

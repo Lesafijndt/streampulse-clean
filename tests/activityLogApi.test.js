@@ -50,6 +50,23 @@ test('activity log requests are never cacheable', async () => {
   assert.ok([401, 503].includes(res.statusCode), 'unauthenticated request is denied without relying on live Twitch');
 });
 
+test('both approved staff accounts can authenticate for statistics but ordinary viewers cannot', async t => {
+  const originalFetch = globalThis.fetch, originalClientId = process.env.TWITCH_CLIENT_ID;
+  process.env.TWITCH_CLIENT_ID = 'statistics-test-client';
+  t.after(() => { globalThis.fetch = originalFetch; if (originalClientId === undefined) delete process.env.TWITCH_CLIENT_ID; else process.env.TWITCH_CLIENT_ID = originalClientId; });
+  for (const login of ['2o3a', 'paim_beach_pete', 'ordinary_viewer']) {
+    globalThis.fetch = async url => {
+      assert.equal(url, 'https://id.twitch.tv/oauth2/validate');
+      return Response.json({ login, client_id: 'statistics-test-client' });
+    };
+    const origin = new URL(process.env.TWITCH_APP_URL || 'https://whale-cum.test').origin;
+    const res = responseMock();
+    // An invalid namespace stops after authentication, without touching a database.
+    await handler({ method: 'GET', headers: { host: new URL(origin).host, origin, cookie: 'yedi_twitch_access=test-session' }, query: { appId: 'unrelated-namespace' } }, res);
+    assert.equal(res.statusCode, login === 'ordinary_viewer' ? 401 : 400);
+  }
+});
+
 
 test('activity log API uses stable paginated Firestore reads, not full-history scans', async () => {
   const { readFile } = await import('node:fs/promises');

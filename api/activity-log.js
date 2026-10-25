@@ -1,7 +1,7 @@
 import { normalizeActivityEvent } from '../src/activityLog.js';
 import { decodeServiceAccount } from '../server/firebase-guard.js';
 
-const ALLOWED_STAFF = new Set(['paim_beach_pete']);
+const ALLOWED_STAFF = new Set(['paim_beach_pete', '2o3a']);
 const DEFAULT_APP_ID = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
 
 function parseCookies(header = '') {

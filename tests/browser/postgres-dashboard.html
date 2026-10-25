@@ -55,7 +55,8 @@ if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('St
 }else{
 await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('[aria-label="Connection details: Cloud Synced"]'));
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
-if(login==='2o3a'&&anonymousReads)throw Error('Streamer loaded private analytics');
+await wait(()=>document.querySelector('[data-widget="stats"]')&&anonymousReads>0);
+if(login==='2o3a'&&document.body.textContent.includes('Technical diagnostics'))throw Error('Streamer received moderator diagnostics');
 if(resetTest){
 HTMLElement.prototype.requestFullscreen=()=>Promise.reject(Error('No native fullscreen in test'));
 document.querySelector('[aria-label="Enter player fullscreen"]').click();

@@ -14,19 +14,19 @@ test('moderator-only technical interface is not rendered for streamer', async ()
   const s = await read('src/App.tsx');
   assert.match(s, /\{isModerator && connectionDetailsExpanded && \(/);
   assert.match(s, /\{isModerator && showSettingsModal && \(/);
-  assert.match(s, /\{isModerator && <WorkspacePanel id="stats"/);
+  assert.match(s, /\{statisticsAccess && <WorkspacePanel id="stats"/);
   assert.match(s, /\{isModerator && <div className="rounded-xl px-3 py-2">/);
   assert.match(s, /\{isModerator && <div className="mt-1 rounded-xl px-3 py-2">/);
   assert.match(s, /const StatsBoard = lazy\(/);
 });
 
-test('moderator-only backend routes reject streamer tokens', async () => {
+test('statistics accepts both staff accounts while moderator technical routes reject streamer tokens', async () => {
   const activity = await read('api/activity-log.js');
   const chat = await read('api/twitch/chat-message.js');
   const bot = await read('api/twitch/bot-session.js');
   const login = await read('api/twitch/bot-login.js');
   const logout = await read('server/bot-logout.js');
-  assert.match(activity, /new Set\(\['paim_beach_pete'\]\)/);
+  assert.match(activity, /new Set\(\['paim_beach_pete', '2o3a'\]\)/);
   assert.match(chat, /new Set\(\['paim_beach_pete'\]\)/);
   assert.match(bot, /'moderator_required'/);
   assert.match(login, /Moderator required/);
