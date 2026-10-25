@@ -7,6 +7,8 @@ const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'st
 const login=mode==='moderator'?'paim_beach_pete':'2o3a';
 const cleared=new URLSearchParams(location.search).get('cleared')==='1';
 const resetTest=new URLSearchParams(location.search).get('reset')==='1';
+let backupRequested=false;
+if(resetTest){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download){backupRequested=true;return;}return click.call(this);};}
 const previousTest=new URLSearchParams(location.search).get('previous')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:'youtube',videoId:id==='a'?'dQw4w9WgXcQ':'abcdefghijk',
 url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
@@ -26,6 +28,7 @@ if(expired)return json({authenticated:false,user:null});
 if(opts.method==='POST'){
  const body=JSON.parse(opts.body);
  if(body.operation==='reset'){
+   if(!backupRequested)throw Error('Reset submitted before requesting backup download');
    if(body.expectedVersion!==version)return json({code:'conflict'},409);
    for(const [path,v]of Object.entries(docs))if(path.includes('/queue_videos/')&&v.status==='queue')delete docs[path];
    version++;return json({ok:true,version,resetAt:Date.now(),statisticsResetAt:0});

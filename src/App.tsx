@@ -1,3 +1,4 @@
+import { consumeChatCommandFeed } from './chatCommandFeed.js';
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import {
   Play,
@@ -508,6 +509,7 @@ function YediHubAppContent() {
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
+  const [chatReplyIssue, setChatReplyIssue] = useState('');
   const [webhookHealth, setWebhookHealth] = useState({
     loading: true, active: false, code: 'checking', status: '', lastWebhookAt: 0,
     lastWebhookResult: 'none', lastWebhookQueued: 0, receiptCode: 'unknown',
@@ -550,6 +552,9 @@ function YediHubAppContent() {
   const handleSkipNextRef = useRef(null);
   const handleVolumeCommandRef = useRef(null);
   const handleIncomingChatCommandRef = useRef(null);
+  const consumeChatCommandFeedRef = useRef(null);
+  const chatCommandSeenRef = useRef(new Set());
+  const latestChatCommandFeedRef = useRef([]);
   const handleUpvoteRef = useRef(null);
   const handleVoteCommandRef = useRef(null);
   const handleQueuePositionRef = useRef(null);
@@ -1006,6 +1011,9 @@ function YediHubAppContent() {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
+        latestChatCommandFeedRef.current = cloudConfig.chatCommandFeed || [];
+        setChatReplyIssue(cloudConfig.chatReplyDiagnostic?.code && cloudConfig.chatReplyDiagnostic.code !== 'ok' ? cloudConfig.chatReplyDiagnostic.code : '');
+        consumeChatCommandFeedRef.current?.(latestChatCommandFeedRef.current);
         const cutoff = Number(cloudConfig.statisticsResetAt || 0);
         if (cutoff > statisticsResetAtRef.current) {
           statisticsResetAtRef.current = cutoff;
@@ -2861,64 +2869,40 @@ function YediHubAppContent() {
     else addToast('Reached end of queue.', 'info');
   };
 
-  // Moderator/broadcaster volume controls use each platform's supported embed API.
+  // Keep audio commands in the saved browser preference shared by YouTube and native Twitch.
   const handleVolumeCommand = (volumeCommand, role) => {
     if (!isStaffRole(role) || !volumeCommand) return;
-
+    const { action } = volumeCommand;
+    if (!['set', 'up', 'down', 'mute', 'unmute'].includes(action)) return;
+    if (action === 'set' && !Number.isFinite(volumeCommand.value)) return;
+    const next = action === 'set' ? Math.max(0, Math.min(100, volumeCommand.value))
+      : action === 'up' ? Math.min(100, localVolumeRef.current + 10)
+      : action === 'down' ? Math.max(0, localVolumeRef.current - 10) : localVolumeRef.current;
+    const muted = action === 'mute' ? true : action === 'unmute' ? false : next === 0;
+    localVolumeRef.current = next;
+    localMutedRef.current = muted;
+    setLocalVolume(next);
+    setLocalMuted(muted);
+    if (currentVideo) updatePlaybackIntent(currentVideo.id, { muted }, currentVideo.platform);
     if (currentVideo?.platform === 'youtube') {
       const player = youtubePlayerRef.current;
-      if (!player || typeof player.getVolume !== 'function' || typeof player.setVolume !== 'function') {
-        addToast('YouTube player is not ready for volume commands yet.', 'warning');
-        return;
-      }
-      const current = Math.max(0, Math.min(100, Number(player.getVolume()) || 0));
-      let next = current;
-      if (volumeCommand.action === 'up') next = Math.min(100, current + 10);
-      else if (volumeCommand.action === 'down') next = Math.max(0, current - 10);
-      else if (volumeCommand.action === 'set') next = volumeCommand.value;
-      else if (volumeCommand.action === 'mute') {
-        player.mute();
-        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: true };
-        addToast('YouTube player muted by staff command.', 'info');
-        return;
-      }
-      else if (volumeCommand.action === 'unmute') {
-        player.unMute();
-        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, muted: false };
-        addToast('YouTube player unmuted by staff command.', 'info');
-        return;
-      }
-      player.setVolume(next);
-      if (next > 0 && typeof player.unMute === 'function') player.unMute();
-      if (next === 0 && typeof player.mute === 'function') player.mute();
-      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted: next === 0 };
-      addToast(`YouTube volume set to ${next}%.`, 'success');
-      return;
+      player?.setVolume?.(next);
+      if (muted) player?.mute?.(); else player?.unMute?.();
+      const frame = youtubeIframeRef.current?.contentWindow;
+      const send = (func, args = []) => frame?.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
+      send('setVolume', [next]);
+      send(muted ? 'mute' : 'unMute');
+      youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, volume: next, muted };
     }
-
     if (currentVideo?.platform === 'tiktok') {
-      const iframeWindow = tiktokIframeRef.current?.contentWindow;
-      if (!iframeWindow) { addToast('TikTok player is not ready for volume commands yet.', 'warning'); return; }
-      if (volumeCommand.action === 'up' || volumeCommand.action === 'down' || (volumeCommand.action === 'set' && volumeCommand.value !== 0 && volumeCommand.value !== 100)) {
-        addToast('TikTok does not allow exact volume changes from chat commands. Use the volume control inside the TikTok player; !mute, !unmute, !volume 0 and !volume 100 still work.', 'info');
-        return;
+      tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: muted ? 'muted' : 'unmuted' };
+      tiktokAudioStateRef.current = { requestId: currentVideo.id, muted };
+      const frame = tiktokIframeRef.current?.contentWindow;
+      if (frame) postTikTokPlayerCommand(frame, muted ? 'mute' : 'unMute', null);
+      if (action === 'up' || action === 'down' || (action === 'set' && next !== 0 && next !== 100)) {
+        addToast('Volume saved for YouTube and Twitch. Use the TikTok player slider for exact TikTok volume.', 'info');
       }
-      const shouldMute = volumeCommand.action === 'mute' || (volumeCommand.action === 'set' && volumeCommand.value === 0);
-      tiktokMutePreferenceRef.current = { requestId: currentVideo.id, preference: shouldMute ? 'muted' : 'unmuted' };
-      tiktokAudioStateRef.current = { requestId: currentVideo.id, muted: shouldMute };
-      updatePlaybackIntent(currentVideo.id, { muted: shouldMute }, 'tiktok');
-      const messageType = shouldMute ? 'mute' : 'unMute';
-      postTikTokPlayerCommand(iframeWindow, messageType, null);
-      addToast(shouldMute ? 'TikTok audio muted by staff command.' : 'TikTok audio unmuted by staff command. Use the in-player slider for incremental volume changes.', 'info');
-      return;
     }
-
-    if (currentVideo?.platform === 'twitch') {
-      addToast('Twitch Clip embeds do not expose remote volume controls. Adjust volume inside the Clip player.', 'info');
-      return;
-    }
-
-    addToast('Remote volume control is not supported for this media type.', 'info');
   };
 
   const handlePreviousTrack = () => {
@@ -3512,6 +3496,25 @@ function YediHubAppContent() {
       .catch((error) => console.warn('Twitch chat reply failed.', error));
   };
 
+  consumeChatCommandFeedRef.current = (feed) => consumeChatCommandFeed(feed, {
+    login: normalizeTwitchLogin(twitchAuth.username), authenticated: twitchAuth.authenticated,
+    connected: chatBotSession.connected, loaded: audioLoadedFor === normalizeTwitchLogin(twitchAuth.username),
+    seen: chatCommandSeenRef.current, storage: sessionStorage,
+    claim: async (id, kind) => {
+      const response = await fetch('/api/twitch/session?action=store', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'claim-chat-command', id, kind }),
+      });
+      const result = await response.json();
+      if (!response.ok || result.ok !== true || typeof result.claimed !== 'boolean') throw new Error(result.error || 'Command claim failed');
+      return result.claimed;
+    },
+    audio: (command) => handleVolumeCommandRef.current?.(command, 'streamer'), reply: sendTwitchChatReply,
+    error: (failure) => { console.warn('Webhook command could not be applied.', failure); addToast('Chat command could not be applied. Dashboard will retry on the next update.', 'warning'); },
+  });
+  useEffect(() => { consumeChatCommandFeedRef.current?.(latestChatCommandFeedRef.current); },
+    [twitchAuth.authenticated, twitchAuth.username, chatBotSession.connected, audioLoadedFor]);
+
   const handleVoteCommand = (voterLogin, rawText) => {
     const match = String(rawText || '').trim().toLowerCase().match(/^!bigcock(?:\s+(\d+))?$/);
     if (!match) return;
@@ -4018,6 +4021,9 @@ function YediHubAppContent() {
       </section>
 
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
+        {isModerator && chatReplyIssue && <div role="status" className="col-span-full rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+          Chat command replies need attention: {chatReplyIssue === 'bot_chat_grant_required' ? 'Reconnect GachiBot69 under Options and verify the bot is a moderator in 2o3a’s channel.' : chatReplyIssue}. Video requests remain silent and independent.
+        </div>}
         {statisticsAccess && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="aspect-[3/2] w-full rounded-xl object-cover object-top opacity-85" />

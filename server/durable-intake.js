@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { extractChatRequests, getEventText, persistChatEvent } from './webhook-queue.js';
 import { getVerifiedFirestore } from './firebase-guard.js';
+import { parseServerCommand, persistChatCommand } from './chat-commands.js';
 
 export const TOPIC = 'twitch-viewer-requests-v2';
 export const REGION = 'iad1';
@@ -17,7 +18,7 @@ function signature(payload) {
 export function isRequestEvent(event) {
   if (String(event?.broadcaster_user_login || '').toLowerCase() !== '2o3a') return false;
   const request = extractChatRequests(getEventText(event));
-  return request.links.length > 0 || Boolean(request.titleQuery);
+  return request.links.length > 0 || Boolean(request.titleQuery) || Boolean(parseServerCommand(event));
 }
 export async function bufferRequest({ event, messageId, subscriptionId, kind = 'chat' }, dependencies = {}) {
   if (kind !== 'health' && !isRequestEvent(event)) return { ignored: true };
@@ -51,6 +52,12 @@ export async function consumeRequest(payload, dependencies = {}) {
   try {
     const db = dependencies.db || await getVerifiedFirestore();
     // A quota/network failure MUST throw. Returning would acknowledge and lose it.
+    if (parseServerCommand(payload.event)) {
+      if (Date.now() - Number(payload.receivedAt || 0) > 120000) return { status: 'command_expired', queued: 0 };
+      const result = await persistChatCommand(db, payload, { sendReply: dependencies.sendReply });
+      console.info('twitch_chat_command', { status: result.status, command: result.command, duplicate: result.duplicate === true });
+      return result;
+    }
     return await persistChatEvent(db, payload);
   } catch (error) {
     console.warn('twitch_intake_retry', { code: String(error?.code || 'storage_unavailable').slice(0, 60) });

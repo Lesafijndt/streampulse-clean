@@ -1,0 +1,88 @@
+<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; frame-src 'self' about:"></head>
+<body><div id="root"></div><pre id="result">Running</pre><script type="module">
+import React from 'react'; import {createRoot} from 'react-dom/client'; import '../../src/index.css';
+const prefix='streampulse-gachi-arena:v2', namespace='streampulse-live-deck';
+const base=`artifacts/${namespace}/public/data/`;
+const provider=new URLSearchParams(location.search).get('provider')||'youtube';
+const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'streamer';
+const login=mode==='moderator'?'paim_beach_pete':'2o3a';
+const cleared=new URLSearchParams(location.search).get('cleared')==='1';
+const resetTest=new URLSearchParams(location.search).get('reset')==='1';
+const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:id==='a'?provider:'youtube',videoId:id==='a'?(provider==='tiktok'?'1234567890123456789':'dQw4w9WgXcQ'):'abcdefghijk',
+url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
+timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
+durationSec:180,duration:'3:00',durationSource:'player',voters:[],upvotes:0,thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E'});
+localStorage.clear();sessionStorage.clear();
+localStorage.setItem(`${prefix}:active-room`,'2o3a');
+localStorage.setItem(`${prefix}:room:2o3a:videos`,JSON.stringify([video('a','playing'),video('b','queue')]));
+let version=0, imported=cleared, expired=false, commits=0, anonymousReads=0; const claims=[], replies=[]; const claimed=new Set();
+const docs={}; const nativeFetch=window.fetch.bind(window);
+const json=(value,status=200)=>Promise.resolve(new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}}));
+window.fetch=(input,opts={})=>{
+const url=new URL(typeof input==='string'?input:input.url,location.href);
+if(!url.pathname.startsWith('/api/'))return nativeFetch(input,opts);
+if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='store'){
+if(expired)return json({authenticated:false,user:null});
+if(opts.method==='POST'){
+ const body=JSON.parse(opts.body);
+ if(body.operation==='claim-chat-command'){claims.push(body);const key=body.id+':'+body.kind; const fresh=!claimed.has(key);claimed.add(key);return json({ok:true,claimed:fresh});}
+ if(body.operation==='reset'){
+   if(body.expectedVersion!==version)return json({code:'conflict'},409);
+   for(const [path,v]of Object.entries(docs))if(path.includes('/queue_videos/')&&v.status==='queue')delete docs[path];
+   version++;return json({ok:true,version,resetAt:Date.now(),statisticsResetAt:0});
+ }
+ if(body.operation==='import-cache'){for(const v of body.videos)docs[base+'queue_videos/'+v.id]||=v; imported=true;version++;return json({ok:true,version});}
+ for(const op of body.operations){const old=docs[op.path];const e=body.expectations?.[op.path];
+ if(!e||Boolean(old)!==e.exists||(old&&op.path.includes('queue_videos')&&(old.status!==e.status||old.timestamp!==e.timestamp)))return json({code:'conflict'},409);}
+ for(const op of body.operations){if(op.type==='delete')delete docs[op.path];else docs[op.path]=op.merge||op.type==='update'?{...docs[op.path],...op.data}:op.data;}
+ version++;commits++;return json({ok:true,version});
+}
+if(Number(url.searchParams.get('since'))===version)return json({version,unchanged:true});
+const collections={queue_videos:[],room_settings:[]};for(const [path,data]of Object.entries(docs)){const parts=path.split('/');if(collections[parts[4]])collections[parts[4]].push({id:parts[5],data});}
+return json({version,collections,legacyImported:imported});
+}
+if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='preferences')return json({ok:true,preferences:{}});
+if(url.pathname==='/api/twitch/session')return json({authenticated:true,storageBackend:'postgres',role:login==='2o3a'?'streamer':'moderator',user:{id:'123',login,display_name:login}});
+if(url.pathname==='/api/twitch/bot-session')return json({active:true,connected:true,user:{login:'gachibot69'},code:'webhook_existing',receiptCode:'ok'});
+if(url.pathname==='/api/twitch/chat-message'){replies.push(JSON.parse(opts.body).message);return json({ok:true});}
+if(url.pathname==='/api/activity-log'){anonymousReads++;return json({events:[],hasMore:false});}
+if(url.pathname==='/api/media-metadata')return json(provider==='twitch'?{available:true,mode:'direct',mediaUrl:'https://example.invalid/isolated-fixture.mp4'}:{});
+return json({ok:true});
+};
+const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out waiting for dashboard');};
+
+// Same-origin stand-ins capture the actual App's provider protocol without loading remote media.
+const errors=[];window.addEventListener('error',e=>errors.push(e.message));
+const commands=[];const setAttribute=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(name,value){if(this.tagName==='IFRAME'&&name==='src'){this.dataset.providerSrc=value;return setAttribute.call(this,name,'about:blank')}return setAttribute.call(this,name,value)};
+const descriptor=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'contentWindow');const registered=new WeakSet();
+Object.defineProperty(HTMLIFrameElement.prototype,'contentWindow',{get(){const target=descriptor.get.call(this);if(target){target.postMessage=(data,origin)=>{let payload=data;if(typeof payload==='string'){try{payload=JSON.parse(payload)}catch{}}commands.push({frame:this,data:payload,origin})}}return target}});
+const emit=(frame,type,value)=>window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:provider==='tiktok'?'https://www.tiktok.com':'https://www.youtube.com',data:provider==='tiktok'?{type,value,'x-tiktok-player':true}:{event:type,info:value}}));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));const assert=(v,msg)=>{if(!v)throw Error(msg)};
+const calls=(frame,name)=>commands.filter(c=>c.frame===frame&&(c.data.type===name||c.data.func===name));
+const frame=()=>provider==='twitch'?document.querySelector('video'):[...document.querySelectorAll('iframe[data-provider-src]')].find(f=>/youtube.com\/embed|tiktok.com\/player/.test(f.dataset.providerSrc));
+try{
+ const {default:App}=await import('../../src/App.tsx');let root=createRoot(document.querySelector('#root'));
+ root.render(React.createElement(App));await wait(()=>imported&&frame());
+ await sleep(120);
+ const packet={id:'command-1',at:Date.now(),volumeCommand:{action:'set',value:23},reply:'@viewer Queue has 2 videos.'};
+ const path=base+'room_settings/2o3a';
+ docs[path]={...(docs[path]||{}),channelRoom:'2o3a',chatCommandFeed:[packet,{id:'url-request',at:Date.now()},{id:'assr-request',at:Date.now()},{...packet,id:'expired',at:Date.now()-121000}]};version++;document.dispatchEvent(new Event('visibilitychange'));
+ await wait(()=>claims.length===1);await sleep(80);
+ assert(claims[0].id==='command-1','Only fresh actionable packets may be claimed');
+ if(login==='2o3a'){
+  await wait(()=>JSON.parse(localStorage.getItem('whale-cum:audio:v1:2o3a')||'{}').volume===23);
+  assert(claims[0].kind==='audio'&&replies.length===0,'Streamer applies saved audio and never replies');
+  if(provider==='twitch')assert(frame().volume===.23&&!frame().muted,'Native Twitch video applies saved command audio');
+  else assert(calls(frame(),'setVolume').some(c=>c.data.args?.[0]===23),'Actual YouTube bridge applies command audio');
+ }else{
+  await wait(()=>replies.length===1);assert(claims[0].kind==='reply','Only moderator claims fallback replies');
+  assert(replies[0]===packet.reply,'Explicit command reply preserved');
+ }
+ version++;document.dispatchEvent(new Event('visibilitychange'));await sleep(650);assert(claims.length===1,'Repeated snapshots must not replay commands');
+ root.unmount();root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
+ await sleep(650);assert(claims.length===1,'Session dedupe must survive remount');
+ assert(!errors.length,errors.join('; '));
+ document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS webhook feed: claim once, role isolation, saved audio, no URL/assr replies';
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors)+' frames='+JSON.stringify([...document.querySelectorAll('iframe')].map(f=>({src:f.src,provider:f.dataset.providerSrc,win:!!f.contentWindow})))+' '+JSON.stringify(commands.slice(-12).map(c=>c.data));}
+</script></body></html>

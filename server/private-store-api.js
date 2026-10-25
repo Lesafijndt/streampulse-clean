@@ -48,6 +48,19 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (body?.operation === 'claim-chat-command') {
+      if (!SAFE_ID.test(body.id || '') || !['audio', 'reply'].includes(body.kind)) throw fail('invalid_command_claim');
+      if (identity.login !== (body.kind === 'audio' ? '2o3a' : 'paim_beach_pete')) throw fail('command_role_required', 403);
+      const claimed = await db.runTransaction(async tx => {
+        const settings = (await tx.get(db.doc(prefix + 'room_settings/2o3a'))).data();
+        const packet = settings?.chatCommandFeed?.find(entry => entry.id === body.id && entry.at > Date.now() - 120000);
+        if (!packet || !(body.kind === 'audio' ? packet.volumeCommand : packet.reply)) return false;
+        const ref = db.doc(prefix + 'system_diagnostics/' + body.id + '-' + body.kind);
+        if ((await tx.get(ref)).exists) return false;
+        tx.create(ref, { at: Date.now(), claimedBy: identity.login });return true;
+      });
+      return res.status(200).json({ ok: true, claimed });
+    }
     if (body?.operation === 'reset') {
       if (!['queue', 'history', 'statistics', 'all'].includes(body.scope) || body.confirmation !== 'RESET') throw fail('reset_confirmation_required');
       if (body.scope === 'statistics' && identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);

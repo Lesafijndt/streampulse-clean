@@ -31,6 +31,16 @@ test('private store reads reject viewers and never expose profiles, receipts or 
   assert.equal((await api(db, { since: 0 })).body.unchanged, true);
 });
 
+test('chat command claims require the matching staff role and can only claim a recent server-created packet once',async()=>{
+  const {db}=setup({[prefix+'room_settings/2o3a']:{channelRoom:'2o3a',chatCommandFeed:[{id:'chat-a',at:Date.now(),volumeCommand:{action:'set',value:50}},{id:'chat-r',at:Date.now(),reply:'Command response'}]}});
+  const body={operation:'claim-chat-command',id:'chat-a',kind:'audio'};
+  assert.equal((await api(db,{method:'POST',body})).statusCode,403);
+  assert.equal((await api(db,{method:'POST',body,login:'2o3a'})).body.claimed,true);
+  assert.equal((await api(db,{method:'POST',body,login:'2o3a'})).body.claimed,false);
+  assert.equal((await api(db,{method:'POST',body:{...body,id:'missing'},login:'2o3a'})).body.claimed,false);
+  assert.equal((await api(db,{method:'POST',body:{...body,id:'chat-r',kind:'reply'}})).body.claimed,true);
+});
+
 test('scoped reset is authenticated, confirmed, atomic and preserves playing/history/credentials', async () => {
   const { db, state } = setup({ [prefix + 'queue_videos/a']: row('a'),
     [prefix + 'queue_videos/p']: row('p', { status: 'playing' }),

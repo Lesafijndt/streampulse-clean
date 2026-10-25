@@ -70,3 +70,13 @@ for (const provider of ['tiktok', 'youtube']) test(provider + ' actual dashboard
   const html = renderInChrome(baseUrl + '/tests/browser/playback-dashboard.html?provider=' + provider);
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
+
+for (const role of ['streamer', 'moderator']) test(role + ' dashboard consumes verified webhook feed exactly once with isolated audio/replies', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/command-dashboard.html?role=' + role);
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('streamer webhook volume reaches native Twitch playback', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/command-dashboard.html?provider=twitch');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
