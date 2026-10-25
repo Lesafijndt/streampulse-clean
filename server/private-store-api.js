@@ -16,7 +16,23 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       const since = Number(req.query?.since ?? -1);
       const version = await db.getVersion();
       if (since === version) return res.status(200).json({ version, unchanged: true });
-      const state = await db.readState();
+      if (Number.isSafeInteger(since) && since >= 0 && db.readChanges) {
+        const delta = await db.readChanges(since, { collections: ['queue_videos', 'room_settings'].map(name => prefix + name) });
+        if (!delta.reset) {
+          const changes = [];
+          for (const [path, data] of Object.entries(delta.documents)) {
+            if (!path.startsWith(prefix)) continue;
+            const parts = path.slice(prefix.length).split('/');
+            if (parts.length !== 2 || !['queue_videos', 'room_settings'].includes(parts[0])) continue;
+            if (parts[0] === 'room_settings' && parts[1] !== '2o3a') continue;
+            // A row moved out of this room must disappear from the cached view.
+            changes.push({ collection: parts[0], id: parts[1], data:
+              parts[0] === 'queue_videos' && data && data.channelRoom !== '2o3a' ? null : data });
+          }
+          return res.status(200).json({ version: delta.version, delta: true, changes });
+        }
+      }
+      const state = await db.readState({ collections: ['queue_videos', 'room_settings', 'system_diagnostics'].map(name => prefix + name) });
       const collections = { queue_videos: [], room_settings: [] };
       for (const [path, data] of Object.entries(state.documents)) {
         if (!path.startsWith(prefix)) continue;

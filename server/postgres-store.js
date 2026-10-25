@@ -104,8 +104,8 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
     if (pathParts(path).length !== 5 || !path.startsWith(prefix)) throw failure('invalid_collection_path');
     return path;
   }
-  async function state() {
-    const result = await readBackend();
+  async function state(selection) {
+    const result = await readBackend(selection);
     const version = Number(result?.version);
     if (!Number.isSafeInteger(version) || version < 0 || !plain(result?.documents)) throw failure('invalid_store_state', 503);
     return { version, documents: copy(result.documents) };
@@ -148,11 +148,11 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
     // Freeze the submitted values before any await or retry.
     operations = copy(operations);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const current = await state();
+      const current = await state({ paths: operations.map(op => op.path) });
       if (expectedVersion !== undefined && expectedVersion !== current.version) throw failure('conflict', 409);
       if (!operations.length) return { version: current.version };
       const documents = apply(current.documents, operations);
-      if (await compareAndSwap(current.version, documents)) return { version: current.version + 1 };
+      if (await compareAndSwap(current.version, documents, operations)) return { version: current.version + 1 };
       if (expectedVersion !== undefined) throw failure('conflict', 409);
     }
     throw failure('conflict', 409);
@@ -167,15 +167,28 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
   }
   async function runTransaction(callback) {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const current = await state();
+      const current = await state({ paths: [] });
       const operations = [];
       const transaction = writer(operations);
-      transaction.get = async ref => ref?._query
-        ? querySnapshot(ref, current.documents) : snapshot(ref?.path, current.documents);
+      let changed = false;
+      const load = async selection => {
+        const next = await state(selection);
+        if (next.version !== current.version) changed = true;
+        Object.assign(current.documents, next.documents);
+      };
+      transaction.get = async ref => {
+        await load(ref?._query ? { collections: [ref.path], query: ref._query } : { paths: [documentPath(ref?.path)] });
+        return ref?._query ? querySnapshot(ref, current.documents) : snapshot(ref?.path, current.documents);
+      };
       transaction.getAll = (...refs) => Promise.all(refs.map(ref => transaction.get(ref)));
-      const result = await callback(transaction);
+      let result;
+      try { result = await callback(transaction); }
+      catch (error) { if (changed) continue; throw error; }
+      if (changed) continue;
       if (!operations.length) return result;
-      if (await compareAndSwap(current.version, apply(current.documents, operations))) return result;
+      await load({ paths: operations.map(op => op.path) });
+      if (changed) continue;
+      if (await compareAndSwap(current.version, apply(current.documents, operations), operations)) return result;
     }
     throw failure('conflict', 409);
   }
@@ -184,7 +197,7 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
     if (parts.length % 2) throw failure('invalid_document_path');
     return { path, id: parts.at(-1),
       collection: name => collection(path + '/' + name),
-      get: async () => snapshot(path, (await state()).documents),
+      get: async () => snapshot(path, (await state({ paths: [path] })).documents),
       set: (data, options) => commitOperations([operation('set', path, data, options)]),
       update: data => commitOperations([operation('update', path, data)]),
       create: data => commitOperations([operation('create', path, data)]),
@@ -238,7 +251,7 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
     if (!(parts.length % 2)) throw failure('invalid_collection_path');
     const query = { path, id: parts.at(-1), _query: config,
       doc: (id = randomUUID()) => doc(path + '/' + id),
-      get: async () => querySnapshot(query, (await state()).documents),
+      get: async () => querySnapshot(query, (await state({ collections: [path], query: config })).documents),
       orderBy: (name, direction = 'asc') => {
         name = typeof name === 'string' ? name : '__name__';
         if (name !== '__name__') fieldParts(name);
@@ -289,7 +302,8 @@ async function postgres() {
     namespace TEXT PRIMARY KEY,
     version BIGINT NOT NULL DEFAULT 0,
     documents JSONB NOT NULL DEFAULT '{}'::jsonb
-  )`).catch(error => { initialized = undefined; throw error; });
+  )`).then(() => connection.query(`ALTER TABLE streampulse_state ADD COLUMN IF NOT EXISTS document_versions JSONB NOT NULL DEFAULT '{}'::jsonb`))
+    .catch(error => { initialized = undefined; throw error; });
   await initialized;
   return connection;
 }
@@ -300,23 +314,66 @@ export async function getPostgresStore(namespace = process.env.VITE_FIREBASE_NAM
   if (!stores.has(namespace)) {
     const pending = (async () => {
       await sql.query('INSERT INTO streampulse_state(namespace) VALUES ($1) ON CONFLICT (namespace) DO NOTHING', [namespace]);
-      return createDocumentStore({ namespace,
+      const store = createDocumentStore({ namespace,
         readVersion: async () => {
           const [row] = await sql.query('SELECT version FROM streampulse_state WHERE namespace = $1', [namespace]);
           if (!row) throw failure('postgres_state_missing', 503);
           return Number(row.version);
         },
-        readState: async () => {
-          const [row] = await sql.query('SELECT version, documents FROM streampulse_state WHERE namespace = $1', [namespace]);
+        readState: async selection => {
+          let rows;
+          if (selection?.paths) {
+            rows = await sql.query(`SELECT version, (SELECT COALESCE(jsonb_object_agg(key, documents -> key), '{}'::jsonb)
+              FROM unnest($2::text[]) AS keys(key) WHERE documents ? key) AS documents
+              FROM streampulse_state WHERE namespace = $1`, [namespace, [...new Set(selection.paths)]]);
+          } else if (selection?.collections?.length === 1 && selection.collections[0].split('/')[4] === 'queue_events' &&
+              selection.query?.orders?.[0]?.[0] === 'at' && selection.query.orders[0][1] === 'asc' &&
+              selection.query.limit && selection.query.filters.every(([field, operator]) => field === 'at' && operator === '>')) {
+            const cutoff = Math.max(0, ...selection.query.filters.map(([, , value]) => Number(value) || 0));
+            const cursor = selection.query.cursor || [0, ''];
+            rows = await sql.query(`SELECT version, (SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb) FROM (
+              SELECT key, value FROM jsonb_each(documents) WHERE split_part(key, '/', 5) = 'queue_events'
+                AND CASE WHEN jsonb_typeof(value -> 'at') = 'number' THEN (value ->> 'at')::numeric ELSE 0 END > $2::numeric
+                AND ((value ->> 'at')::numeric > $3::numeric OR ((value ->> 'at')::numeric = $3::numeric AND split_part(key, '/', 6) > $4))
+              ORDER BY (value ->> 'at')::numeric, split_part(key, '/', 6) LIMIT $5) AS page) AS documents
+              FROM streampulse_state WHERE namespace = $1`, [namespace, cutoff, cursor[0], cursor[1], selection.query.limit]);
+          } else if (selection?.collections) {
+            rows = await sql.query(`SELECT version, (SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb)
+              FROM jsonb_each(documents) WHERE split_part(key, '/', 5) = ANY($2::text[])) AS documents
+              FROM streampulse_state WHERE namespace = $1`, [namespace, selection.collections.map(path => path.split('/')[4])]);
+          } else rows = await sql.query('SELECT version, documents FROM streampulse_state WHERE namespace = $1', [namespace]);
+          const [row] = rows;
           if (!row) throw failure('postgres_state_missing', 503);
           return { version: Number(row.version), documents: row.documents };
         },
-        compareAndSwap: async (version, documents) => {
-          const rows = await sql.query(`UPDATE streampulse_state SET documents = $3::jsonb, version = version + 1
-            WHERE namespace = $1 AND version = $2 RETURNING version`, [namespace, version, JSON.stringify(documents)]);
+        compareAndSwap: async (version, documents, operations) => {
+          const touched = [...new Set(operations.map(op => op.path))];
+          const deleted = touched.filter(path => !Object.hasOwn(documents, path));
+          const patch = Object.fromEntries(touched.filter(path => Object.hasOwn(documents, path)).map(path => [path, documents[path]]));
+          const versions = Object.fromEntries(touched.map(path => [path, version + 1]));
+          versions.__indexed = version + 1;
+          const rows = await sql.query(`UPDATE streampulse_state SET documents = (documents - $4::text[]) || $3::jsonb,
+            document_versions = document_versions || CASE WHEN COALESCE((document_versions ->> '__indexed')::bigint, 0) <> version
+              THEN jsonb_build_object('__floor', version + 1) ELSE '{}'::jsonb END || $5::jsonb,
+            version = version + 1 WHERE namespace = $1 AND version = $2 RETURNING version`,
+          [namespace, version, JSON.stringify(patch), deleted, JSON.stringify(versions)]);
           return rows.length === 1;
         },
       });
+      store.readChanges = async (since, { collections = [] } = {}) => {
+        if (!Number.isSafeInteger(since) || since < 0) throw failure('invalid_version');
+        const names = collections.map(path => path.split('/')[4]);
+        const [row] = await sql.query(`SELECT version,
+          (COALESCE((document_versions ->> '__indexed')::bigint, 0) <> version OR
+            $2 < COALESCE((document_versions ->> '__floor')::bigint, 0)) AS reset,
+          (SELECT COALESCE(jsonb_object_agg(key, documents -> key), '{}'::jsonb)
+            FROM jsonb_each_text(document_versions) WHERE key NOT IN ('__indexed', '__floor') AND value::bigint > $2
+            AND split_part(key, '/', 5) = ANY($3::text[])) AS documents
+          FROM streampulse_state WHERE namespace = $1`, [namespace, since, names]);
+        if (!row) throw failure('postgres_state_missing', 503);
+        return { version: Number(row.version), reset: row.reset, documents: row.documents };
+      };
+      return store;
     })().catch(error => { stores.delete(namespace); throw error; });
     stores.set(namespace, pending);
   }

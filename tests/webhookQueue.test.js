@@ -107,12 +107,11 @@ test('notification delivery and media writes occur in one idempotent transaction
   assert.equal(crossSubscriptionRetry.status, 'duplicate_delivery');
 });
 
-test('GachiBot69 can submit viewer URLs without dashboard privileges', async () => {
+test('GachiBot69 is ignored as a bot', async () => {
   const result = await makeQueueItems({ broadcaster_user_login: '2o3a', chatter_user_login: 'gachibot69',
     message: { text: 'https://youtu.be/dQw4w9WgXcQ' } });
-  assert.equal(result.reason, 'ready');
-  assert.equal(result.items[0].requestedBy, 'gachibot69');
-  assert.equal(result.items[0].userRole, 'viewer');
+  assert.equal(result.reason, 'ignored_sender');
+  assert.deepEqual(result.items, []);
 });
 
 test('stale Firebase service account or web project cannot write into wrong project', () => {
@@ -227,7 +226,7 @@ test('real chat URLs from Palm_Beach_Pete are parsed as viewer requests', async 
   assert.equal(request.reason, 'ready');
   assert.equal(request.items.length, 2);
   assert.deepEqual(request.items.map(item => item.requestedBy), ['palm_beach_pete', 'palm_beach_pete']);
-  assert.equal((await makeQueueItems({ ...event, chatter_user_login: 'gachibot69' })).reason, 'ready');
+  assert.equal((await makeQueueItems({ ...event, chatter_user_login: 'gachibot69' })).reason, 'ignored_sender');
 });
 
 test('moderator setup starts automatically after chat scopes are approved, and storage failures are visible', async () => {

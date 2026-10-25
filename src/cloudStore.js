@@ -41,6 +41,36 @@ function result(ref) {
   const docs = rows.map(row => snapshot(doc(ref, row.id), row.data));
   return { docs, size: docs.length, empty: !docs.length, metadata: { fromCache: false, hasPendingWrites: false } };
 }
+function validatedCollections(body, db) {
+  const validData = data => data && typeof data === 'object' && !Array.isArray(data);
+  const validId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,180}$/.test(id);
+  const invalid = () => { throw Object.assign(new Error('Cloud session unavailable; sign in again'), { code: 'invalid_cloud_session', status: 401 }); };
+  if (!Number.isSafeInteger(body.version) || body.version < 0 || body.version < db.version) invalid();
+  if (body.unchanged === true) {
+    if (db.version < 0 || body.version !== db.version) invalid();
+    return db.collections;
+  }
+  if (body.delta === true) {
+    if (db.version < 0 || !Array.isArray(body.changes)) invalid();
+    for (const change of body.changes) {
+      if (!change || !['queue_videos', 'room_settings'].includes(change.collection) || !validId(change.id) ||
+          (change.data !== null && !validData(change.data)) ||
+          (change.collection === 'room_settings' && change.id !== '2o3a') ||
+          (change.collection === 'queue_videos' && change.data && change.data.channelRoom !== '2o3a')) invalid();
+    }
+    const next = structuredClone(db.collections);
+    for (const change of body.changes) {
+      const rows = new Map((next[change.collection] || []).map(row => [row.id, row]));
+      if (change.data === null) rows.delete(change.id);
+      else rows.set(change.id, { id: change.id, data: structuredClone(change.data) });
+      next[change.collection] = [...rows.values()];
+    }
+    return next;
+  }
+  if (!body.collections || !['queue_videos', 'room_settings'].every(name => Array.isArray(body.collections[name]) &&
+      body.collections[name].every(row => row && validId(row.id) && validData(row.data)))) invalid();
+  return structuredClone(body.collections);
+}
 function publish(db) {
   for (const watch of db.watchers) {
     const value = result(watch.ref);
@@ -56,16 +86,13 @@ async function refresh(db, force = false) {
     if (!force) return;
   }
   const promise = (async () => {
-    const response = await fetch('/api/twitch/session?action=store&since=' + (force ? -1 : db.version), {
+    const response = await fetch('/api/twitch/session?action=store&since=' + db.version, {
       credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(body.code || 'Cloud queue unavailable'), { code: body.code, status: response.status });
-    if (!Number.isSafeInteger(body.version) || body.version < 0 ||
-        (body.unchanged !== true && (!body.collections || !Array.isArray(body.collections.queue_videos) || !Array.isArray(body.collections.room_settings)))) {
-      throw Object.assign(new Error('Cloud session unavailable; sign in again'), { code: 'invalid_cloud_session', status: 401 });
-    }
-    if (!body.legacyImported && body.unchanged !== true && !db.importAttempted && db.legacyVideos.length) {
+    let nextCollections = validatedCollections(body, db);
+    if (!body.legacyImported && body.delta !== true && body.unchanged !== true && !db.importAttempted && db.legacyVideos.length) {
       const imported = await fetch('/api/twitch/session?action=store', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'import-cache', videos: db.legacyVideos }),
         signal: AbortSignal.timeout(20000) });
@@ -74,29 +101,41 @@ async function refresh(db, force = false) {
       const fresh = await fetch('/api/twitch/session?action=store&since=-1', { credentials: 'same-origin', cache: 'no-store' });
       const after = await fresh.json().catch(() => ({}));
       if (!fresh.ok || !Number.isSafeInteger(after.version) || !Array.isArray(after.collections?.queue_videos)) throw new Error('Imported queue refresh failed');
+      nextCollections = validatedCollections(after, db);
       Object.assign(body, after);
     }
-    if (!body.unchanged) db.collections = body.collections || {};
+    db.collections = nextCollections;
     db.version = body.version; publish(db);
   })();
   db.inFlight = promise;
   try { await promise; } finally { if (db.inFlight === promise) db.inFlight = null; }
 }
 function schedule(db) {
-  if (db.timer || !db.watchers.size) return;
+  if (db.timer || !db.watchers.size || (typeof document !== 'undefined' && document.hidden)) return;
   db.timer = setTimeout(async () => {
     db.timer = null;
     try { await refresh(db); } catch (error) { for (const watch of db.watchers) watch.error?.(error); }
     schedule(db);
-  }, typeof document !== 'undefined' && document.hidden ? 60000 : 5000);
+  }, 5000);
 }
 export function onSnapshot(ref, options, next, error) {
   if (!cloud(ref)) return legacy.onSnapshot(...[ref, options, next, error].filter(value => value !== undefined));
   if (typeof options === 'function') { error = next; next = options; }
   const db = cloud(ref); const watch = { ref, next, error, last: '', delivered: false };
   db.watchers.add(watch);
-  void refresh(db).catch(reason => error?.(reason)).finally(() => schedule(db));
-  return () => { db.watchers.delete(watch); if (!db.watchers.size) { clearTimeout(db.timer); db.timer = null; } };
+  if (!db.visibilityListener && typeof document !== 'undefined') {
+    db.visibilityListener = () => {
+      clearTimeout(db.timer); db.timer = null;
+      if (!document.hidden) void refresh(db).catch(reason => {
+        for (const current of db.watchers) current.error?.(reason);
+      }).finally(() => schedule(db));
+    };
+    document.addEventListener('visibilitychange', db.visibilityListener);
+  }
+  if (typeof document === 'undefined' || !document.hidden) void refresh(db).catch(reason => error?.(reason)).finally(() => schedule(db));
+  return () => { db.watchers.delete(watch); if (!db.watchers.size) { clearTimeout(db.timer); db.timer = null;
+    if (db.visibilityListener) { document.removeEventListener('visibilitychange', db.visibilityListener); db.visibilityListener = null; }
+  } };
 }
 export async function getDocs(ref) {
   if (!cloud(ref)) return legacy.getDocs(ref);

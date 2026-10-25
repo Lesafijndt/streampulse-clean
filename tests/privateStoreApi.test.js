@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocumentStore } from '../server/postgres-store.js';
 import { handlePrivateStore } from '../server/private-store-api.js';
-import { createPrivateCloudDb, resetPrivateCloud, collection, doc, getDocs, setDoc, writeBatch, runTransaction } from '../src/cloudStore.js';
+import { createPrivateCloudDb, resetPrivateCloud, onSnapshot, collection, doc, getDocs, setDoc, writeBatch, runTransaction } from '../src/cloudStore.js';
 
 const namespace = 'streampulse-live-deck', prefix = `artifacts/${namespace}/public/data/`;
 const row = (id, extra = {}) => ({ id, channelRoom: '2o3a', status: 'queue', timestamp: 100,
@@ -131,4 +131,71 @@ test('reset sends the reviewed version without refreshing away a newly arrived r
   assert.deepEqual(calls, ['POST']);
   assert.ok(state().documents[prefix + 'queue_videos/a']);
   assert.ok(state().documents[prefix + 'queue_videos/new']);
+});
+
+
+test('delta API scopes changed documents and never reads or exposes private collections', async () => {
+  let selected;
+  const db = { getVersion: async () => 4, readState: () => assert.fail('delta fetched whole state'),
+    readChanges: async (since, options) => { assert.equal(since, 1); selected = options.collections;
+      return { version: 4, reset: false, documents: {
+        [prefix + 'queue_videos/a']: row('a', { status: 'playing' }),
+        [prefix + 'queue_videos/deleted']: null,
+        [prefix + 'queue_videos/moved']: row('moved', { channelRoom: 'other' }),
+        [prefix + 'room_settings/other']: { secret: true },
+        [prefix + 'twitch_eventsub_receipts/private']: { secret: true },
+      } }; } };
+  const res = await api(db, { since: 1 });
+  assert.equal(res.statusCode, 200); assert.equal(res.body.delta, true);
+  assert.deepEqual(selected, [prefix + 'queue_videos', prefix + 'room_settings']);
+  assert.deepEqual(res.body.changes.map(change => [change.id, change.data?.status ?? null]), [['a', 'playing'], ['deleted', null], ['moved', null]]);
+  assert.equal(JSON.stringify(res.body).includes('secret'), false);
+});
+
+test('browser applies validated deltas atomically and pauses polling while hidden', async t => {
+  const originalFetch = globalThis.fetch, originalDocument = globalThis.document;
+  const originalSetTimeout = globalThis.setTimeout, originalClearTimeout = globalThis.clearTimeout;
+  const listeners = new Set(), timers = new Map(); let nextTimer = 0, calls = 0, failure;
+  const surface = { hidden: false, addEventListener: (_name, fn) => listeners.add(fn), removeEventListener: (_name, fn) => listeners.delete(fn) };
+  globalThis.document = surface;
+  globalThis.setTimeout = fn => { timers.set(++nextTimer, fn); return nextTimer; };
+  globalThis.clearTimeout = id => timers.delete(id);
+  t.after(() => { globalThis.fetch = originalFetch; globalThis.document = originalDocument;
+    globalThis.setTimeout = originalSetTimeout; globalThis.clearTimeout = originalClearTimeout; });
+  const bodies = [
+    { version: 1, legacyImported: true, collections: { queue_videos: [{ id: 'a', data: row('a') }, { id: 'keep', data: row('keep') }], room_settings: [] } },
+    { version: 2, delta: true, changes: [{ collection: 'queue_videos', id: 'a', data: row('a', { status: 'playing' }) }, { collection: 'queue_videos', id: 'b', data: row('b') }] },
+    { version: 3, delta: true, changes: [{ collection: 'queue_videos', id: 'a', data: null }] },
+    { version: 4, delta: true, changes: [{ collection: 'queue_videos', id: 'keep', data: null }, { collection: 'private', id: 'bad', data: {} }] },
+    { version: 4, delta: true, changes: [] },
+  ];
+  globalThis.fetch = async url => { assert.ok(url.includes('since=')); calls++; return Response.json(bodies.shift()); };
+  const db = createPrivateCloudDb(), ref = collection(db, 'artifacts', namespace, 'public', 'data', 'queue_videos');
+  const observed = []; const stop = onSnapshot(ref, value => observed.push(value.docs.map(doc => doc.id)), error => { failure = error; });
+  const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+  const poll = async () => { const [id, fn] = timers.entries().next().value; timers.delete(id); await fn(); await settle(); };
+  await settle(); assert.equal(db.version, 1);
+  await poll(); assert.equal(db.version, 2); assert.equal(db.collections.queue_videos.find(row => row.id === 'a').data.status, 'playing');
+  await poll(); assert.equal(db.version, 3); assert.deepEqual(db.collections.queue_videos.map(row => row.id), ['keep', 'b']);
+  const before = structuredClone(db.collections);
+  await poll(); assert.equal(failure.code, 'invalid_cloud_session'); assert.equal(db.version, 3); assert.deepEqual(db.collections, before);
+  surface.hidden = true; for (const fn of listeners) fn(); assert.equal(timers.size, 0);
+  assert.equal(calls, 4);
+  surface.hidden = false; for (const fn of listeners) fn(); await settle();
+  assert.equal(calls, 5); assert.equal(db.version, 4); assert.equal(timers.size, 1);
+  stop(); assert.equal(timers.size, 0); assert.equal(listeners.size, 0); assert.ok(observed.length >= 3);
+});
+
+test('delta retention gap falls back to a scoped full snapshot including legacy import marker', async () => {
+  let selection;
+  const db = { getVersion: async () => 8, readChanges: async () => ({ version: 8, documents: {}, reset: true }),
+    readState: async options => { selection = options.collections; return { version: 8, documents: {
+      [prefix + 'queue_videos/new']: row('new'),
+      [prefix + 'queue_videos/foreign']: row('foreign', { channelRoom: 'other' }),
+      [prefix + 'system_diagnostics/legacy-browser-import']: { importedAt: 1 },
+    } }; } };
+  const res = await api(db, { since: 1 });
+  assert.equal(res.body.delta, undefined); assert.equal(res.body.legacyImported, true);
+  assert.deepEqual(res.body.collections.queue_videos.map(row => row.id), ['new']);
+  assert.deepEqual(selection, ['queue_videos', 'room_settings', 'system_diagnostics'].map(name => prefix + name));
 });

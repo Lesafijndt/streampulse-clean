@@ -24,8 +24,24 @@ try {
   assert.equal(after.docs.filter(row => row.data().status === 'queue').length, 1);
   assert.equal(after.docs.filter(row => row.data().status === 'watched').length, 1);
   const state = await db.readState(); assert.ok(state.version >= 3);
+  const profile = db.collection('artifacts').doc(namespace).collection('public').doc('data').collection('user_profiles').doc('verification');
+  await profile.set({ preferences: { volume: 50 } });
+  const beforeChange = await db.getVersion();
+  await snapshot.docs[0].ref.update({ title: 'Projected write verified' });
+  const projected = await db.readState({ paths: [snapshot.docs[0].ref.path] });
+  assert.deepEqual(Object.keys(projected.documents), [snapshot.docs[0].ref.path]);
+  const delta = await db.readChanges(beforeChange, { collections: [rows.path] });
+  assert.equal(delta.reset, false);
+  assert.deepEqual(Object.keys(delta.documents), [snapshot.docs[0].ref.path]);
+  assert.equal(delta.documents[snapshot.docs[0].ref.path].title, 'Projected write verified');
+  assert.equal((await profile.get()).get('preferences').volume, 50);
+  const beforeDelete = await db.getVersion();
+  await snapshot.docs[0].ref.delete();
+  const deleted = await db.readChanges(beforeDelete, { collections: [rows.path] });
+  assert.equal(deleted.documents[snapshot.docs[0].ref.path], null);
   console.log(JSON.stringify({ check: 'postgres_live_transactions', ok: true,
-    viewerRequest: true, crossSubscriptionDedup: true, historyReplay: true, isolatedNamespace: true }));
+    viewerRequest: true, crossSubscriptionDedup: true, historyReplay: true, isolatedNamespace: true,
+    projectedReads: true, patchPreservesOtherDocuments: true, deltaSync: true, deletionTombstones: true }));
 } finally {
   // Only documents under the explicitly isolated verification namespace are
   // cleaned up. The live queue and its original Firestore data are untouched.
