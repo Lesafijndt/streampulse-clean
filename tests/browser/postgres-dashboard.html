@@ -5,6 +5,7 @@ const prefix='streampulse-gachi-arena:v2', namespace='streampulse-live-deck';
 const base=`artifacts/${namespace}/public/data/`;
 const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'streamer';
 const login=mode==='moderator'?'paim_beach_pete':'2o3a';
+const cleared=new URLSearchParams(location.search).get('cleared')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:'youtube',videoId:id==='a'?'dQw4w9WgXcQ':'abcdefghijk',
 url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
 timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
@@ -12,7 +13,7 @@ durationSec:180,duration:'3:00',durationSource:'player',voters:[],upvotes:0,thum
 localStorage.clear();sessionStorage.clear();
 localStorage.setItem(`${prefix}:active-room`,'2o3a');
 localStorage.setItem(`${prefix}:room:2o3a:videos`,JSON.stringify([video('a','playing'),video('b','queue')]));
-let version=0, imported=false, expired=false, commits=0, anonymousReads=0;
+let version=0, imported=cleared, expired=false, commits=0, anonymousReads=0;
 const docs={}; const nativeFetch=window.fetch.bind(window);
 const json=(value,status=200)=>Promise.resolve(new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}}));
 window.fetch=(input,opts={})=>{
@@ -42,6 +43,10 @@ return json({ok:true});
 const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out waiting for dashboard');};
 try{
 const {default:App}=await import('../../src/App.tsx');createRoot(document.querySelector('#root')).render(React.createElement(App));
+if(cleared){
+await wait(()=>document.querySelector('[aria-label="Connection details: Cloud Synced"]')&&!document.body.textContent.includes('Imported queued video'));
+if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('Stale cache resurrected cleared requests');
+}else{
 await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('[aria-label="Connection details: Cloud Synced"]'));
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
 if(login==='2o3a'&&anonymousReads)throw Error('Streamer loaded private analytics');
@@ -49,6 +54,7 @@ const next=[...document.querySelectorAll('button')].find(button=>/next video/i.t
 if(!next)throw Error('Next video control missing');next.click();
 await wait(()=>docs[base+'queue_videos/a']?.status==='watched'&&docs[base+'queue_videos/b']?.status==='playing');
 if(!commits)throw Error('Playback did not persist through private API');
+}
 expired=true;await new Promise(r=>setTimeout(r,50));
 document.body.dataset.testStatus='pass';document.querySelector('#result').textContent=JSON.stringify({pass:true,imported,commits,login});
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' '+JSON.stringify({docs,commits,text:document.body.innerText.slice(0,1200)});}

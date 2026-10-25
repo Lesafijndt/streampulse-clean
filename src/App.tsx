@@ -901,6 +901,13 @@ function YediHubAppContent() {
           }
 
           const normalizedRoom = normalizeRoomName(channelRoom);
+          if (cloudBackend === 'postgres') {
+            // The private transport performs the single guarded cache import
+            // before publishing. An empty result after that is authoritative.
+            initializedCloudRoomsRef.current.add(normalizedRoom);
+            setVideos([]);
+            return;
+          }
           const firstSnapshotForRoom = !initializedCloudRoomsRef.current.has(normalizedRoom);
           if (!firstSnapshotForRoom) {
             // A later empty snapshot means the shared queue was cleared remotely.

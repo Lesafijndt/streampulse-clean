@@ -45,3 +45,8 @@ test('actual streamer dashboard imports its queue and persists Next through the 
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-2000));
   assert.doesNotMatch(html, /data-test-status="fail"/);
 });
+
+test('an authoritative empty Postgres queue is not repopulated from stale browser cache', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/postgres-dashboard.html?cleared=1');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-2000));
+});
