@@ -3121,10 +3121,10 @@ function YediHubAppContent() {
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
-      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
       postCommand('setVolume', [localVolumeRef.current]);
       if (localMutedRef.current) postCommand('mute');
       else postCommand('unMute');
+      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video)) return;
@@ -4131,9 +4131,10 @@ function YediHubAppContent() {
                         if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
                           send('seekTo', [restoreSeconds, true]);
                         }
-                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
+                        send('setVolume', [localVolumeRef.current]);
                         if (intent.muted === true) send('mute');
                         else if (intent.muted === false) send('unMute');
+                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
                       }}
                     />
                     </div>
