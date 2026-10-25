@@ -32,6 +32,32 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (body?.operation === 'reset') {
+      if (!['queue', 'history', 'statistics', 'all'].includes(body.scope) || body.confirmation !== 'RESET') throw fail('reset_confirmation_required');
+      if (body.scope === 'statistics' && identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
+      const state = await db.readState();
+      if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion !== state.version) throw fail('conflict', 409);
+      const now = Date.now(), operations = [];
+      for (const [path, data] of Object.entries(state.documents)) {
+        if (!path.startsWith(prefix)) continue;
+        const [name, , extra] = path.slice(prefix.length).split('/');
+        if (extra || data.channelRoom !== '2o3a' || name !== 'queue_videos') continue;
+        if (body.scope === 'all' || (body.scope === 'queue' && ['queue', 'watch_later'].includes(data.status)) ||
+            (body.scope === 'history' && data.status === 'watched')) operations.push({ type: 'delete', path });
+      }
+      const settingsPath = prefix + 'room_settings/2o3a';
+      const settings = state.documents[settingsPath] || { channelRoom: '2o3a' };
+      const resetStatistics = ['statistics', 'all'].includes(body.scope);
+      // Retain an epoch rather than deleting the journal: stale tabs cannot resurrect old statistics.
+      operations.push({ type: 'set', path: settingsPath, data: { ...settings, updatedAt: now,
+        ...(resetStatistics ? { statisticsResetAt: now } : {}), lastResetAt: now, lastResetScope: body.scope } });
+      // Prevent an old browser importing deleted rows after an intentional reset.
+      if (['queue', 'history', 'all'].includes(body.scope)) operations.push({ type: 'set',
+        path: prefix + 'system_diagnostics/legacy-browser-import', data: { importedAt: now, resetBy: identity.login } });
+      await db.commitOperations(operations, { expectedVersion: state.version });
+      return res.status(200).json({ ok: true, version: state.version + 1, resetAt: now,
+        statisticsResetAt: resetStatistics ? now : Number(settings.statisticsResetAt || 0) });
+    }
     if (body?.operation === 'import-cache') {
       if (!Array.isArray(body.videos) || body.videos.length < 1 || body.videos.length > 2000 || JSON.stringify(body).length > 2_000_000) throw fail('invalid_import');
       const incoming = body.videos.filter(row => row && SAFE_ID.test(row.id || '') && row.channelRoom === '2o3a' &&

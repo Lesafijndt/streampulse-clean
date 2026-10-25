@@ -168,17 +168,19 @@ export default async function handler(req, res) {
       }
       const { FieldPath } = await import('firebase-admin/firestore');
       const PAGE_SIZE = 200;
-      let query = events.orderBy('at', 'asc')
+      const settings = await firestore.collection('artifacts').doc(appId).collection('public').doc('data').collection('room_settings').doc('2o3a').get();
+      const statisticsResetAt = Number(settings.data()?.statisticsResetAt || 0);
+      let query = events.where('at', '>', statisticsResetAt).orderBy('at', 'asc')
         .orderBy(FieldPath.documentId(), 'asc');
       if (afterId) query = query.startAfter(at, afterId);
       const snapshot = await query.limit(PAGE_SIZE).get();
       const rows = snapshot.docs.map(entry =>
-        normalizeActivityEvent({ ...entry.data(), id: entry.id })).filter(Boolean);
+        normalizeActivityEvent({ ...entry.data(), id: entry.id })).filter(event => event && event.at > statisticsResetAt);
       const last = snapshot.docs[snapshot.docs.length - 1];
       const nextCursor = last
         ? { at: Number(last.get('at')) || 0, id: last.id } : null;
       return res.status(200).json({
-        events: rows, nextCursor, hasMore: snapshot.size === PAGE_SIZE,
+        events: rows, nextCursor, hasMore: snapshot.size === PAGE_SIZE, statisticsResetAt,
       });
     }
 

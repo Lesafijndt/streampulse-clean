@@ -2410,3 +2410,14 @@ body { background: #03070b; }
   height: 100% !important;
   width: 100% !important;
 }
+.gachi-theme [data-player-fullscreen="true"] {
+  width: 100vw;
+  height: 100dvh;
+  overflow-y: auto;
+  background: #10141f;
+}
+.gachi-theme [data-player-fullscreen="true"] .gachi-player-stage {
+  height: calc(100dvh - 210px) !important;
+  min-height: 300px !important;
+  max-height: none !important;
+}

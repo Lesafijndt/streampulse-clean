@@ -6,6 +6,7 @@ const base=`artifacts/${namespace}/public/data/`;
 const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'streamer';
 const login=mode==='moderator'?'paim_beach_pete':'2o3a';
 const cleared=new URLSearchParams(location.search).get('cleared')==='1';
+const resetTest=new URLSearchParams(location.search).get('reset')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:'youtube',videoId:id==='a'?'dQw4w9WgXcQ':'abcdefghijk',
 url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
 timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
@@ -23,6 +24,11 @@ if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='store
 if(expired)return json({authenticated:false,user:null});
 if(opts.method==='POST'){
  const body=JSON.parse(opts.body);
+ if(body.operation==='reset'){
+   if(body.expectedVersion!==version)return json({code:'conflict'},409);
+   for(const [path,v]of Object.entries(docs))if(path.includes('/queue_videos/')&&v.status==='queue')delete docs[path];
+   version++;return json({ok:true,version,resetAt:Date.now(),statisticsResetAt:0});
+ }
  if(body.operation==='import-cache'){for(const v of body.videos)docs[base+'queue_videos/'+v.id]||=v; imported=true;version++;return json({ok:true,version});}
  for(const op of body.operations){const old=docs[op.path];const e=body.expectations?.[op.path];
  if(!e||Boolean(old)!==e.exists||(old&&op.path.includes('queue_videos')&&(old.status!==e.status||old.timestamp!==e.timestamp)))return json({code:'conflict'},409);}
@@ -50,10 +56,26 @@ if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('St
 await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('[aria-label="Connection details: Cloud Synced"]'));
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
 if(login==='2o3a'&&anonymousReads)throw Error('Streamer loaded private analytics');
+if(resetTest){
+HTMLElement.prototype.requestFullscreen=()=>Promise.reject(Error('No native fullscreen in test'));
+document.querySelector('[aria-label="Enter player fullscreen"]').click();
+await wait(()=>document.querySelector('[data-player-fullscreen="true"]'));
+document.querySelector('[aria-label="Exit player fullscreen"]').click();
+await wait(()=>!document.querySelector('[data-player-fullscreen="true"]'));
+[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Options').click();
+await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='Reset queue'));
+[...document.querySelectorAll('button')].find(b=>b.textContent==='Reset queue').click();
+await wait(()=>document.querySelector('[aria-labelledby="reset-title"]'));
+if(!docs[base+'queue_videos/b'])throw Error('Opening confirmation mutated queue');
+[...document.querySelectorAll('button')].find(b=>b.textContent==='Confirm reset').click();
+await wait(()=>!docs[base+'queue_videos/b']&&!document.querySelector('[aria-labelledby="reset-title"]'));
+if(docs[base+'queue_videos/a']?.status!=='playing')throw Error('Reset queue removed playing video');
+}else{
 const next=[...document.querySelectorAll('button')].find(button=>/next video/i.test((button.title||'')+' '+(button.getAttribute('aria-label')||'')+' '+button.textContent));
 if(!next)throw Error('Next video control missing');next.click();
 await wait(()=>docs[base+'queue_videos/a']?.status==='watched'&&docs[base+'queue_videos/b']?.status==='playing');
 if(!commits)throw Error('Playback did not persist through private API');
+}
 }
 expired=true;await new Promise(r=>setTimeout(r,50));
 document.body.dataset.testStatus='pass';document.querySelector('#result').textContent=JSON.stringify({pass:true,imported,commits,login});

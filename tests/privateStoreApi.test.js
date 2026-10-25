@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocumentStore } from '../server/postgres-store.js';
 import { handlePrivateStore } from '../server/private-store-api.js';
-import { createPrivateCloudDb, collection, doc, getDocs, setDoc, writeBatch, runTransaction } from '../src/cloudStore.js';
+import { createPrivateCloudDb, resetPrivateCloud, collection, doc, getDocs, setDoc, writeBatch, runTransaction } from '../src/cloudStore.js';
 
 const namespace = 'streampulse-live-deck', prefix = `artifacts/${namespace}/public/data/`;
 const row = (id, extra = {}) => ({ id, channelRoom: '2o3a', status: 'queue', timestamp: 100,
@@ -29,6 +29,34 @@ test('private store reads reject viewers and never expose profiles, receipts or 
   assert.deepEqual(Object.keys(result.body.collections).sort(), ['queue_videos', 'room_settings']);
   assert.equal(JSON.stringify(result.body).includes('secret'), false);
   assert.equal((await api(db, { since: 0 })).body.unchanged, true);
+});
+
+test('scoped reset is authenticated, confirmed, atomic and preserves playing/history/credentials', async () => {
+  const { db, state } = setup({ [prefix + 'queue_videos/a']: row('a'),
+    [prefix + 'queue_videos/p']: row('p', { status: 'playing' }),
+    [prefix + 'queue_videos/h']: row('h', { status: 'watched' }),
+    [prefix + 'user_profiles/2o3a']: { preferences: { volume: 25 } },
+    [prefix + 'queue_events/e']: { at: 1 }, [prefix + 'twitch_eventsub_receipts/r']: { status: 'queued' } });
+  const body = { operation: 'reset', scope: 'queue', confirmation: 'RESET', expectedVersion: 0 };
+  assert.equal((await api(db, { method: 'POST', body, login: 'gachibot69' })).statusCode, 403);
+  assert.equal((await api(db, { method: 'POST', body: { ...body, confirmation: '' } })).statusCode, 400);
+  assert.equal((await api(db, { method: 'POST', body, origin: 'https://evil.test' })).statusCode, 403);
+  assert.equal((await api(db, { method: 'POST', body, login: '2o3a' })).statusCode, 200);
+  assert.equal(state().documents[prefix + 'queue_videos/a'], undefined);
+  assert.ok(state().documents[prefix + 'queue_videos/p']);
+  assert.ok(state().documents[prefix + 'queue_videos/h']);
+  assert.ok(state().documents[prefix + 'user_profiles/2o3a']);
+  assert.ok(state().documents[prefix + 'twitch_eventsub_receipts/r']);
+  assert.equal((await api(db, { method: 'POST', body })).statusCode, 409);
+  assert.equal((await api(db, { method: 'POST', body: { ...body, scope: 'statistics', expectedVersion: 1 } })).statusCode, 200);
+  assert.ok(state().documents[prefix + 'room_settings/2o3a'].statisticsResetAt > 1);
+  assert.ok(state().documents[prefix + 'queue_events/e']);
+  assert.ok(state().documents[prefix + 'queue_videos/p']);
+  assert.equal((await api(db, { method: 'POST', body: { ...body, scope: 'history', expectedVersion: 2 } })).statusCode, 200);
+  assert.equal(state().documents[prefix + 'queue_videos/h'], undefined);
+  assert.equal((await api(db, { method: 'POST', body: { ...body, scope: 'all', expectedVersion: 3 } })).statusCode, 200);
+  assert.equal(state().documents[prefix + 'queue_videos/p'], undefined);
+  assert.ok(state().documents[prefix + 'user_profiles/2o3a']);
 });
 test('same-origin, namespace, moderator settings and append-only activity checks remain enforced', async () => {
   const { db, state } = setup();
@@ -86,4 +114,21 @@ test('browser transport exercises real private API transaction, batch and authen
   await assert.rejects(getDocs(videos), /session unavailable/);
   assert.deepEqual(browser.collections, previous);
   await assert.rejects(setDoc(doc(videos, 'c'), row('c')), /session unavailable/);
+});
+
+test('reset sends the reviewed version without refreshing away a newly arrived request conflict', async t => {
+  const { db, state } = setup({ [prefix + 'queue_videos/a']: row('a') });
+  const original = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push(options.method || 'GET');
+    const res = await api(db, { method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
+    return Response.json(res.body, { status: res.statusCode });
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const browser = createPrivateCloudDb(); browser.version = 0;
+  await db.doc(prefix + 'queue_videos/new').set(row('new'));
+  await assert.rejects(resetPrivateCloud(browser, 'queue'), /Queue changed/);
+  assert.deepEqual(calls, ['POST']);
+  assert.ok(state().documents[prefix + 'queue_videos/a']);
+  assert.ok(state().documents[prefix + 'queue_videos/new']);
 });

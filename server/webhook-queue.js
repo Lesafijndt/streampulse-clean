@@ -9,7 +9,7 @@ const SUPPORTED = new Set([
   'twitch.tv','www.twitch.tv','clips.twitch.tv',
   'kick.com','www.kick.com','clip.kick.com',
 ]);
-const BOTS = new Set(['gachibot69','nightbot','streamelements','streamlabs','moobot','fossabot','botrix']);
+const BOTS = new Set(['nightbot','streamelements','streamlabs','moobot','fossabot','botrix']);
 
 export function extractChatRequests(text = '') {
   const message = String(text || '').replace(/[\u200b-\u200d\ufeff]/g, '').trim().slice(0, 1500);

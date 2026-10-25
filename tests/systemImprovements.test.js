@@ -60,7 +60,7 @@ test('video players use provider-correct shells and bounded fallback, not assume
   const app = await read('src/App.tsx');
   const css = await read('src/index.css');
   assert.match(app, /gachi-portrait-shell/);
-  assert.match(app, /twitchClipFinishRef\.current/);
+  assert.match(app, /TwitchClipPlayer/);
   assert.match(app, /setTikTokPlayerState\(\{ requestId: video\.id, status: 'blocked' \}\)/);
   assert.match(app, /onPlayerError/);
   assert.match(css, /\.gachi-player-stage > \.gachi-portrait-shell/);

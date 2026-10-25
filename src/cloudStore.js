@@ -1,6 +1,19 @@
 import * as legacy from 'firebase/firestore';
 
 export const getFirestore = legacy.getFirestore;
+export async function resetPrivateCloud(db, scope) {
+  if (!db?.privateCloud) throw new Error('Cloud reset requires an active cloud session');
+  // Use the snapshot the user reviewed. Refreshing here could silently include
+  // requests arriving after the backup/confirmation in a destructive reset.
+  if (!Number.isSafeInteger(db.version) || db.version < 0) throw new Error('Wait for cloud sync before resetting');
+  const response = await fetch('/api/twitch/session?action=store', { method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'reset', scope,
+      confirmation: 'RESET', expectedVersion: db.version }), signal: AbortSignal.timeout(20000) });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok !== true) throw new Error(body.code === 'conflict' ? 'Queue changed; review it and confirm reset again.' : body.code || 'Reset could not be saved');
+  await refresh(db, true);
+  return body;
+}
 let privateMode = false;
 export function createPrivateCloudDb(options = {}) {
   privateMode = true;

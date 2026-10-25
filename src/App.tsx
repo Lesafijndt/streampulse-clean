@@ -64,6 +64,7 @@ import {
 import {
   getFirestore,
   createPrivateCloudDb,
+  resetPrivateCloud,
   collection,
   doc,
   setDoc,
@@ -97,6 +98,7 @@ import {
 import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
 const StatsBoard = lazy(() => import('./components/StatsBoard'));
 import { WorkspaceGrid, WorkspacePanel } from './components/WorkspaceGrid';
+import TwitchClipPlayer from './components/TwitchClipPlayer';
 import TransportNavigation from './components/TransportNavigation';
 import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
@@ -278,7 +280,7 @@ const KNOWN_CHAT_BOTS = new Set([
   'botrix', 'deepbot', 'sery_bot', 'serybot', 'mixitup', 'soundalerts',
   'commanderroot', 'tangia', 'firebot', 'own3d', 'botisimo', 'blerp',
   'pretzelrocks', 'monstercat', 'vivbot', 'ankhbot', 'ohbot', 'phantombot',
-  'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
+  'streamcaptain', 'streamstickers', 'sery_bot'
 ]);
 
 // Treat a message consisting of a supported video URL as a request even without !assr.
@@ -355,6 +357,10 @@ function YediHubAppContent() {
   // UI Modals
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [resetScope, setResetScope] = useState('');
+  const [resetBusy, setResetBusy] = useState(false);
+  const [statisticsResetAt, setStatisticsResetAt] = useState(0);
+  const statisticsResetAtRef = useRef(0);
   const [showRequestModal, setShowRequestModal] = useState(false);
 
   // Queue Moderation Settings
@@ -509,8 +515,24 @@ function YediHubAppContent() {
   const localMutedRef = useRef(localMuted);
   localVolumeRef.current = localVolume;
   localMutedRef.current = localMuted;
-  const [twitchClipReady, setTwitchClipReady] = useState({ id: '', at: 0 });
-  const twitchClipFinishRef = useRef('');
+  const fullscreenContainerRef = useRef(null);
+  const [playerFullscreen, setPlayerFullscreen] = useState(false);
+  const [fullscreenFallback, setFullscreenFallback] = useState(false);
+  useEffect(() => {
+    const sync = () => setPlayerFullscreen(document.fullscreenElement === fullscreenContainerRef.current);
+    const escape = (event) => { if (event.key === 'Escape') setFullscreenFallback(false); };
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('fullscreenchange', sync); document.removeEventListener('keydown', escape); };
+  }, []);
+  const togglePlayerFullscreen = async () => {
+    if (fullscreenFallback) { setFullscreenFallback(false); return; }
+    if (document.fullscreenElement === fullscreenContainerRef.current) { await document.exitFullscreen(); return; }
+    try {
+      if (!fullscreenContainerRef.current?.requestFullscreen) throw new Error('Fullscreen unavailable');
+      await fullscreenContainerRef.current.requestFullscreen();
+    } catch { setFullscreenFallback(true); }
+  };
   // Keep playback intent in this browser tab, not the shared cloud queue. This lets us
   // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
   const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
@@ -978,6 +1000,13 @@ function YediHubAppContent() {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
+        const cutoff = Number(cloudConfig.statisticsResetAt || 0);
+        if (cutoff > statisticsResetAtRef.current) {
+          statisticsResetAtRef.current = cutoff;
+          setStatisticsResetAt(cutoff);
+          activityEventsRef.current = activityEventsRef.current.filter(event => event.at > cutoff);
+          setActivityEvents(activityEventsRef.current);
+        }
         if (cloudConfig.streamSettings && typeof cloudConfig.streamSettings === 'object') {
           const merged = { ...DEFAULT_STREAM_SETTINGS, ...cloudConfig.streamSettings };
           // If the user just changed queueOpen locally, don't let a stale cloud snapshot reopen it.
@@ -1541,7 +1570,8 @@ function YediHubAppContent() {
           if (!active) return;
           const cloudEvents = result.events.map(event => normalizeActivityEvent(event)).filter(Boolean);
           cloudEvents.forEach(event => activityCloudIdsRef.current.add(String(event.id)));
-          const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents);
+          const cutoff = Math.max(statisticsResetAtRef.current, Number(result.statisticsResetAt || 0));
+          const merged = mergeActivityEvents(activityEventsRef.current, cloudEvents).filter(event => event.at > cutoff);
           activityEventsRef.current = merged;
           setActivityEvents(merged);
           const next = result.nextCursor;
@@ -1587,7 +1617,7 @@ function YediHubAppContent() {
       .map((event) => String(event.mediaId)));
     const missing = videosRef.current.filter((video) =>
       video && typeof video === 'object' && !String(video.id || '').startsWith('demo-') &&
-      !existingIds.has(String(video.id)));
+      !existingIds.has(String(video.id)) && Number(video.timestamp || 0) > statisticsResetAtRef.current);
     if (!missing.length) return;
     const legacyEvents = missing.map((video) => {
       const safeId = String(video.id || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 90);
@@ -1632,6 +1662,10 @@ function YediHubAppContent() {
       votedIds,
       savedAt: Date.now()
     });
+    if (moderatorLogin) {
+      backup.activityEvents = activityEventsRef.current;
+      backup.statisticsResetAt = statisticsResetAtRef.current;
+    }
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -1642,6 +1676,26 @@ function YediHubAppContent() {
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     setBackupMessage('Backup downloaded: ' + videos.length + ' queue/history items. Twitch login credentials are not included.');
+  };
+
+  const handleReset = async () => {
+    if (!resetScope || resetBusy) return;
+    setResetBusy(true);
+    try {
+      handleDownloadBackup();
+      const result = await resetPrivateCloud(db, resetScope);
+      if (result.statisticsResetAt) {
+        statisticsResetAtRef.current = result.statisticsResetAt;
+        setStatisticsResetAt(result.statisticsResetAt);
+        activityEventsRef.current = activityEventsRef.current.filter(event => event.at > result.statisticsResetAt);
+        setActivityEvents(activityEventsRef.current);
+        activityCursorRef.current = { at: 0, id: '' };
+        setActivityReconnectTick(tick => tick + 1);
+      }
+      setResetScope('');
+      addToast('Reset saved to the shared cloud queue.', 'success');
+    } catch (error) { addToast(error?.message || 'Reset failed; please retry.', 'warning'); }
+    finally { setResetBusy(false); }
   };
 
   const performQueueBackupRestore = async (candidate, sourceLabel = 'backup file') => {
@@ -2677,6 +2731,7 @@ function YediHubAppContent() {
     if (typeof document === 'undefined') return;
     try {
       const doc = document as any;
+      if (doc.fullscreenElement === fullscreenContainerRef.current) return;
       const fullscreenActive = Boolean(
         doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement
       );
@@ -2888,25 +2943,6 @@ function YediHubAppContent() {
     else recordActivity('playback_completed', playing, { source: 'player-ended' });
   };
 
-  // Official Twitch Clip embeds are non-interactive and expose no JS ended
-  // event. When duration metadata exists, advance after estimated playtime.
-  // An interrupted or blocked autoplay may require the viewer to press Next.
-  useEffect(() => {
-    const video = currentVideo;
-    if (video?.platform !== 'twitch' || twitchClipReady.id !== String(video.id) ||
-        !twitchClipReady.at || !streamSettings.autoPlayNext) return undefined;
-    const seconds = Number(video.durationSec);
-    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 180) return undefined;
-    const timer = window.setTimeout(() => {
-      if (currentVideoRef.current?.id !== video.id ||
-          twitchClipFinishRef.current === String(video.id)) return;
-      twitchClipFinishRef.current = String(video.id);
-      handleMediaEndedRef.current?.(video.id);
-    }, Math.round(seconds * 1000) + 1500);
-    return () => window.clearTimeout(timer);
-  }, [currentVideo?.id, currentVideo?.platform, currentVideo?.durationSec,
-      twitchClipReady.id, twitchClipReady.at, streamSettings.autoPlayNext]);
-
   const togglePlaybackFromKeyboard = () => {
     const video = currentVideoRef.current || currentVideo;
     if (!video) return;
@@ -2983,7 +3019,7 @@ function YediHubAppContent() {
         target.isContentEditable ||
         target.closest('input, textarea, select, [contenteditable="true"]')
       );
-      if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen) return;
+      if (isTyping || showAuthModal || showSettingsModal || showRequestModal || topMenuOpen || resetScope) return;
       const key = String(event.key || '').toLowerCase();
       if (event.code === 'Space' || key === ' ') {
         event.preventDefault();
@@ -3000,7 +3036,7 @@ function YediHubAppContent() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, topMenuOpen]);
+  }, [currentVideo?.id, isStaff, showAuthModal, showSettingsModal, showRequestModal, tiktokPlayerState.status, topMenuOpen, resetScope]);
 
   // Use a normal React-owned YouTube iframe. The iframe document is cross-origin, so
   // playback control stays isolated from React's DOM reconciliation (no YT.Player node replacement).
@@ -3772,6 +3808,10 @@ function YediHubAppContent() {
                     <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Queue access and playback preferences</span></span>
                   </button>
                 )}
+                {isStaff && db?.privateCloud && <div className="my-2 border-y border-rose-500/20 p-2">
+                  <div className="mb-2 text-[10px] font-bold uppercase text-rose-300">Reset data</div>
+                  <div className="grid grid-cols-2 gap-2">{['queue', 'history', ...(isModerator ? ['statistics'] : []), 'all'].map(scope => <button key={scope} type="button" onClick={() => { setTopMenuOpen(false); setResetScope(scope); }} className="rounded-lg border border-rose-500/25 px-2 py-2 text-xs text-rose-100 hover:bg-rose-500/15">{scope === 'all' ? 'Reset everything' : 'Reset ' + scope}</button>)}</div>
+                </div>}
                 <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
                   <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
@@ -3927,6 +3967,7 @@ function YediHubAppContent() {
           ========================================== */}
       <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
         <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
+        <img src="/images/cowboy-ranch.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-2/3 object-cover opacity-40" style={{ objectPosition: 'center 22%', maskImage: 'linear-gradient(to right, transparent, black 55%)' }} />
         <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
           <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
@@ -3937,9 +3978,10 @@ function YediHubAppContent() {
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
         {isModerator && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
+          <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="h-32 w-full rounded-xl object-cover object-center opacity-85" />
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
-            activityEvents={activityEvents}
+            activityEvents={activityEvents.filter(event => event.at > statisticsResetAt)}
             currentSessionId={activitySessionIdRef.current}
             statsNow={statsNow}
             statsExpanded={statsExpanded}
@@ -3960,7 +4002,7 @@ function YediHubAppContent() {
           {/* ==========================================
               ACTIVE MEDIA DECK / BROADCASTER PLAYER
               ========================================== */}
-          <section className="gachi-panel bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl">
+          <section ref={fullscreenContainerRef} data-player-fullscreen={playerFullscreen || fullscreenFallback} className={`gachi-panel bg-[#10141f] border border-slate-800/90 rounded-2xl overflow-hidden shadow-2xl ${fullscreenFallback ? 'fixed inset-0 z-[100] rounded-none' : ''}`}>
             {/* Header info strip */}
             <div className="px-4 py-2.5 bg-[#141926] border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -3983,7 +4025,11 @@ function YediHubAppContent() {
               </div>
 
               <div className="flex items-center gap-2">
+                <button type="button" onClick={togglePlayerFullscreen} aria-label={playerFullscreen || fullscreenFallback ? 'Exit player fullscreen' : 'Enter player fullscreen'} aria-pressed={playerFullscreen || fullscreenFallback} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Fullscreen player (persists across tracks)">
+                  {playerFullscreen || fullscreenFallback ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
                 <button
+                  aria-label="Toggle player height"
                   onClick={() => setIsTheatreMode(!isTheatreMode)}
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                   title="Toggle Player Height"
@@ -4113,19 +4159,13 @@ function YediHubAppContent() {
                       
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
-                    <iframe
+                    <TwitchClipPlayer
                       key={`twitch-${currentVideo.id}-${currentVideo.videoId}`}
-                      onLoad={() => {
-                        if (currentVideoRef.current?.id === currentVideo.id) {
-                          twitchClipFinishRef.current = '';
-                          setTwitchClipReady({ id: String(currentVideo.id), at: Date.now() });
-                        }
-                      }}
-                      className="gachi-landscape-embed border border-[#5d277d] rounded-sm"
-                      src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(currentVideo.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=true&muted=false`}
-                      title={currentVideo.title}
-                      allow="autoplay; fullscreen; picture-in-picture"
-                      allowFullScreen
+                      video={currentVideo}
+                      volume={localVolume}
+                      muted={localMuted}
+                      onAudioChange={(volume, muted) => { setLocalVolume(volume); setLocalMuted(muted); }}
+                      onEnded={(id) => handleMediaEndedRef.current?.(id)}
                     />
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
@@ -4462,6 +4502,13 @@ function YediHubAppContent() {
       {/* ==========================================
           MODAL 3: STREAMER QUEUE RULES & SAFETY
           ========================================== */}
+      {resetScope && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+        <div className="w-full max-w-md space-y-4 rounded-2xl border border-rose-500/40 bg-[#12101a] p-6">
+          <h3 id="reset-title" className="text-lg font-black text-white">Reset {resetScope === 'all' ? 'everything' : resetScope}?</h3>
+          <p className="text-sm text-slate-300">{resetScope === 'queue' ? 'Remove waiting and Watch Later items. The current video and history stay.' : resetScope === 'history' ? 'Remove watched videos. Waiting requests and the current video stay.' : resetScope === 'statistics' ? 'Start statistics from zero. Videos and history stay.' : 'Remove every video, including the playing video, and start statistics from zero.'} This affects the shared room. A backup will download first.</p>
+          <div className="flex justify-end gap-3"><button autoFocus disabled={resetBusy} onClick={() => setResetScope('')} className="rounded-lg bg-slate-800 px-4 py-2 text-white">Cancel</button><button disabled={resetBusy} onClick={handleReset} className="rounded-lg bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-50">{resetBusy ? 'Resetting…' : 'Confirm reset'}</button></div>
+        </div>
+      </div>}
       {isModerator && showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
           <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">

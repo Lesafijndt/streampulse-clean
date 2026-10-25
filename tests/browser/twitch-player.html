@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Twitch player behavior</title></head>
+<body><div id="root" style="position:relative;width:800px;height:500px"></div><pre id="result">Running</pre>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {flushSync} from 'react-dom';
+import TwitchClipPlayer from '../../src/components/TwitchClipPlayer.tsx';
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const assert=(condition,message)=>{if(!condition)throw Error(message)};
+const instances=[];
+class Player {
+ static READY='ready';static PLAYBACK_BLOCKED='blocked';static PLAYING='playing';static PAUSE='pause';static ENDED='ended';
+ constructor(host,options){this.options=options;this.events={};this.time=0;this.volume=.65;this.muted=false;this.paused=true;this.playCalls=0;instances.push(this);host.appendChild(document.createElement('iframe'));setTimeout(()=>this.emit(Player.READY),0)}
+ addEventListener(name,fn){(this.events[name]??=[]).push(fn)}
+ emit(name){for(const fn of this.events[name]||[])fn()}
+ play(){this.paused=false;this.playCalls++;this.emit(Player.PLAYING)}
+ pause(){this.paused=true;this.emit(Player.PAUSE)}
+ seek(seconds){this.time=seconds}
+ getCurrentTime(){return this.time}setVolume(value){this.volume=value}getVolume(){return this.volume}setMuted(value){this.muted=value}getMuted(){return this.muted}
+}
+window.Twitch={Player};
+let fallback=false;
+const nativeFetch=window.fetch.bind(window);
+window.fetch=(input,options)=>String(input).startsWith('/api/media-metadata')?Promise.resolve(new Response(JSON.stringify(fallback?{available:false}:{available:true,videoId:'123',offsetSeconds:100,durationSeconds:1}),{headers:{'Content-Type':'application/json'}})):nativeFetch(input,options);
+const root=createRoot(document.getElementById('root'));
+let ended=0,audio={volume:65,muted:false};
+function Harness({id}){const [volume,setVolume]=React.useState(audio.volume);const [muted,setMuted]=React.useState(audio.muted);return React.createElement(TwitchClipPlayer,{video:{id,videoId:'slug',title:'Clip'},volume,muted,onEnded:()=>ended++,onAudioChange:(v,m)=>{audio={volume:v,muted:m};setVolume(v);setMuted(m)}})}
+try {
+ flushSync(()=>root.render(React.createElement(Harness,{id:'first'})));await sleep(100);
+ const first=instances[0];assert(first?.playCalls===1&&first.time===100,'READY must seek and autoplay source segment');
+ first.pause();await sleep(1600);assert(ended===0,'Paused segment must not advance after duration wall time');
+ first.volume=.27;first.muted=true;await sleep(300);assert(audio.volume===27&&audio.muted,'Player audio changes must update saved preferences');
+ flushSync(()=>root.render(React.createElement(Harness,{id:'second'})));await sleep(100);
+ const second=instances[1];assert(second.volume===.27&&second.muted,'Next clip must retain volume and mute preferences');
+ first.time=101;first.emit(Player.ENDED);await sleep(300);assert(ended===0,'Old player callbacks must not advance new clip');
+ second.emit(Player.PLAYBACK_BLOCKED);await sleep(20);const play=[...document.querySelectorAll('button')].find(b=>b.textContent==='Play clip');assert(play,'Blocked autoplay must offer Play clip');play.click();await sleep(20);assert(second.playCalls===2,'Play clip must resume through official SDK');
+ second.time=101;await sleep(300);second.emit(Player.ENDED);await sleep(300);assert(ended===1,'Actual segment boundary must advance exactly once');
+ const replay=[...document.querySelectorAll('button')].find(b=>b.textContent==='Replay clip');assert(replay,'Completed clip must expose Replay');replay.click();await sleep(20);assert(second.time===100&&!second.paused,'Replay must seek to clip start before playing');await sleep(300);assert(ended===1,'Replay start must not complete immediately');second.time=101;await sleep(300);assert(ended===2,'Replayed segment can complete once');
+ flushSync(()=>root.unmount());second.emit(Player.ENDED);await sleep(300);assert(ended===2,'Unmounted player cannot advance');
+ fallback=true;const fallbackRoot=createRoot(document.getElementById('root'));const props={video:{id:'fallback',videoId:'missing',title:'Unavailable source'},volume:65,muted:false,onAudioChange:()=>{},onEnded:()=>ended++};flushSync(()=>fallbackRoot.render(React.createElement(TwitchClipPlayer,props)));await sleep(100);const iframe=document.querySelector('iframe');const originalSrc=iframe?.src;assert(originalSrc?.includes('clips.twitch.tv'),'Unavailable VOD must show official clip fallback');flushSync(()=>fallbackRoot.render(React.createElement(TwitchClipPlayer,{...props,muted:true,volume:27})));await sleep(20);assert(iframe.src===originalSrc,'Fallback audio preference changes must not reload iframe');assert(document.body.textContent.includes('automatic advance is unavailable'),'Fallback must disclose unavailable auto advance');flushSync(()=>fallbackRoot.unmount());
+ document.body.dataset.testStatus='pass';document.getElementById('result').textContent='PASS: READY autoplay; paused walltime; persisted audio across clips; blocked playback recovery; actual completion once; stale callback cleanup';
+}catch(error){document.body.dataset.testStatus='fail';document.getElementById('result').textContent=error.stack}
+</script></body></html>

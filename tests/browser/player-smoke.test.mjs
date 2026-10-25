@@ -50,3 +50,13 @@ test('an authoritative empty Postgres queue is not repopulated from stale browse
   const html = renderInChrome(baseUrl + '/tests/browser/postgres-dashboard.html?cleared=1');
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-2000));
 });
+
+test('actual Twitch React player autoplays, retains audio, waits while paused, and advances only once on playback completion', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/twitch-player.html');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('dashboard fullscreen fallback and confirmed queue reset preserve the playing item', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/postgres-dashboard.html?reset=1');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
