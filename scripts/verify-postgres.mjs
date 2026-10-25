@@ -39,9 +39,28 @@ try {
   await snapshot.docs[0].ref.delete();
   const deleted = await db.readChanges(beforeDelete, { collections: [rows.path] });
   assert.equal(deleted.documents[snapshot.docs[0].ref.path], null);
+  const events = db.collection('artifacts').doc(namespace).collection('public').doc('data').collection('queue_events');
+  await events.doc('a').set({ at: 1 });
+  await events.doc('b').set({ at: 2 });
+  await events.doc('c').set({ at: 2 });
+  const page = await events.where('at', '>', 1).orderBy('at').orderBy('__name__').limit(1).get();
+  assert.equal(page.docs[0].id, 'b');
+  const next = await events.where('at', '>', 1).orderBy('at').orderBy('__name__').startAfter(2, 'b').limit(1).get();
+  assert.equal(next.docs[0].id, 'c');
+  for (let offset = 0; offset < 100; offset += 4) {
+    await Promise.all(Array.from({ length: 4 }, (_, index) => offset + index).map(index => persistChatEvent(db, {
+      messageId: 'capacity-' + index, subscriptionId: 'verification', event: { broadcaster_user_login: '2o3a',
+        chatter_user_login: 'ordinary_viewer_' + index,
+        message: { text: 'https://youtu.be/Q' + String(index).padStart(10, '0') } },
+    })));
+  }
+  const capacityRows = (await rows.get()).docs.filter(row => row.get('status') === 'queue');
+  assert.equal(capacityRows.length, 100);
+  assert.equal(new Set(capacityRows.map(row => row.get('requestedBy'))).size, 100);
   console.log(JSON.stringify({ check: 'postgres_live_transactions', ok: true,
     viewerRequest: true, crossSubscriptionDedup: true, historyReplay: true, isolatedNamespace: true,
-    projectedReads: true, patchPreservesOtherDocuments: true, deltaSync: true, deletionTombstones: true }));
+    projectedReads: true, patchPreservesOtherDocuments: true, deltaSync: true, deletionTombstones: true, activityPagination: true,
+    realDatabaseViewerRequests: 100, concurrency: 4 }));
 } finally {
   // Only documents under the explicitly isolated verification namespace are
   // cleaned up. The live queue and its original Firestore data are untouched.

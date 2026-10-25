@@ -1,6 +1,6 @@
 const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 const YOUTUBE_ORIGIN = 'https://www.youtube.com';
-const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo', 'setVolume']);
+const TIKTOK_COMMANDS = new Set(['play', 'pause', 'mute', 'unMute', 'seekTo']);
 
 /** Autoplay can report transient mute even when the viewer never chose mute. */
 export function shouldAutoUnmuteTikTok({ mutedIntent = null, mutePreference = 'auto' } = {}) {
@@ -85,4 +85,10 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
   if (muted === true) actions.push({ command: 'mute' });
   else if (muted === false && (platform === 'youtube' || platform === 'tiktok')) actions.push({ command: 'unMute' });
   return actions;
+}
+
+/** Same media document can represent a later submission or an explicit replay. */
+export function getPlaybackGeneration(video) {
+  if (!video) return '';
+  return [video.id, video.timestamp || video.createdAt || 0, video.playedAt || 0].map(String).join(':');
 }

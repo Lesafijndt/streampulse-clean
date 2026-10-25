@@ -60,3 +60,8 @@ test('dashboard fullscreen fallback and confirmed queue reset preserve the playi
   const html = renderInChrome(baseUrl + '/tests/browser/postgres-dashboard.html?reset=1');
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
+
+for (const provider of ['tiktok', 'youtube']) test(provider + ' actual dashboard preserves paused position across remount and autoplays new request generations', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/playback-dashboard.html?provider=' + provider);
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});

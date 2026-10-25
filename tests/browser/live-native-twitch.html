@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Live public Twitch clip verification</title></head>
+<body style="background:#111;color:white"><div id="root" style="position:relative;width:800px;height:500px"></div><script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{flushSync}from'react-dom';
+import '../../src/index.css';
+import TwitchClipPlayer from '../../src/components/TwitchClipPlayer.tsx';
+let root=createRoot(document.querySelector('#root')),source,ended=0,clicks=0,active=false,target='';
+const trace=[];
+for(const name of ['play','pause']){const original=HTMLMediaElement.prototype[name];HTMLMediaElement.prototype[name]=function(...args){trace.push(name+':'+new Error().stack.split('\n')[2]);return original.apply(this,args)}}
+document.addEventListener('click',event=>{clicks++;active=navigator.userActivation.isActive;target=event.target.tagName+':'+event.target.textContent.slice(0,60)});
+const nativeFetch=window.fetch.bind(window);
+window.fetch=(url,options)=>String(url).startsWith('/api/media-metadata')?Promise.resolve(Response.json(source)):nativeFetch(url,options);
+const props={video:{id:'public-native',videoId:'public',timestamp:1,playedAt:1,title:'Live public clip'},volume:50,muted:false,
+onAudioChange:()=>{},onEnded:()=>ended++};
+window.initClip=value=>{source=value;sessionStorage.clear();flushSync(()=>root.render(React.createElement(TwitchClipPlayer,props)))};
+window.remountClip=()=>{flushSync(()=>root.unmount());root=createRoot(document.querySelector('#root'));flushSync(()=>root.render(React.createElement(TwitchClipPlayer,props)))};
+window.clipState=()=>{const v=document.querySelector('video');return{exists:!!v,paused:v?.paused,time:v?.currentTime,duration:v?.duration,volume:v?.volume,muted:v?.muted,ended,ready:v?.readyState,error:v?.error?.code,clicks,active,target,visibility:document.visibilityState,trace:trace.slice(-8),button:[...document.querySelectorAll('button')].find(b=>/clip$/.test(b.textContent))?.textContent}};
+</script></body></html>

@@ -328,6 +328,8 @@ export async function getPostgresStore(namespace = process.env.VITE_FIREBASE_NAM
               FROM streampulse_state WHERE namespace = $1`, [namespace, [...new Set(selection.paths)]]);
           } else if (selection?.collections?.length === 1 && selection.collections[0].split('/')[4] === 'queue_events' &&
               selection.query?.orders?.[0]?.[0] === 'at' && selection.query.orders[0][1] === 'asc' &&
+              selection.query.orders.every(([field, direction]) => ['at', '__name__'].includes(field) && direction === 'asc') &&
+              (!selection.query.cursor || typeof selection.query.cursor[0] === 'number') &&
               selection.query.limit && selection.query.filters.every(([field, operator]) => field === 'at' && operator === '>')) {
             const cutoff = Math.max(0, ...selection.query.filters.map(([, , value]) => Number(value) || 0));
             const cursor = selection.query.cursor || [0, ''];

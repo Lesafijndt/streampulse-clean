@@ -83,7 +83,9 @@ function publish(db) {
 async function refresh(db, force = false) {
   if (db.inFlight) {
     await db.inFlight;
-    if (!force) return;
+    // Re-enter the lock: another waiting caller may already have started the
+    // next refresh. Never race snapshots or treat an older response as logout.
+    return force ? refresh(db, true) : undefined;
   }
   const promise = (async () => {
     const response = await fetch('/api/twitch/session?action=store&since=' + db.version, {

@@ -199,3 +199,26 @@ test('delta retention gap falls back to a scoped full snapshot including legacy 
   assert.deepEqual(res.body.collections.queue_videos.map(row => row.id), ['new']);
   assert.deepEqual(selection, ['queue_videos', 'room_settings', 'system_diagnostics'].map(name => prefix + name));
 });
+
+test('forced refresh callers serialize instead of racing newer snapshots into false login failures', async t => {
+  const original = globalThis.fetch;
+  const pending = []; let active = 0, peak = 0, version = 0;
+  globalThis.fetch = async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise(resolve => pending.push(resolve));
+    active--; version++;
+    return Response.json({ version, legacyImported: true, collections: { queue_videos: [], room_settings: [] } });
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const browser = createPrivateCloudDb();
+  const refs = collection(browser, 'artifacts', namespace, 'public', 'data', 'queue_videos');
+  const calls = [getDocs(refs), getDocs(refs), getDocs(refs)];
+  for (let index = 0; index < 3; index++) {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pending.length, index + 1);
+    pending[index]();
+  }
+  await Promise.all(calls);
+  assert.equal(peak, 1);
+  assert.equal(browser.version, 3);
+});

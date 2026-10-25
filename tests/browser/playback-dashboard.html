@@ -1,0 +1,96 @@
+<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; frame-src 'self' about:"></head>
+<body><div id="root"></div><pre id="result">Running</pre><script type="module">
+import React from 'react'; import {createRoot} from 'react-dom/client'; import '../../src/index.css';
+const prefix='streampulse-gachi-arena:v2', namespace='streampulse-live-deck';
+const base=`artifacts/${namespace}/public/data/`;
+const provider=new URLSearchParams(location.search).get('provider')||'tiktok';
+const now=Date.now(), mode=new URLSearchParams(location.search).get('role')||'streamer';
+const login=mode==='moderator'?'paim_beach_pete':'2o3a';
+const cleared=new URLSearchParams(location.search).get('cleared')==='1';
+const resetTest=new URLSearchParams(location.search).get('reset')==='1';
+const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:id==='a'?provider:'youtube',videoId:id==='a'?(provider==='tiktok'?'1234567890123456789':'dQw4w9WgXcQ'):'abcdefghijk',
+url:'https://www.youtube.com/watch?v='+(id==='a'?'dQw4w9WgXcQ':'abcdefghijk'),title:id==='a'?'Preserved playing video':'Imported queued video',
+timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
+durationSec:180,duration:'3:00',durationSource:'player',voters:[],upvotes:0,thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E'});
+localStorage.clear();sessionStorage.clear();
+localStorage.setItem(`${prefix}:active-room`,'2o3a');
+localStorage.setItem(`${prefix}:room:2o3a:videos`,JSON.stringify([video('a','playing'),video('b','queue')]));
+let version=0, imported=cleared, expired=false, commits=0, anonymousReads=0;
+const docs={}; const nativeFetch=window.fetch.bind(window);
+const json=(value,status=200)=>Promise.resolve(new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}}));
+window.fetch=(input,opts={})=>{
+const url=new URL(typeof input==='string'?input:input.url,location.href);
+if(!url.pathname.startsWith('/api/'))return nativeFetch(input,opts);
+if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='store'){
+if(expired)return json({authenticated:false,user:null});
+if(opts.method==='POST'){
+ const body=JSON.parse(opts.body);
+ if(body.operation==='reset'){
+   if(body.expectedVersion!==version)return json({code:'conflict'},409);
+   for(const [path,v]of Object.entries(docs))if(path.includes('/queue_videos/')&&v.status==='queue')delete docs[path];
+   version++;return json({ok:true,version,resetAt:Date.now(),statisticsResetAt:0});
+ }
+ if(body.operation==='import-cache'){for(const v of body.videos)docs[base+'queue_videos/'+v.id]||=v; imported=true;version++;return json({ok:true,version});}
+ for(const op of body.operations){const old=docs[op.path];const e=body.expectations?.[op.path];
+ if(!e||Boolean(old)!==e.exists||(old&&op.path.includes('queue_videos')&&(old.status!==e.status||old.timestamp!==e.timestamp)))return json({code:'conflict'},409);}
+ for(const op of body.operations){if(op.type==='delete')delete docs[op.path];else docs[op.path]=op.merge||op.type==='update'?{...docs[op.path],...op.data}:op.data;}
+ version++;commits++;return json({ok:true,version});
+}
+if(Number(url.searchParams.get('since'))===version)return json({version,unchanged:true});
+const collections={queue_videos:[],room_settings:[]};for(const [path,data]of Object.entries(docs)){const parts=path.split('/');if(collections[parts[4]])collections[parts[4]].push({id:parts[5],data});}
+return json({version,collections,legacyImported:imported});
+}
+if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='preferences')return json({ok:true,preferences:{}});
+if(url.pathname==='/api/twitch/session')return json({authenticated:true,storageBackend:'postgres',role:login==='2o3a'?'streamer':'moderator',user:{id:'123',login,display_name:login}});
+if(url.pathname==='/api/twitch/bot-session')return json({active:true,connected:false,code:'webhook_existing',receiptCode:'ok'});
+if(url.pathname==='/api/activity-log'){anonymousReads++;return json({events:[],hasMore:false});}
+if(url.pathname==='/api/media-metadata')return json({});
+return json({ok:true});
+};
+const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out waiting for dashboard');};
+
+// Same-origin stand-ins capture the actual App's provider protocol without loading remote media.
+const errors=[];window.addEventListener('error',e=>errors.push(e.message));
+const commands=[];const setAttribute=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(name,value){if(this.tagName==='IFRAME'&&name==='src'){this.dataset.providerSrc=value;return setAttribute.call(this,name,'about:blank')}return setAttribute.call(this,name,value)};
+const descriptor=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'contentWindow');const registered=new WeakSet();
+Object.defineProperty(HTMLIFrameElement.prototype,'contentWindow',{get(){const target=descriptor.get.call(this);if(target){target.postMessage=(data,origin)=>{let payload=data;if(typeof payload==='string'){try{payload=JSON.parse(payload)}catch{}}commands.push({frame:this,data:payload,origin})}}return target}});
+const emit=(frame,type,value)=>window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:provider==='tiktok'?'https://www.tiktok.com':'https://www.youtube.com',data:provider==='tiktok'?{type,value,'x-tiktok-player':true}:{event:type,info:value}}));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));const assert=(v,msg)=>{if(!v)throw Error(msg)};
+const calls=(frame,name)=>commands.filter(c=>c.frame===frame&&(c.data.type===name||c.data.func===name));
+const frame=()=>[...document.querySelectorAll('iframe[data-provider-src]')].find(f=>/youtube.com\/embed|tiktok.com\/player/.test(f.dataset.providerSrc));
+try{
+ const {default:App}=await import('../../src/App.tsx');let root=createRoot(document.querySelector('#root'));
+ root.render(React.createElement(App));await wait(()=>imported&&frame()&&document.querySelector('[aria-label="Pause current video"]'));
+ await sleep(100);let first=frame();
+ if(provider==='tiktok'){
+  emit(first,'onPlayerReady');await sleep(550);assert(calls(first,'play').length>=2,'Ready-but-not-playing must retry autoplay');
+  emit(first,'onStateChange',1);emit(first,'onCurrentTime',{currentTime:23,duration:180});
+ }else{emit(first,'onStateChange',1);emit(first,'infoDelivery',{currentTime:23,duration:180,volume:50,muted:false,playerState:1});}
+ await sleep(30);document.querySelector('[aria-label="Pause current video"]').click();await sleep(30);
+ assert(document.querySelector('[aria-label="Resume current video"]'),'Host pause must offer explicit Resume');
+ const playCount=calls(first,provider==='tiktok'?'play':'playVideo').length;
+ await sleep(1400);assert(calls(first,provider==='tiktok'?'play':'playVideo').length===playCount,'Readiness retry must not restart deliberately paused video');
+ emit(first,'onStateChange',1);await sleep(30);assert(document.querySelector('[aria-label="Resume current video"]'),'Unexpected playing after former guard deadline cannot clear pause');
+ assert(calls(first,provider==='tiktok'?'pause':'pauseVideo').length>0,'Unexpected playing must send pause');
+ const pausedRecord=Object.values(sessionStorage).map(v=>{try{return JSON.parse(v)}catch{return null}}).find(v=>v?.paused&&v?.seconds===23);
+ assert(pausedRecord,'Pause and position must persist together');
+ root.unmount();root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
+ await wait(()=>frame()&&frame()!==first&&document.querySelector('[aria-label="Resume current video"]'));let restored=frame();
+ assert(new URL(restored.dataset.providerSrc).searchParams.get('autoplay')==='0','Refresh of paused request must disable iframe autoplay');
+ if(provider==='tiktok')emit(restored,'onPlayerReady');await sleep(100);
+ assert(calls(restored,provider==='tiktok'?'seekTo':'seekTo').some(c=>(c.data.value??c.data.args?.[0])===23),'Refreshed iframe must restore exact saved position');
+ assert(!calls(restored,provider==='tiktok'?'play':'playVideo').length,'Refresh must never play paused request');
+ document.querySelector('[aria-label="Resume current video"]').click();await sleep(30);
+ assert(calls(restored,provider==='tiktok'?'play':'playVideo').length>0,'Explicit Resume unlocks provider playback');
+ document.querySelector('[aria-label="Pause current video"]').click();await sleep(20);
+ const next=[...document.querySelectorAll('button')].find(b=>/next video/i.test((b.title||'')+' '+(b.getAttribute('aria-label')||'')+' '+b.textContent));next.click();
+ await wait(()=>docs[base+'queue_videos/b']?.status==='playing'&&frame()!==restored);await sleep(100);
+ assert(new URL(frame().dataset.providerSrc).searchParams.get('autoplay')==='1','Next provider must autoplay even when outgoing request was paused');
+ root.unmount();docs[base+'queue_videos/a']={...video('a','playing'),timestamp:now+10000,playedAt:now+10000};delete docs[base+'queue_videos/b'];version++;
+ root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));await wait(()=>frame());await sleep(100);
+ assert(new URL(frame().dataset.providerSrc).searchParams.get('autoplay')==='1','Same id new submission generation must clear old pause and position');
+ if(provider==='tiktok'){emit(frame(),'onPlayerReady');await sleep(30);assert(!calls(frame(),'seekTo').length,'New request must not seek to old request position');}
+ root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS '+provider+': bounded readiness retries; persistent deliberate pause; position on remount; explicit resume; next provider autoplay; same-id new generation';
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors)+' frames='+JSON.stringify([...document.querySelectorAll('iframe')].map(f=>({src:f.src,provider:f.dataset.providerSrc,win:!!f.contentWindow})))+' '+JSON.stringify(commands.slice(-12).map(c=>c.data));}
+</script></body></html>

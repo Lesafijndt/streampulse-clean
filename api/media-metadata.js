@@ -333,7 +333,7 @@ export default async function handler(req, res) {
   if (req.query?.playback === '1') {
     const { getClipPlayback } = await import('../server/twitch-clip-playback.js');
     res.setHeader('Cache-Control', 'private, max-age=60');
-    return res.status(200).json(await getClipPlayback(source));
+    return res.status(200).json(await getClipPlayback(source, fetch, { refresh: req.query?.refresh === '1' }));
   }
   if (host === 'youtu.be' || host.endsWith('youtube.com')) {
     endpoint = 'https://www.youtube.com/oembed?url=' + encodeURIComponent(source.href) + '&format=json';

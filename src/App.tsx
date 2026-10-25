@@ -26,6 +26,10 @@ import {
   Users,
   ThumbsUp,
   Maximize2,
+  Expand,
+  Shrink,
+  MoveVertical,
+  Pause,
   Minimize2,
   RefreshCw,
   X,
@@ -104,7 +108,7 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { getPlaybackGeneration, buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
 import { parseChatNotification, requestLikeChatMessage } from './twitchChatEvents.js';
 import { sanitizePersonalPreferences } from './personalPreferences.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
@@ -280,7 +284,7 @@ const KNOWN_CHAT_BOTS = new Set([
   'botrix', 'deepbot', 'sery_bot', 'serybot', 'mixitup', 'soundalerts',
   'commanderroot', 'tangia', 'firebot', 'own3d', 'botisimo', 'blerp',
   'pretzelrocks', 'monstercat', 'vivbot', 'ankhbot', 'ohbot', 'phantombot',
-  'streamcaptain', 'streamstickers', 'sery_bot'
+  'streamcaptain', 'streamstickers', 'sery_bot', 'gachibot69'
 ]);
 
 // Treat a message consisting of a supported video URL as a request even without !assr.
@@ -470,7 +474,7 @@ function YediHubAppContent() {
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
   // Personal browser-specific playback audio only; never sync this to Firestore.
-  const [localVolume, setLocalVolume] = useState(65);
+  const [localVolume, setLocalVolume] = useState(50);
   const [localMuted, setLocalMuted] = useState(false);
   const [audioLoadedFor, setAudioLoadedFor] = useState('');
   useEffect(() => {
@@ -478,9 +482,9 @@ function YediHubAppContent() {
     if (!name || !twitchAuth.authenticated) return;
     try {
       const old = JSON.parse(localStorage.getItem('whale-cum:audio:v1:' + name) || '{}');
-      setLocalVolume(Number.isFinite(old.volume) ? Math.max(0, Math.min(100, old.volume)) : 65);
+      setLocalVolume(Number.isFinite(old.volume) ? Math.max(0, Math.min(100, old.volume)) : 50);
       setLocalMuted(old.muted === true);
-    } catch { setLocalVolume(65); setLocalMuted(false); }
+    } catch { setLocalVolume(50); setLocalMuted(false); }
     setAudioLoadedFor(name);
   }, [twitchAuth.authenticated, twitchAuth.username]);
   useEffect(() => {
@@ -492,6 +496,7 @@ function YediHubAppContent() {
 
   // Player State
   const [simProgress, setSimProgress] = useState(0);
+  const [playbackPaused, setPlaybackPaused] = useState(false);
   const playbackDurationRef = useRef({ videoId: '', seconds: 0 });
   const keyboardPausedRef = useRef({ videoId: '', paused: false });
   const [isTheatreMode, setIsTheatreMode] = useState(false);
@@ -510,7 +515,7 @@ function YediHubAppContent() {
   const webhookAutoSetupAttemptedRef = useRef(false);
   const youtubeIframeRef = useRef(null);
   const youtubePlayerRef = useRef(null);
-  const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 65, muted: false, playerState: -1 });
+  const youtubePlaybackInfoRef = useRef({ currentTime: 0, duration: 0, volume: 50, muted: false, playerState: -1 });
   const localVolumeRef = useRef(localVolume);
   const localMutedRef = useRef(localMuted);
   localVolumeRef.current = localVolume;
@@ -1892,6 +1897,8 @@ function YediHubAppContent() {
     return queued[0] || null;
   }, [videos]);
 
+  const currentPlaybackGeneration = getPlaybackGeneration(currentVideo);
+
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
     const id = String(videoId || '');
     const matchingVideo = videosRef.current.find((video) => String(video.id) === id);
@@ -1899,14 +1906,15 @@ function YediHubAppContent() {
       matchingVideo?.platform ||
       (String(currentVideoRef.current?.id || '') === id ? currentVideoRef.current?.platform : '');
     const isTikTok = platform === 'tiktok';
-    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v2-' + id);
+    const generation = getPlaybackGeneration(matchingVideo || currentVideoRef.current);
+    const storageKey = roomStorageKey(channelRoom, 'player-playback-intent-v3-' + id);
     // Older builds accidentally saved autoplay mute as a deliberate preference.
     // Keep the old pause intent, but read TikTok audio preference from a clean separate key.
     const tiktokMuteStorageKey = isTikTok
       ? roomStorageKey(channelRoom, 'player-tiktok-mute-intent-v1-' + id)
       : '';
     const current = playbackIntentRef.current;
-    if (current.videoId === id && current.storageKey === storageKey &&
+    if (current.videoId === id && current.generation === generation && current.storageKey === storageKey &&
         (!isTikTok || current.tiktokMuteStorageKey === tiktokMuteStorageKey) &&
         (isTikTok || !current.tiktokMuteStorageKey)) return current;
 
@@ -1919,7 +1927,9 @@ function YediHubAppContent() {
       videoId: id,
       storageKey,
       tiktokMuteStorageKey,
-      paused: saved?.paused === true,
+      generation,
+      paused: saved?.generation === generation && saved?.paused === true,
+      seconds: saved?.generation === generation ? Math.max(0, Number(saved.seconds) || 0) : 0,
       muted: localMutedRef.current,
     };
   };
@@ -1928,10 +1938,13 @@ function YediHubAppContent() {
     const previous = getPlaybackIntentForVideo(videoId, platformOverride);
     const next = { ...previous, ...updates, videoId: String(videoId || '') };
     playbackIntentRef.current = next;
+    if (typeof updates.paused === 'boolean') setPlaybackPaused(next.paused);
     try {
       // Keep TikTok preference separate so legacy autoplay mute cannot override startup audio.
       window.sessionStorage.setItem(next.storageKey, JSON.stringify({
         paused: next.paused,
+        generation: next.generation,
+        seconds: next.seconds || 0,
       }));
       if (typeof updates?.muted === 'boolean') setLocalMuted(updates.muted);
     } catch { /* Playback state remains available in memory if storage is unavailable. */ }
@@ -1943,13 +1956,16 @@ function YediHubAppContent() {
   // Keep the TikTok iframe URL stable for the lifetime of the current queue item.
   // Its autoplay query is only an initial-load setting; deriving it on every render
   // changes src when pause intent changes and makes React reload the embed mid-video.
+  const youtubePlayerSrc = useMemo(() => currentVideo?.platform === 'youtube'
+    ? 'https://www.youtube.com/embed/' + encodeURIComponent(currentVideo.videoId) + '?autoplay=' + (getPlaybackIntentForVideo(currentVideo.id).paused ? 0 : 1) + '&controls=1&playsinline=1&rel=0&enablejsapi=1&origin=' + encodeURIComponent(window.location.origin)
+    : '', [currentPlaybackGeneration, currentVideo?.videoId, channelRoom]);
   const tiktokPlayerSrc = useMemo(() => (
     currentVideo?.platform === 'tiktok'
       ? buildTikTokPlayerUrl(currentVideo.videoId, {
           paused: getPlaybackIntentForVideo(currentVideo.id, 'tiktok').paused,
         })
       : ''
-  ), [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
+  ), [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
 
   const recordPlaybackPosition = (videoId, seconds) => {
     const id = String(videoId || '');
@@ -1962,7 +1978,10 @@ function YediHubAppContent() {
       if (value < pending.currentTime - 2) return;
       if (Math.abs(value - pending.currentTime) <= 2) pendingPlaybackRestoreRef.current = null;
     }
+    const intent = getPlaybackIntentForVideo(id);
+    if (intent.paused && intent.seconds > 0.5 && value < intent.seconds - 2) return;
     playbackPositionRef.current = { videoId: id, seconds: value };
+    updatePlaybackIntent(id, { seconds: value });
   };
 
   // On a new queue item, restore only this tab's previous intent for that exact video.
@@ -1981,12 +2000,15 @@ function YediHubAppContent() {
     }
     const intent = getPlaybackIntentForVideo(videoId, currentVideo.platform);
     playbackIntentRef.current = intent;
+    playbackPositionRef.current = { videoId, seconds: intent.seconds || 0 };
+    setPlaybackPaused(intent.paused);
+    if (intent.seconds > 0.5) pendingPlaybackRestoreRef.current = { videoId, currentTime: intent.seconds, expiresAt: Date.now() + 15000 };
     playbackVisibilitySnapshotRef.current = null;
     playbackRestoreGuardRef.current = intent.paused
       ? { videoId, until: Date.now() + 2500, paused: true, muted: intent.muted }
       : { videoId: '', until: 0, paused: false, muted: null };
     keyboardPausedRef.current = { videoId, paused: intent.paused };
-  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+  }, [currentPlaybackGeneration, currentVideo?.platform, channelRoom]);
 
   // A hidden tab may suspend/recreate provider iframes. Preserve deliberate pauses,
   // but resume media that was playing before the tab was hidden.
@@ -2031,7 +2053,7 @@ function YediHubAppContent() {
       const muted = typeof snapshot.muted === 'boolean' ? snapshot.muted : intent.muted;
       const currentTime = Math.max(0, Number(snapshot.currentTime) || 0);
       // Only guard the iframe's immediate restoration blip; a multi-second guard blocks real user clicks.
-      const expiresAt = Date.now() + 350;
+      const expiresAt = Date.now() + 15000;
       playbackRestoreGuardRef.current = {
         videoId,
         until: expiresAt,
@@ -2063,7 +2085,7 @@ function YediHubAppContent() {
       window.removeEventListener('pageshow', restoreOnReturn);
       window.removeEventListener('focus', restoreOnReturn);
     };
-  }, [currentVideo?.id, currentVideo?.platform, channelRoom]);
+  }, [currentPlaybackGeneration, currentVideo?.platform, channelRoom]);
 
   // WebSocket callbacks can live longer than a React render; refs keep command handlers current.
   currentVideoRef.current = currentVideo;
@@ -2953,7 +2975,7 @@ function YediHubAppContent() {
         return;
       }
       const state = Number(player.getPlayerState());
-      if (state === 1 || state === 3) {
+      if (!getPlaybackIntentForVideo(video.id).paused && (state === 1 || state === 3)) {
         updatePlaybackIntent(video.id, { paused: true });
         keyboardPausedRef.current = { videoId: String(video.id), paused: true };
         player.pauseVideo?.();
@@ -3053,6 +3075,7 @@ function YediHubAppContent() {
     if (!playerWindow) return undefined;
     let cancelled = false;
     let hasStarted = false;
+    let volumeAcknowledged = false;
     let endedHandled = false;
     let previousState = -1;
     const postCommand = (func, args = []) => {
@@ -3104,7 +3127,7 @@ function YediHubAppContent() {
       else postCommand('unMute');
     };
     const handleMessage = (event) => {
-      if (cancelled || event.source !== playerWindow) return;
+      if (cancelled || event.source !== playerWindow || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video)) return;
       if (event.origin !== 'https://www.youtube.com' && event.origin !== 'https://www.youtube-nocookie.com') return;
       let payload = event.data;
       if (typeof payload === 'string') {
@@ -3116,9 +3139,11 @@ function YediHubAppContent() {
         ? payload.info
         : null;
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
+      if (payload.event === 'onReady') initializePlayerMessaging();
       if (info) {
+        if (Number(info.volume) === localVolumeRef.current) volumeAcknowledged = true;
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
-        if (Number.isFinite(Number(info.volume)) && Number(info.volume) >= 0 &&
+        if (volumeAcknowledged && hasStarted && Number.isFinite(Number(info.volume)) && Number(info.volume) >= 0 &&
             Number(info.volume) <= 100 && Math.abs(Number(info.volume) - localVolumeRef.current) > 1) {
           setLocalVolume(Number(info.volume));
         }
@@ -3144,9 +3169,8 @@ function YediHubAppContent() {
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId);
         const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused &&
-          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
-        if (stateFromEvent === 2) {
+        const suppressUnexpectedResume = stateFromEvent === 1 && intent.paused;
+        if (stateFromEvent === 2 && (hasStarted || intent.paused)) {
           // Providers can report a synthetic pause when the browser backgrounds an iframe.
           // Do not persist that as the viewer's deliberate pause preference.
           if (document.visibilityState !== 'hidden') {
@@ -3154,16 +3178,15 @@ function YediHubAppContent() {
             keyboardPausedRef.current = { videoId, paused: true };
           }
         } else if (stateFromEvent === 1 && suppressUnexpectedResume) {
-          // Consume this one transient resume event only. Do not keep rejecting
-          // explicit Play clicks for the remainder of a long visibility guard.
+          // Only an explicit host Resume command clears a deliberate pause.
           playbackRestoreGuardRef.current = { videoId: '', until: 0, paused: false, muted: null };
           postCommand('pauseVideo');
         } else if (stateFromEvent === 1) {
           updatePlaybackIntent(videoId, { paused: false });
           keyboardPausedRef.current = { videoId, paused: false };
         }
-        if (stateFromEvent === 1 || stateFromEvent === 2 || stateFromEvent === 3) hasStarted = true;
-        if (stateFromEvent === 0 && hasStarted && previousState !== 0 && !endedHandled) {
+        if (stateFromEvent === 1 && !suppressUnexpectedResume) hasStarted = true;
+        if (stateFromEvent === 0 && hasStarted && !intent.paused && previousState !== 0 && !endedHandled) {
           endedHandled = true;
           if (currentVideoRef.current?.id === video.id) handleMediaEndedRef.current?.(video.id);
         }
@@ -3187,7 +3210,7 @@ function YediHubAppContent() {
       window.removeEventListener('message', handleMessage);
       if (youtubePlayerRef.current === proxy) youtubePlayerRef.current = null;
     };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
+  }, [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, twitchAuth.authenticated, twitchAuthLoading]);
 
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
   // window reference and listener. Its first muted report can be an autoplay/browser state,
@@ -3199,9 +3222,12 @@ function YediHubAppContent() {
     let startupUnmuteAttempts = 0;
     let startupAudioConfirmed = false;
     let playbackConfirmed = false;
+    let endedHandled = false;
+    let providerReady = false;
     let startupMuteGuardUntil = 0;
     const retryTimers = [];
-    const getWindow = () => tiktokIframeRef.current?.contentWindow;
+    const playerWindow = tiktokIframeRef.current?.contentWindow;
+    const getWindow = () => playerWindow;
     const initialIntent = getPlaybackIntentForVideo(video.id, 'tiktok');
     startupAudioConfirmed = initialIntent.muted === true;
     tiktokMutePreferenceRef.current = {
@@ -3232,11 +3258,13 @@ function YediHubAppContent() {
       return true;
     };
     const handleTikTokMessage = (event) => {
-      if (event.origin !== 'https://www.tiktok.com' || event.source !== getWindow()) return;
+      if (cancelled || event.origin !== 'https://www.tiktok.com' || event.source !== getWindow() || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video)) return;
       let data = event.data;
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
       if (!data || data['x-tiktok-player'] !== true) return;
       if (data.type === 'onPlayerReady') {
+        providerReady = true;
+        retryTimers.forEach(timer => window.clearTimeout(timer));
         // A recreated iframe must restore playback position and audio preference.
         const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
         const pending = pendingPlaybackRestoreRef.current;
@@ -3252,7 +3280,8 @@ function YediHubAppContent() {
           // TikTok may be buffering when its ready signal arrives. Retries are
           // strictly bounded and stop as soon as playback is confirmed.
           [450, 1200, 2300].forEach(delay => retryTimers.push(window.setTimeout(() => {
-            if (cancelled || playbackConfirmed || currentVideoRef.current?.id !== video.id) return;
+            if (cancelled || playbackConfirmed || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video) ||
+                getPlaybackIntentForVideo(video.id, 'tiktok').paused || document.visibilityState === 'hidden') return;
             sendCommand('play');
             if (delay === 2300 && !playbackConfirmed) {
               setTikTokPlayerState({ requestId: video.id, status: 'blocked' });
@@ -3296,6 +3325,8 @@ function YediHubAppContent() {
           requestId: video.id,
           preference: data.value ? 'muted' : 'unmuted',
         };
+      } else if (data.type === 'onVolumeChange' && playbackConfirmed && Number.isFinite(Number(data.value))) {
+        setLocalVolume(Math.max(0, Math.min(100, Number(data.value))));
       } else if (data.type === 'onCurrentTime' && data.value) {
         const duration = Number(data.value.duration) || 0;
         const currentTime = Number(data.value.currentTime) || 0;
@@ -3312,9 +3343,8 @@ function YediHubAppContent() {
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId, 'tiktok');
         const restoreGuard = playbackRestoreGuardRef.current;
-        const suppressUnexpectedResume = state === 1 && intent.paused &&
-          restoreGuard.videoId === videoId && Date.now() < restoreGuard.until && restoreGuard.paused;
-        if (state === 2) {
+        const suppressUnexpectedResume = state === 1 && intent.paused;
+        if (state === 2 && (playbackConfirmed || intent.paused)) {
           if (document.visibilityState !== 'hidden') {
             updatePlaybackIntent(videoId, { paused: true }, 'tiktok');
             keyboardPausedRef.current = { videoId, paused: true };
@@ -3334,7 +3364,11 @@ function YediHubAppContent() {
         if (state === 1 && !suppressUnexpectedResume && !startupAudioConfirmed) {
           requestStartupUnmute();
         }
-        if (state === 0) handleMediaEndedRef.current?.(video.id);
+        if (state === 0 && playbackConfirmed && !intent.paused && !endedHandled) {
+          endedHandled = true;
+          handleMediaEndedRef.current?.(video.id);
+        }
+        if (state === 1 && !suppressUnexpectedResume) endedHandled = false;
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
         if (String(errorType) === 'AUTOPLAY_ERROR') {
@@ -3346,12 +3380,15 @@ function YediHubAppContent() {
       }
     };
     window.addEventListener('message', handleTikTokMessage);
+    retryTimers.push(window.setTimeout(() => {
+      if (!cancelled && !providerReady) setTikTokPlayerState({ requestId: video.id, status: 'error' });
+    }, 12000));
     return () => {
       cancelled = true;
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       window.removeEventListener('message', handleTikTokMessage);
     };
-  }, [currentVideo?.id, currentVideo?.videoId, currentVideo?.platform]);
+  }, [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, tiktokFrameReload, twitchAuth.authenticated, twitchAuthLoading]);
 
 
 
@@ -3967,7 +4004,7 @@ function YediHubAppContent() {
           ========================================== */}
       <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
         <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
-        <img src="/images/cowboy-ranch.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-2/3 object-cover opacity-40" style={{ objectPosition: 'center 22%', maskImage: 'linear-gradient(to right, transparent, black 55%)' }} />
+        <img src="/images/cowboy-ranch.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-auto max-w-[66%] object-contain opacity-65" style={{ maskImage: 'linear-gradient(to right, transparent, black 25%)' }} />
         <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
           <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
@@ -3978,7 +4015,7 @@ function YediHubAppContent() {
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
         {isModerator && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
-          <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="h-32 w-full rounded-xl object-cover object-center opacity-85" />
+          <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="aspect-[3/2] w-full rounded-xl object-cover object-top opacity-85" />
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents.filter(event => event.at > statisticsResetAt)}
@@ -4024,9 +4061,12 @@ function YediHubAppContent() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {currentVideo && ['youtube', 'tiktok'].includes(currentVideo.platform) && <button type="button" onClick={togglePlaybackFromKeyboard} aria-label={playbackPaused ? 'Resume current video' : 'Pause current video'} className="flex items-center gap-1 rounded-lg bg-purple-800 px-2 py-1.5 text-xs text-white">
+                  {playbackPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{playbackPaused ? 'Resume' : 'Pause'}
+                </button>}
                 <button type="button" onClick={togglePlayerFullscreen} aria-label={playerFullscreen || fullscreenFallback ? 'Exit player fullscreen' : 'Enter player fullscreen'} aria-pressed={playerFullscreen || fullscreenFallback} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Fullscreen player (persists across tracks)">
-                  {playerFullscreen || fullscreenFallback ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  {playerFullscreen || fullscreenFallback ? <Shrink className="inline w-3.5 h-3.5 mr-1" /> : <Expand className="inline w-3.5 h-3.5 mr-1" />}<span className="text-xs">{playerFullscreen || fullscreenFallback ? 'Exit fullscreen' : 'Fullscreen'}</span>
                 </button>
                 <button
                   aria-label="Toggle player height"
@@ -4034,7 +4074,7 @@ function YediHubAppContent() {
                   className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
                   title="Toggle Player Height"
                 >
-                  {isTheatreMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  <MoveVertical className="inline w-3.5 h-3.5 mr-1" /><span className="text-xs">{isTheatreMode ? 'Reduce height' : 'Enlarge'}</span>
                 </button>
               </div>
             </div>
@@ -4062,10 +4102,10 @@ function YediHubAppContent() {
                       ? "gachi-portrait-shell relative z-10"
                       : "gachi-landscape-shell"}>
                     <iframe
-                      key={`youtube-${currentVideo.id}-${currentVideo.videoId}`}
+                      key={`youtube-${currentPlaybackGeneration}-${currentVideo.videoId}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
-                      src={`https://www.youtube.com/embed/${encodeURIComponent(currentVideo.videoId)}?autoplay=1&controls=1&playsinline=1&rel=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                      src={youtubePlayerSrc}
                       title={currentVideo.title || 'YouTube video'}
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
@@ -4101,7 +4141,7 @@ function YediHubAppContent() {
                     <>
                       <div className="gachi-portrait-shell relative z-10">
                       <iframe
-                        key={`tiktok-player-${currentVideo.id}-${currentVideo.videoId}-${tiktokFrameReload}`}
+                        key={`tiktok-player-${currentPlaybackGeneration}-${currentVideo.videoId}-${tiktokFrameReload}`}
                         ref={tiktokIframeRef}
                         className="gachi-tiktok-player border-0"
                         src={tiktokPlayerSrc}
@@ -4119,11 +4159,13 @@ function YediHubAppContent() {
                         }}
                       />
                       </div>
+                      <p className="absolute bottom-1 right-2 z-20 rounded bg-black/80 px-2 py-1 text-[10px] text-slate-300">TikTok volume: use its player slider; saved app volume {localVolume}% applies to YouTube and controllable Twitch playback.</p>
                       {tiktokPlayerState.requestId === currentVideo.id && tiktokPlayerState.status === 'blocked' && (
                         <div className="pointer-events-none absolute bottom-3 left-3 z-30">
                           <button type="button" className="pointer-events-auto rounded-xl bg-purple-700 px-4 py-2 text-xs font-bold text-white shadow-lg"
                             onClick={() => {
                               const iframe = tiktokIframeRef.current?.contentWindow;
+                              updatePlaybackIntent(currentVideo.id, { paused: false });
                               if (iframe) {
                                 postTikTokPlayerCommand(iframe, 'play', null);
                                 if (!localMutedRef.current) postTikTokPlayerCommand(iframe, 'unMute', null);
@@ -4160,8 +4202,9 @@ function YediHubAppContent() {
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
                     <TwitchClipPlayer
-                      key={`twitch-${currentVideo.id}-${currentVideo.videoId}`}
+                      key={`twitch-${currentPlaybackGeneration}-${currentVideo.videoId}`}
                       video={currentVideo}
+                      storageKey={roomStorageKey(channelRoom, 'twitch-playback-v1-' + currentPlaybackGeneration)}
                       volume={localVolume}
                       muted={localMuted}
                       onAudioChange={(volume, muted) => { setLocalVolume(volume); setLocalMuted(muted); }}
