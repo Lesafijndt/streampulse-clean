@@ -113,4 +113,18 @@ if (process.argv.includes('--probe')) {
   });
   console.log(JSON.stringify({ check: 'durable_transport_probe', target: url.hostname, probeId: id, status: response.status,
     body: await response.json().catch(() => ({ code: 'non_json_response' })) }));
+  if (response.status === 202 && (process.env.DATABASE_URL || process.env.POSTGRES_URL)) {
+    const { getVerifiedFirestore } = await import('../server/firebase-guard.js');
+    const db = await getVerifiedFirestore();
+    const path = `artifacts/${getQueueNamespace()}/public/data/system_diagnostics/queue-${id}`;
+    let saved;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const row = await db.doc(path).get();
+      if (row.exists) { saved = row.data(); break; }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    console.log(JSON.stringify({ check: 'queue_to_postgres_probe', persisted: Boolean(saved),
+      producer: saved?.producer, consumer: saved?.consumer }));
+    if (!saved) process.exitCode = 1;
+  }
 }
