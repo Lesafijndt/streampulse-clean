@@ -2036,7 +2036,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   // Its autoplay query is only an initial-load setting; deriving it on every render
   // changes src when pause intent changes and makes React reload the embed mid-video.
   const youtubePlayerSrc = useMemo(() => currentVideo?.platform === 'youtube'
-    ? 'https://www.youtube.com/embed/' + encodeURIComponent(currentVideo.videoId) + '?autoplay=' + (getPlaybackIntentForVideo(currentVideo.id).paused ? 0 : 1) + '&controls=1&playsinline=1&rel=0&enablejsapi=1&origin=' + encodeURIComponent(window.location.origin)
+    ? 'https://www.youtube.com/embed/' + encodeURIComponent(currentVideo.videoId) + '?autoplay=' + (getPlaybackIntentForVideo(currentVideo.id).paused ? 0 : 1) + '&start=' + Math.floor(getPlaybackIntentForVideo(currentVideo.id).seconds || 0) + '&controls=1&playsinline=1&rel=0&enablejsapi=1&origin=' + encodeURIComponent(window.location.origin)
     : '', [currentPlaybackGeneration, currentVideo?.videoId, channelRoom, playerReload]);
   const tiktokPlayerSrc = useMemo(() => (
     currentVideo?.platform === 'tiktok'
@@ -3220,14 +3220,16 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
         ? pending.currentTime
         : Math.max(known, !hasStarted ? savedPosition : 0);
-      if (intent.paused) postCommand('pauseVideo');
-      if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
+      // Leave a saved paused request cued. pauseVideo/seekTo before first playback
+      // can discard YouTube's poster without decoding a replacement video frame.
+      // The initial start parameter restores its position without starting media.
+      if (!intent.paused && restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
       }
       postCommand('setVolume', [localVolumeRef.current]);
       if (localMutedRef.current) postCommand('mute');
       else postCommand('unMute');
-      postCommand(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
+      if (!intent.paused && document.visibilityState !== 'hidden') postCommand('playVideo');
     };
     const handleMessage = (event) => {
       if (cancelled || event.source !== playerWindow || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video)) return;

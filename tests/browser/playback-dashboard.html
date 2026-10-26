@@ -100,7 +100,10 @@ try{
   assert(![...document.querySelectorAll('button')].some(b=>b.textContent==='Play video'),'Saved deliberate pause must not show autoplay recovery');
  }
  await sleep(100);
- assert(calls(restored,provider==='tiktok'?'seekTo':'seekTo').some(c=>(c.data.value??c.data.args?.[0])===23),'Refreshed iframe must restore exact saved position');
+ if(provider==='youtube') {
+  assert(new URL(restored.dataset.providerSrc).searchParams.get('start')==='23','Paused browser restoration must cue the saved position in the initial URL');
+  assert(!calls(restored,'pauseVideo').length&&!calls(restored,'seekTo').length,'Unstarted paused YouTube must keep its poster; no pause/seek transport commands');
+ } else assert(calls(restored,'seekTo').some(c=>c.data.value===23),'Refreshed TikTok restores position');
  assert(!calls(restored,provider==='tiktok'?'play':'playVideo').length,'Refresh must never play paused request');
  restored.focus();const restoringPauses=calls(restored,provider==='tiktok'?'pause':'pauseVideo').length;
  emit(restored,'onStateChange',1);await sleep(30);
