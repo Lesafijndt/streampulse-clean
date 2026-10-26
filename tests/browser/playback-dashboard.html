@@ -66,6 +66,16 @@ try{
  const nativeSpace=new KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true,cancelable:true});nativeControl.dispatchEvent(nativeSpace);
  assert(!nativeSpace.defaultPrevented,'Dashboard shortcuts must not steal native player keyboard controls');nativeControl.remove();
  await sleep(100);let first=frame();
+ if(provider==='youtube') {
+   const before=calls(first,'playVideo').length;
+   await sleep(2200);
+   assert(calls(first,'playVideo').length>before,'Slow cold frame must continue connecting after quick retries');
+   emit(first,'onAutoplayBlocked');await wait(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='Play video'));
+   const play=[...document.querySelectorAll('button')].find(b=>b.textContent==='Play video');const count=calls(first,'playVideo').length;
+   play.click();await sleep(20);assert(frame()===first&&calls(first,'playVideo').length>count,'User gesture must play the existing frame without remounting');
+   emit(first,'onReady');
+ }
+
  if(provider==='tiktok'){
   emit(first,'onPlayerReady');await sleep(550);assert(calls(first,'play').length>=2,'Ready-but-not-playing must retry autoplay');
   emit(first,'onStateChange',1);emit(first,'onCurrentTime',{currentTime:23,duration:180});
@@ -83,7 +93,13 @@ try{
  root.unmount();root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
  await wait(()=>frame()&&frame()!==first);let restored=frame();await sleep(100);
  assert(new URL(restored.dataset.providerSrc).searchParams.get('autoplay')==='0','Refresh of paused request must disable iframe autoplay');
- if(provider==='tiktok')emit(restored,'onPlayerReady');await sleep(100);
+ if(provider==='tiktok')emit(restored,'onPlayerReady');
+ else {
+  emit(restored,'infoDelivery',{currentTime:0,duration:180,playerState:-1});emit(restored,'onReady');
+  emit(restored,'onAutoplayBlocked');await sleep(20);
+  assert(![...document.querySelectorAll('button')].some(b=>b.textContent==='Play video'),'Saved deliberate pause must not show autoplay recovery');
+ }
+ await sleep(100);
  assert(calls(restored,provider==='tiktok'?'seekTo':'seekTo').some(c=>(c.data.value??c.data.args?.[0])===23),'Refreshed iframe must restore exact saved position');
  assert(!calls(restored,provider==='tiktok'?'play':'playVideo').length,'Refresh must never play paused request');
  restored.focus();const restoringPauses=calls(restored,provider==='tiktok'?'pause':'pauseVideo').length;

@@ -539,6 +539,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
   const [playerReload, setPlayerReload] = useState(0);
+  const [youtubeAutoplayBlocked, setYouTubeAutoplayBlocked] = useState(false);
   const [playerIssue, setPlayerIssue] = useState(null);
   const youtubeRecoveryRef = useRef({ generation: '', attempts: 0 });
   const tiktokRecoveryRef = useRef({ generation: '', attempts: 0 });
@@ -3171,6 +3172,9 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     const errorRetryTimers = [];
     if (youtubeRecoveryRef.current.generation !== getPlaybackGeneration(video)) youtubeRecoveryRef.current = { generation: getPlaybackGeneration(video), attempts: 0 };
     let hasStarted = false;
+    let apiReady = false;
+    setYouTubeAutoplayBlocked(false);
+    const savedPosition = getPlaybackIntentForVideo(video.id).seconds || 0;
     let volumeAcknowledged = false;
     const completion = createPlaybackCompletionTracker();
     const postCommand = (func, args = []) => {
@@ -3203,6 +3207,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       } catch { /* Player may still be initializing; the next retry will announce again. */ }
       postCommand('addEventListener', ['onStateChange']);
       postCommand('addEventListener', ['onError']);
+      postCommand('addEventListener', ['onAutoplayBlocked']);
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
@@ -3214,7 +3219,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
       const restoreSeconds = pending?.videoId === String(video.id) && Date.now() < pending.expiresAt
         ? pending.currentTime
-        : known;
+        : Math.max(known, !hasStarted ? savedPosition : 0);
       if (intent.paused) postCommand('pauseVideo');
       if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
         postCommand('seekTo', [restoreSeconds, true]);
@@ -3237,7 +3242,9 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         ? payload.info
         : null;
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
+      if (payload.event === 'onReady' || info && Number(info.duration) > 0) apiReady = true;
       if (payload.event === 'onReady') initializePlayerMessaging();
+      if (payload.event === 'onAutoplayBlocked' && !getPlaybackIntentForVideo(video.id).paused) setYouTubeAutoplayBlocked(true);
       if (info) {
         if (Number(info.volume) === localVolumeRef.current) volumeAcknowledged = true;
         youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
@@ -3286,7 +3293,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           updatePlaybackIntent(videoId, { paused: false });
           keyboardPausedRef.current = { videoId, paused: false };
         }
-        if (stateFromEvent === 1 && !suppressUnexpectedResume) hasStarted = true;
+        if (stateFromEvent === 1 && !suppressUnexpectedResume) { hasStarted = true; setYouTubeAutoplayBlocked(false); }
       }
       if (completion.observe({ state: stateFromEvent, currentTime: info?.currentTime,
         duration: info?.duration, paused: getPlaybackIntentForVideo(video.id).paused })) {
@@ -3309,8 +3316,18 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     window.addEventListener('message', handleMessage);
     // The iframe can ignore commands sent before its API is ready, so retry briefly after mount.
     const retryTimers = [0, 250, 750, 1500].map((delay) => window.setTimeout(initializePlayerMessaging, delay));
+    iframe.addEventListener('load', initializePlayerMessaging);
+    // A cold provider frame can become ready well after the initial quick retries.
+    // Continue only until it answers; never replay a started or deliberately paused track.
+    const handshake = window.setInterval(() => { if (!apiReady && !hasStarted) initializePlayerMessaging(); }, 1000);
+    const startupTimeout = window.setTimeout(() => {
+      window.clearInterval(handshake);
+      if (!cancelled && !apiReady && !hasStarted && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) setPlayerIssue({ generation: getPlaybackGeneration(video) });
+    }, 20000);
     return () => {
       cancelled = true;
+      iframe.removeEventListener('load', initializePlayerMessaging);
+      window.clearInterval(handshake); window.clearTimeout(startupTimeout);
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       errorRetryTimers.forEach(timer => window.clearTimeout(timer));
       window.removeEventListener('message', handleMessage);
@@ -4246,6 +4263,9 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
+                  {currentVideo.platform === 'youtube' && youtubeAutoplayBlocked && playerIssue?.generation !== currentPlaybackGeneration && <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60">
+                    <button type="button" className="rounded-xl bg-purple-600 px-6 py-3 font-bold text-white" onClick={() => { updatePlaybackIntent(currentVideo.id, { paused: false }); youtubePlayerRef.current?.playVideo(); setYouTubeAutoplayBlocked(false); }}>Play video</button>
+                  </div>}
                   {playerIssue?.generation === currentPlaybackGeneration && <PlaybackFailure url={currentVideo.url} onSkip={() => handleSkipNext()}
                     onRetry={() => { setPlayerIssue(null); if (currentVideo.platform === 'tiktok') { tiktokRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' }); setTikTokFrameReload(value => value + 1); } else { youtubeRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setPlayerReload(value => value + 1); } }} />}
                   {isVerticalMedia(currentVideo) && (
@@ -4269,32 +4289,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                       allowFullScreen
                       referrerPolicy="strict-origin-when-cross-origin"
-                      onLoad={() => {
-                        if (currentVideoRef.current?.id !== currentVideo.id) return;
-                        const frame = youtubeIframeRef.current?.contentWindow;
-                        if (!frame) return;
-                        frame.postMessage(JSON.stringify({ event: 'listening', id: `yedi-hub-${currentVideo.id}`, channel: 'widget' }), 'https://www.youtube.com');
-                        const send = (func, args = []) => frame.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube.com');
-                        send('addEventListener', ['onStateChange']);
-                        send('addEventListener', ['onError']);
-                        send('getCurrentTime');
-                        send('getDuration');
-                        send('getVolume');
-                        const pending = pendingPlaybackRestoreRef.current;
-                        const known = playbackPositionRef.current.videoId === String(currentVideo.id) ? playbackPositionRef.current.seconds : 0;
-                        const restoreSeconds = pending?.videoId === String(currentVideo.id) && Date.now() < pending.expiresAt
-                          ? pending.currentTime
-                          : known;
-                        const intent = getPlaybackIntentForVideo(currentVideo.id);
-                        if (intent.paused) send('pauseVideo');
-                        if (restoreSeconds > 0.5 && Math.abs((Number(youtubePlaybackInfoRef.current.currentTime) || 0) - restoreSeconds) > 2) {
-                          send('seekTo', [restoreSeconds, true]);
-                        }
-                        send('setVolume', [localVolumeRef.current]);
-                        if (intent.muted === true) send('mute');
-                        else if (intent.muted === false) send('unMute');
-                        send(intent.paused || document.visibilityState === 'hidden' ? 'pauseVideo' : 'playVideo');
-                      }}
                     />
                     </div>
                   ) : currentVideo.platform === 'tiktok' && /^\d{10,25}$/.test(String(currentVideo.videoId || '')) ? (
