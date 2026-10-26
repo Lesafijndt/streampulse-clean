@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocumentStore } from '../server/postgres-store.js';
-import { persistChatEvent } from '../server/webhook-queue.js';
+import { persistChatEvent, makeQueueItems } from '../server/webhook-queue.js';
 
 const namespace = process.env.VITE_FIREBASE_NAMESPACE || 'streampulse-live-deck';
 const base = `artifacts/${namespace}/public/data`;
@@ -21,6 +21,17 @@ function memoryStore(options = {}) {
 }
 const increment = value => ({ __op: 'increment', value });
 const arrayUnion = (...values) => ({ __op: 'arrayUnion', values });
+
+test('a new viewer request repairs an empty damaged media record instead of falsely deduplicating it', async () => {
+  const { db } = memoryStore();
+  const event = { broadcaster_user_login: '2o3a', chatter_user_login: 'ordinary_viewer', message: { text: 'https://www.tiktok.com/@scout2015/video/6718335390845095173' } };
+  const { items } = await makeQueueItems(event); await db.doc(path(items[0].id)).set({});
+  const result = await persistChatEvent(db, { event, messageId: 'repair-empty-record' });
+  assert.equal(result.status, 'queued'); assert.equal(result.queued, 1);
+  const repaired = (await db.doc(path(items[0].id)).get()).data();
+  assert.equal(repaired.status, 'queue'); assert.equal(repaired.url, event.message.text);
+  assert.equal(repaired.requestedBy, 'ordinary_viewer');
+});
 
 test('an empty top-level merge preserves the full video while nested empty maps still replace their map', async () => {
   const { db } = memoryStore(); const ref = db.doc(path('unchanged'));

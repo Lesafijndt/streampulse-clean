@@ -161,15 +161,16 @@ export async function persistChatEvent(db, { event, messageId, subscriptionId },
     if (roomOpen) {
       for (let i = 0; i < itemRefs.length; i++) {
         const previous = reads[i + 2].data();
-        if (reads[i + 2].exists && previous?.status !== 'watched') { duplicates++; continue; }
-        if (reads[i + 2].exists) {
+        if (reads[i + 2].exists && ['queue', 'playing', 'watch_later'].includes(previous?.status)) { duplicates++; continue; }
+        if (reads[i + 2].exists && previous?.status === 'watched') {
           // Preserve the completed request as history before reusing its active
           // media slot. The new request receives its own timestamp and sender.
           const historyId = 'history-' + createHash('sha256').update(pending.items[i].id + ':' +
             String(previous.timestamp || previous.createdAt || 0)).digest('hex');
           tx.set(base.collection('queue_videos').doc(historyId), { ...previous, id: historyId });
-          tx.set(itemRefs[i], pending.items[i]);
-        } else tx.create(itemRefs[i], pending.items[i]);
+        }
+        if (reads[i + 2].exists) tx.set(itemRefs[i], pending.items[i]);
+        else tx.create(itemRefs[i], pending.items[i]);
         queued++;
       }
     }
