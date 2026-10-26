@@ -109,6 +109,9 @@ import TwitchClipPlayer from './components/TwitchClipPlayer';
 import TransportNavigation from './components/TransportNavigation';
 import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
+import RecoveryHistory from './components/RecoveryHistory';
+import PlaybackFailure from './components/PlaybackFailure';
+import { queueDragScrollDirection } from './queueDragScroll.js';
 import { probeYouTubeDuration } from './providerDurationProbe.js';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
@@ -330,7 +333,7 @@ function isStaffRole(role) {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
-function YediHubAppContent() {
+function YediHubAppContent({ onDiagnosticAccess }) {
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -359,6 +362,7 @@ function YediHubAppContent() {
   // Local simulated Twitch user session
   const [twitchAuth, setTwitchAuth] = useState({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false });
   const moderatorLogin = twitchAuth.authenticated && String(twitchAuth.username || '').toLowerCase() === 'paim_beach_pete';
+  useEffect(() => { onDiagnosticAccess(moderatorLogin); }, [moderatorLogin, onDiagnosticAccess]);
   const statisticsAccess = twitchAuth.authenticated && ALLOWED_TWITCH_USERS.has(String(twitchAuth.username || '').toLowerCase());
   const [twitchAuthLoading, setTwitchAuthLoading] = useState(true);
   const [firebaseLoginToken, setFirebaseLoginToken] = useState('');
@@ -479,6 +483,25 @@ function YediHubAppContent() {
   const [mediaTypeFilter, setMediaTypeFilter] = useState('All');
   const [draggedQueueId, setDraggedQueueId] = useState('');
   const [dragOverQueueId, setDragOverQueueId] = useState('');
+  useEffect(() => {
+    if (!draggedQueueId) return;
+    let y = null;
+    const track = event => { y = event.clientY; };
+    const scroll = () => {
+      if (y !== null && !document.hidden) {
+        const feed = document.querySelector('.gachi-queue-feed');
+        const bounds = feed?.getBoundingClientRect();
+        const nested = feed && feed.scrollHeight > feed.clientHeight + 2;
+        const visibleTop = bounds ? Math.max(0, bounds.top) : 0;
+        const visibleBottom = bounds ? Math.min(window.innerHeight, bounds.bottom) : 0;
+        const inside = nested && y >= visibleTop && y <= visibleBottom;
+        const direction = inside ? queueDragScrollDirection(y - visibleTop, visibleBottom - visibleTop, 80) : queueDragScrollDirection(y, window.innerHeight);
+        if (direction) (inside ? feed : window).scrollBy(0, direction * 15);
+      }
+    };
+    window.addEventListener('dragover', track); const scrollTimer = window.setInterval(scroll, 32);
+    return () => { window.removeEventListener('dragover', track); window.clearInterval(scrollTimer); };
+  }, [draggedQueueId]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('priority'); // 'priority' | 'upvotes' | 'newest'
 
@@ -515,12 +538,15 @@ function YediHubAppContent() {
   // Track observed player state separately from the viewer's deliberate preference.
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
+  const [playerReload, setPlayerReload] = useState(0);
+  const [playerIssue, setPlayerIssue] = useState(null);
+  const youtubeRecoveryRef = useRef({ generation: '', attempts: 0 });
   const tiktokRecoveryRef = useRef({ generation: '', attempts: 0 });
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
   const [chatReplyIssue, setChatReplyIssue] = useState('');
   const [webhookHealth, setWebhookHealth] = useState({
     loading: true, active: false, code: 'checking', status: '', lastWebhookAt: 0,
-    lastWebhookResult: 'none', lastWebhookQueued: 0, receiptCode: 'unknown',
+    lastWebhookResult: 'none', lastWebhookQueued: 0, receiptCode: 'unknown', lastQueueWriteAt: 0, lastReplySentAt: 0,
   });
   const [webhookSetupBusy, setWebhookSetupBusy] = useState(false);
   const webhookAutoSetupAttemptedRef = useRef(false);
@@ -602,6 +628,7 @@ function YediHubAppContent() {
   const addToast = (message, type = 'info') => {
     // Seamless mode: suppress routine informational/success popups.
     if (type === 'info' || type === 'success') return;
+    if (!moderatorLogin && /cloud|firebase|firestore|sync|oauth|webhook|quota|token|postgres|database|backend|server_error|playback_error/i.test(String(message))) message = 'That action could not finish. Please try again.';
     const id = 'toast-' + Date.now() + Math.random().toString(36).slice(2, 6);
     setToasts((prev) => [...prev.slice(-3), { id, message, type }]);
     setTimeout(() => {
@@ -1948,6 +1975,7 @@ function YediHubAppContent() {
   }, [videos]);
 
   const currentPlaybackGeneration = getPlaybackGeneration(currentVideo);
+  useEffect(() => { setPlayerIssue(null); }, [currentPlaybackGeneration]);
 
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
     const id = String(videoId || '');
@@ -2008,7 +2036,7 @@ function YediHubAppContent() {
   // changes src when pause intent changes and makes React reload the embed mid-video.
   const youtubePlayerSrc = useMemo(() => currentVideo?.platform === 'youtube'
     ? 'https://www.youtube.com/embed/' + encodeURIComponent(currentVideo.videoId) + '?autoplay=' + (getPlaybackIntentForVideo(currentVideo.id).paused ? 0 : 1) + '&controls=1&playsinline=1&rel=0&enablejsapi=1&origin=' + encodeURIComponent(window.location.origin)
-    : '', [currentPlaybackGeneration, currentVideo?.videoId, channelRoom]);
+    : '', [currentPlaybackGeneration, currentVideo?.videoId, channelRoom, playerReload]);
   const tiktokPlayerSrc = useMemo(() => (
     currentVideo?.platform === 'tiktok'
       ? buildTikTokPlayerUrl(currentVideo.videoId, {
@@ -2426,6 +2454,8 @@ function YediHubAppContent() {
           lastWebhookAt: Number(data.lastWebhookAt) || 0,
           lastWebhookResult: String(data.lastWebhookResult || 'none'),
           lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+          lastQueueWriteAt: Number(data.lastQueueWriteAt) || 0,
+          lastReplySentAt: Number(data.lastReplySentAt) || 0,
           receiptCode: String(data.receiptCode || 'unknown'),
         });
       } catch {
@@ -2455,6 +2485,8 @@ function YediHubAppContent() {
         lastWebhookAt: Number(data.lastWebhookAt) || previous.lastWebhookAt,
         lastWebhookResult: String(data.lastWebhookResult || previous.lastWebhookResult),
         lastWebhookQueued: Number(data.lastWebhookQueued) || 0,
+        lastQueueWriteAt: Number(data.lastQueueWriteAt) || 0,
+        lastReplySentAt: Number(data.lastReplySentAt) || 0,
         receiptCode: String(data.receiptCode || previous.receiptCode || 'unknown'),
       }));
       if (!automatic || !response.ok) {
@@ -3136,6 +3168,8 @@ function YediHubAppContent() {
     const playerWindow = iframe.contentWindow;
     if (!playerWindow) return undefined;
     let cancelled = false;
+    const errorRetryTimers = [];
+    if (youtubeRecoveryRef.current.generation !== getPlaybackGeneration(video)) youtubeRecoveryRef.current = { generation: getPlaybackGeneration(video), attempts: 0 };
     let hasStarted = false;
     let volumeAcknowledged = false;
     const completion = createPlaybackCompletionTracker();
@@ -3261,6 +3295,12 @@ function YediHubAppContent() {
       if (payload.event === 'onError') {
         console.warn('YouTube embed reported playback error:', payload.info);
         if (currentVideoRef.current?.id === video.id) {
+          if (Number(payload.info) === 5 && !hasStarted && youtubeRecoveryRef.current.attempts < 1) {
+            youtubeRecoveryRef.current.attempts++;
+            errorRetryTimers.push(window.setTimeout(() => { if (!cancelled && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) setPlayerReload(value => value + 1); }, 500));
+            return;
+          }
+          setPlayerIssue({ generation: getPlaybackGeneration(video) });
           addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
         }
       }
@@ -3272,10 +3312,11 @@ function YediHubAppContent() {
     return () => {
       cancelled = true;
       retryTimers.forEach((timer) => window.clearTimeout(timer));
+      errorRetryTimers.forEach(timer => window.clearTimeout(timer));
       window.removeEventListener('message', handleMessage);
       if (youtubePlayerRef.current === proxy) youtubePlayerRef.current = null;
     };
-  }, [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, twitchAuth.authenticated, twitchAuthLoading]);
+  }, [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, twitchAuth.authenticated, twitchAuthLoading, playerReload]);
 
   // TikTok uses one keyed official player iframe per queue item. A new request gets a fresh
   // window reference and listener. Its first muted report can be an autoplay/browser state,
@@ -3460,13 +3501,14 @@ function YediHubAppContent() {
         } else {
           if (['SERVER_ERROR', 'PLAYBACK_ERROR'].includes(String(errorType)) && recoverStartup()) return;
           setTikTokPlayerState({ requestId: video.id, status: 'error' });
+          setPlayerIssue({ generation });
           addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
         }
       }
     };
     window.addEventListener('message', handleTikTokMessage);
     retryTimers.push(window.setTimeout(() => {
-      if (!cancelled && !providerReady && !recoverStartup()) setTikTokPlayerState({ requestId: video.id, status: 'error' });
+      if (!cancelled && !providerReady && !recoverStartup()) { setTikTokPlayerState({ requestId: video.id, status: 'error' }); setPlayerIssue({ generation }); }
     }, 12000));
     return () => {
       cancelled = true;
@@ -3857,7 +3899,7 @@ function YediHubAppContent() {
             <div className="mt-3 flex items-center justify-between text-sm"><span className="font-bold text-white">2o3a</span><span className="rounded-lg border border-purple-400/20 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-200">STREAMER</span></div>
             <div className="mt-3 flex items-center justify-between text-sm"><span className="font-bold text-white">paim_beach_pete</span><span className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold text-cyan-200">MODERATOR</span></div>
           </div>
-          <p className="mt-5 text-[10px] leading-5 text-slate-500">Other accounts are denied server-side. Twitch OAuth and the Firebase server credential must be configured before deployment.</p>
+          <p className="mt-5 text-[10px] leading-5 text-slate-500">Other accounts cannot sign in. Access is limited to the channel team.</p>
         </div>
       </div>
     );
@@ -3901,7 +3943,7 @@ function YediHubAppContent() {
           </div>
 
           {/* Sync & Mode Badges */}
-          <button
+          {isModerator ? <button
             type="button"
             onClick={() => setConnectionDetailsExpanded((expanded) => !expanded)}
             title="Show connection details"
@@ -3918,7 +3960,7 @@ function YediHubAppContent() {
               Queue: {streamSettings.queueOpen ? <span className="text-emerald-400 font-semibold">Open</span> : <span className="text-rose-400 font-semibold">Closed</span>}
             </span>
             <ChevronDown className={`h-3 w-3 transition-transform ${connectionDetailsExpanded ? 'rotate-180' : ''}`} />
-          </button>
+          </button> : <span className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200">Requests {streamSettings.queueOpen ? 'open' : 'closed'}</span>}
 
 
           <div className="flex items-center gap-2">
@@ -3963,7 +4005,7 @@ function YediHubAppContent() {
                 </div>}
                 <button type="button" onClick={() => { setTopMenuOpen(false); setShowAuthModal(true); }} className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 text-xs font-black text-white">{twitchAuth.avatarLetter}</span>
-                  <span className="flex-1">Account and access <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Twitch sign-in and permissions</span></span>
+                  <span className="flex-1">{isModerator ? 'Account and access' : 'Account'}<span className="mt-0.5 block text-[10px] font-medium text-slate-500">{isModerator ? 'Twitch sign-in and permissions' : 'Your signed-in profile'}</span></span>
                 </button>
                 <div className="my-2 border-t border-white/10" />
                 {isModerator && <div className="rounded-xl px-3 py-2">
@@ -4064,11 +4106,12 @@ function YediHubAppContent() {
         {isModerator && connectionDetailsExpanded && (
           <div className="mt-2 grid w-full grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-[#0b0e15] p-3 text-[10px] sm:grid-cols-2 xl:grid-cols-4">
             <div className="min-w-0">
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Cloud sync</div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Queue storage</div>
               <div className={cloudSynced ? 'text-emerald-300' : syncIndicatorLabel === 'Cloud issue' ? 'text-rose-200' : 'text-amber-200'}>{syncStatusText}</div>
+              <div className="mt-1 text-slate-400">Last saved chat request: {webhookHealth.lastQueueWriteAt ? new Date(webhookHealth.lastQueueWriteAt).toLocaleString() : 'Not confirmed yet'}</div>
             </div>
             <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch server webhook</div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Twitch request intake</div>
               <div className={webhookHealth.receiptCode === 'firestore_quota_exceeded' ? 'text-rose-200' : webhookHealth.active ? 'text-emerald-300' : 'text-amber-200'}>
                 {webhookHealth.receiptCode === 'firestore_quota_exceeded' ? 'Firestore quota exceeded; requests cannot be saved' : webhookHealth.active ? 'Twitch listening (delivery not guaranteed)' : webhookHealth.code}
                 {' · '}Last delivery: {webhookHealth.lastWebhookAt
@@ -4076,7 +4119,8 @@ function YediHubAppContent() {
               </div>
             </div>
             <div>
-              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat reply bot</div>
+              <div className="mb-1 font-black uppercase tracking-wider text-slate-500">Chat replies (independent of intake)</div>
+              <div className="text-slate-300">Last server reply confirmed: {webhookHealth.lastReplySentAt ? new Date(webhookHealth.lastReplySentAt).toLocaleString() : 'Not recorded yet'}</div>
               <div className={chatBotSession.connected ? 'text-emerald-300' : 'text-slate-300'}>{chatBotSession.loading ? 'Checking connection…' : chatBotSession.connected ? 'Online · @gachibot69 (optional replies)' : 'Optional replies off · video requests are independent'}</div>
             </div>
             <div>
@@ -4141,6 +4185,7 @@ function YediHubAppContent() {
             onRefreshStats={handleRefreshStats}
             isStaff={isStaff}
             activitySyncStatus={activitySyncStatus}
+            showTechnicalStatus={isModerator}
             activitySyncTone={activitySyncTone}
             activitySyncError={activitySyncError}
             canRetryActivitySync={Boolean(twitchAuth.authenticated)}
@@ -4201,6 +4246,8 @@ function YediHubAppContent() {
                       : 'h-[62vh] min-h-[460px] max-h-[780px]'
                   }`}
                 >
+                  {playerIssue?.generation === currentPlaybackGeneration && <PlaybackFailure url={currentVideo.url} onSkip={() => handleSkipNext()}
+                    onRetry={() => { setPlayerIssue(null); if (currentVideo.platform === 'tiktok') { tiktokRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' }); setTikTokFrameReload(value => value + 1); } else { youtubeRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setPlayerReload(value => value + 1); } }} />}
                   {isVerticalMedia(currentVideo) && (
                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
                       <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
@@ -4214,7 +4261,7 @@ function YediHubAppContent() {
                       ? "gachi-portrait-shell relative z-10"
                       : "gachi-landscape-shell"}>
                     <iframe
-                      key={`youtube-${currentPlaybackGeneration}-${currentVideo.videoId}`}
+                      key={`youtube-${currentPlaybackGeneration}-${currentVideo.videoId}-${playerReload}`}
                       ref={youtubeIframeRef}
                       className="absolute inset-0 h-full w-full border-0"
                       src={youtubePlayerSrc}
@@ -4315,13 +4362,14 @@ function YediHubAppContent() {
                     </div>
                   ) : currentVideo.platform === 'twitch' && currentVideo.videoId ? (
                     <TwitchClipPlayer
-                      key={`twitch-${currentPlaybackGeneration}-${currentVideo.videoId}`}
+                      key={`twitch-${currentPlaybackGeneration}-${currentVideo.videoId}-${playerReload}`}
                       video={currentVideo}
                       storageKey={roomStorageKey(channelRoom, 'twitch-playback-v1-' + currentPlaybackGeneration)}
                       volume={localVolume}
                       muted={localMuted}
                       onAudioChange={(volume, muted) => { setLocalVolume(volume); setLocalMuted(muted); }}
                       onEnded={(id) => handleMediaEndedRef.current?.(id)}
+                      onFailure={() => setPlayerIssue({ generation: currentPlaybackGeneration })}
                     />
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
@@ -4469,6 +4517,7 @@ function YediHubAppContent() {
                     dragOverQueueId={dragOverQueueId}
                     setDragOverQueueId={setDragOverQueueId}
                     handleDropReorder={handleDropReorder}
+                  handleMoveNext={videoId => { const first = videosRef.current.filter(video => video.status === 'queue').sort(compareQueueOrder)[0]; if (first) handleDropReorder(videoId, first.id); }}
                     handlePlayNow={handlePlayNow}
                     handleCategoryChange={handleCategoryChange}
                     handleUpvote={handleUpvote}
@@ -4639,7 +4688,7 @@ function YediHubAppContent() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-300"><Shield className="w-5 h-5" /></div>
-                <div><h3 className="text-base font-bold text-white">Twitch authentication</h3><p className="text-xs text-slate-400">Only 2o3a and paim_beach_pete may log in.</p></div>
+                <div><h3 className="text-base font-bold text-white">{isModerator ? 'Twitch authentication' : 'Your account'}</h3><p className="text-xs text-slate-400">Streaming room: 2o3a</p></div>
               </div>
               <button onClick={() => setShowAuthModal(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
@@ -4647,14 +4696,14 @@ function YediHubAppContent() {
               <div className="text-slate-400 text-xs uppercase font-bold">Current session</div>
               <div className="text-white font-bold">{twitchAuth.displayName}</div>
               <div className="text-purple-300 capitalize">{twitchAuth.role}{twitchAuth.authenticated ? ' · Twitch verified' : ' · public viewer'}</div>
-              <p className="text-xs text-slate-400">Private room: twitch.tv/2o3a. Roles are assigned to the two allowlisted accounts on the server.</p>
+              {isModerator && <p className="text-xs text-slate-400">Private room: twitch.tv/2o3a. Roles are assigned to the two allowlisted accounts on the server.</p>}
             </div>
             {!twitchAuth.authenticated ? (
               <button disabled={twitchAuthLoading} onClick={() => { window.location.href = '/api/twitch/login'; }} className="w-full px-5 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white text-sm font-bold"><LogIn className="inline w-4 h-4 mr-2" />Continue with Twitch</button>
             ) : (
               <button onClick={async () => { authorizedLoginRef.current = ''; setFirebaseLoginToken(''); if (auth) { try { await signOut(auth); } catch { /* already signed out */ } } await fetch('/api/twitch/logout', { method: 'POST', credentials: 'same-origin' }); setTwitchAuth({ username: '', displayName: 'Signed out', role: 'viewer', color: '#a970ff', avatarLetter: 'Y', authenticated: false }); setShowAuthModal(false); }} className="w-full px-5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold"><LogOut className="inline w-4 h-4 mr-2" />Log out of Twitch</button>
             )}
-            <p className="text-[11px] text-amber-200/80">Allowlist: <strong>2o3a</strong> (streamer) and <strong>paim_beach_pete</strong> (moderator). All other Twitch accounts are denied on the server. Twitch OAuth and server secrets must be configured.</p>
+            {isModerator && <p className="text-[11px] text-amber-200/80">Allowlist: <strong>2o3a</strong> (streamer) and <strong>paim_beach_pete</strong> (moderator). All other Twitch accounts are denied on the server.</p>}
           </div>
         </div>
       )}
@@ -4685,6 +4734,7 @@ function YediHubAppContent() {
               </button>
             </div>
 
+            <RecoveryHistory onRestored={() => getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'))} />
             <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
                 <div className="font-bold text-amber-300">Unfiltered media requests</div>
@@ -4797,7 +4847,7 @@ function YediHubAppContent() {
     </div>
   );
 }
-class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasError: boolean; errorMessage: string; componentStack: string }> {
+export class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{ showDiagnostics?: boolean }>, { hasError: boolean; errorMessage: string; componentStack: string }> {
   state = { hasError: false, errorMessage: '', componentStack: '' };
 
   static getDerivedStateFromError(error: Error): { hasError: true; errorMessage: string; componentStack: string } {
@@ -4814,13 +4864,13 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
       return (
         <main className="min-h-screen bg-[#090a0f] text-white grid place-items-center p-6">
           <section className="max-w-2xl w-full rounded-2xl border border-rose-500/30 bg-[#121622] p-6 space-y-4">
-            <h1 className="text-lg font-black">whale cum hit a rendering error</h1>
-            <p className="text-sm text-slate-300">The dashboard stopped rendering. The exact error is shown below to make any remaining cause diagnosable.</p>
-            <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
+            <h1 className="text-lg font-black">The dashboard could not open</h1>
+            <p className="text-sm text-slate-300">Try again or reload the dashboard. Your saved queue will stay intact.</p>
+            {this.props.showDiagnostics && <div className="rounded-xl border border-slate-700 bg-black/30 p-3">
               <div className="text-xs font-bold uppercase tracking-wide text-rose-300">Error</div>
               <pre className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-200">{this.state.errorMessage}</pre>
               {this.state.componentStack && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-slate-300">Component stack</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] text-slate-400">{this.state.componentStack}</pre></details>}
-            </div>
+            </div>}
             <div className="flex flex-wrap gap-3">
               <button type="button" onClick={() => this.setState({ hasError: false, errorMessage: '', componentStack: '' })} className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold">Try again</button>
               <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold">Reload dashboard</button>
@@ -4834,8 +4884,9 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
 }
 
 export default function YediHubApp() {
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   if (window.location.pathname.replace(/\/+$/, '') === '/queue') {
     return <Suspense fallback={<main className="min-h-screen bg-[#090a0f] p-8 text-slate-200">Loading queue…</main>}><PublicQueue /></Suspense>;
   }
-  return <YediHubAppErrorBoundary><YediHubAppContent /></YediHubAppErrorBoundary>;
+  return <YediHubAppErrorBoundary showDiagnostics={showDiagnostics}><YediHubAppContent onDiagnosticAccess={setShowDiagnostics} /></YediHubAppErrorBoundary>;
 }

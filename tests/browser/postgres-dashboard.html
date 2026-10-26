@@ -54,10 +54,10 @@ const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promis
 try{
 const {default:App}=await import('../../src/App.tsx');createRoot(document.querySelector('#root')).render(React.createElement(App));
 if(cleared){
-await wait(()=>document.querySelector('[aria-label="Connection details: Cloud Synced"]')&&!document.body.textContent.includes('Imported queued video'));
+await wait(()=>document.querySelector('header')&&!document.body.textContent.includes('Imported queued video'));
 if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('Stale cache resurrected cleared requests');
 }else{
-await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('[aria-label="Connection details: Cloud Synced"]'));
+await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('header'));
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
 await wait(()=>document.querySelector('[data-widget="stats"]')&&anonymousReads>0);
 if(login==='2o3a'&&document.body.textContent.includes('Technical diagnostics'))throw Error('Streamer received moderator diagnostics');

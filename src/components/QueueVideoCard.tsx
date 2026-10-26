@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2, GripVertical, SkipForward } from 'lucide-react';
 import { CATEGORY_META, getVideoCategory, getVideoMediaType } from '../mediaUtils.js';
 import { getDurationEstimate, getThumbnailDurationLabel } from '../queueLogic.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.js';
@@ -24,6 +24,7 @@ export default function QueueVideoCard({
   normalizeTwitchLogin,
   syncDeleteVideo,
   handleMoveOrder,
+  handleMoveNext,
   handleTogglePin,
   handleMoveToWatchLater,
   handleRequeue,
@@ -73,6 +74,7 @@ export default function QueueVideoCard({
                       }`}
                     >
                       {/* Left: Thumbnail + Metadata */}
+                      {isStaff && activeTab === 'queue' && video.status === 'queue' && <span title="Drag to reorder request" className="cursor-grab touch-none self-center text-slate-500 active:cursor-grabbing"><GripVertical className="h-5 w-5" aria-hidden="true" /></span>}
                       <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1 w-full">
                         {/* Order indicator */}
                         <div className="hidden sm:flex flex-col items-center justify-center w-7 text-center shrink-0">
@@ -222,6 +224,7 @@ export default function QueueVideoCard({
                               <>
                                 {video.status === 'queue' && (
                                   <>
+                                    <button type="button" onClick={() => handleMoveNext(video.id)} title="Move to next" aria-label={'Move to next: ' + video.title} className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1.5 text-xs text-slate-200"><SkipForward className="h-3.5 w-3.5" />Next up</button>
                                     <button
                                       onClick={() => handleMoveOrder(video.id, 'up')}
                                       className="p-1.5 rounded-lg bg-[#181e2e] hover:bg-slate-700 text-slate-300"

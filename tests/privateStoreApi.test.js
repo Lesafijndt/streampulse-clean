@@ -163,7 +163,7 @@ test('filtered bottom-to-top reorder preserves unchanged queue rows and history 
   const batch = writeBatch(browser);
   rows.forEach((video, i) => batch.set(doc(videos, video.id), { id: video.id, queueOrder: (i + 1) * 1000, channelRoom: '2o3a' }, { merge: true }));
   await batch.commit();
-  assert.equal(Object.keys(state().documents).length, 30);
+  assert.equal(Object.keys(state().documents).filter(path => path.includes('/queue_videos/')).length, 30);
   for (let i = 0; i < 30; i++) {
     const fresh = state().documents[prefix + 'queue_videos/v' + i];
     assert.equal(fresh.title, 'Video ' + i); assert.equal(fresh.status, i === 29 ? 'watched' : 'queue');

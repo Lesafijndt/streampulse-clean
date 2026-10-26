@@ -1,0 +1,2 @@
+import test from'node:test';import assert from'node:assert/strict';import{queueDragScrollDirection}from'../src/queueDragScroll.js';
+test('long-queue dragging scrolls at edges and stops through the central area',()=>{assert.equal(queueDragScrollDirection(20,800),-1);assert.equal(queueDragScrollDirection(780,800),1);assert.equal(queueDragScrollDirection(400,800),0);assert.equal(queueDragScrollDirection(NaN,800),0)});

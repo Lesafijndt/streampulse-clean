@@ -24,7 +24,7 @@ export function buildMediaMetadataPatch(original, current, metadata) {
   if (!current || original.url !== current.url || getPlaybackGeneration(original) !== getPlaybackGeneration(current)) return {};
   const patch = {};
   if (videoNeedsTitleLookup(current) && typeof metadata?.title === 'string' && !isGenericMediaTitle(metadata.title)) patch.title = metadata.title.trim();
-  if (typeof metadata?.thumbnailUrl === 'string' && /^https:\/\//i.test(metadata.thumbnailUrl)) patch.thumbnail = metadata.thumbnailUrl;
+  if (typeof metadata?.thumbnailUrl === 'string' && /^https:\/\//i.test(metadata.thumbnailUrl) && metadata.thumbnailUrl !== current.thumbnail) patch.thumbnail = metadata.thumbnailUrl;
   if (isValidMediaDuration(metadata?.durationSec) && videoNeedsDurationLookup(current)) {
     patch.durationSec = Math.round(Number(metadata.durationSec));
     patch.duration = formatMediaDuration(patch.durationSec);

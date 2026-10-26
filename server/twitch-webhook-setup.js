@@ -53,10 +53,16 @@ async function recentWebhookDelivery() {
       .collection('public').doc('data').collection('twitch_eventsub_receipts');
     const snapshot = await base.orderBy('receivedAt', 'desc').limit(1).get();
     const latest = snapshot.docs?.[0]?.data() || {};
+    const [writes, replies] = await Promise.all([
+      base.where('status', '==', 'queued').orderBy('receivedAt', 'desc').limit(1).get(),
+      base.where('replyDelivery', '==', 'sent').orderBy('receivedAt', 'desc').limit(1).get(),
+    ]);
     value = {
       lastWebhookAt: Number(latest.receivedAt) || 0,
       lastWebhookResult: String(latest.status || 'none').slice(0, 50),
       lastWebhookQueued: Number(latest.queued) || 0,
+      lastQueueWriteAt: Number(writes.docs?.[0]?.data()?.receivedAt) || 0,
+      lastReplySentAt: Number(replies.docs?.[0]?.data()?.receivedAt) || 0,
       receiptCode: 'ok',
     };
   } catch (error) {

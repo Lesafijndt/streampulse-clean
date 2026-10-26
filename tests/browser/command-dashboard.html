@@ -80,6 +80,8 @@ try{
   assert(replies[0]===packet.reply,'Explicit command reply preserved');
  }
  version++;document.dispatchEvent(new Event('visibilitychange'));await sleep(650);assert(claims.length===1,'Repeated snapshots must not replay commands');
+ const rootText=document.querySelector('#root').textContent;
+ if(login==='2o3a'){assert(!document.querySelector('[aria-label^="Connection details:"]'),'Streamer has no cloud connection badge');assert(!/Cloud synced|Network online|Retry activity sync|Queue storage|Recovery history/.test(rootText),'Technical status must not leak into streamer view');assert(rootText.includes('Stats & analytics'),'Streamer retains statistics');}else{assert(document.querySelector('[aria-label^="Connection details:"]'),'Moderator retains diagnostic control');}
  root.unmount();root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
  await sleep(650);assert(claims.length===1,'Session dedupe must survive remount');
  assert(!errors.length,errors.join('; '));

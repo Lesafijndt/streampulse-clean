@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { extractChatRequests, getEventText, persistChatEvent } from './webhook-queue.js';
 import { getVerifiedFirestore } from './firebase-guard.js';
 import { parseServerCommand, persistChatCommand } from './chat-commands.js';
-import { lookupQueueMetadata } from './queue-metadata.js';
+import { createRequestMetadataLookup, enrichRequestedMedia } from './request-metadata-retry.js';
 
 export const TOPIC = 'twitch-viewer-requests-v2';
 export const REGION = 'iad1';
@@ -58,13 +58,18 @@ export async function consumeRequest(payload, dependencies = {}) {
       console.info('twitch_chat_command', { status: result.status, command: result.command, duplicate: result.duplicate === true, replyDelivery: result.replyDelivery || 'none' });
       return result;
     }
-    return await persistChatEvent(db, payload, { lookupMetadata: dependencies.lookupMetadata === undefined ? lookupQueueMetadata : dependencies.lookupMetadata });
+    const lookups = new Map();
+    const result = await persistChatEvent(db, payload, { lookupMetadata: dependencies.lookupMetadata === undefined ? createRequestMetadataLookup(db, lookups, dependencies.metadataProvider) : dependencies.lookupMetadata });
+    if (lookups.size) await enrichRequestedMedia(db, lookups);
+    return result;
   } catch (error) {
-    console.warn('twitch_intake_retry', { code: String(error?.code || 'storage_unavailable').slice(0, 60) });
+    if (error?.code === 'metadata_retry_pending') console.info('request_saved_metadata_retry_scheduled');
+    else console.warn('twitch_intake_retry', { code: String(error?.code || 'storage_unavailable').slice(0, 60) });
     throw error;
   }
 }
 export function retryDelay(error, metadata = {}) {
+  if (error?.code === 'metadata_retry_pending') return { afterSeconds: Math.min(43200, Math.max(30, Number(error.afterSeconds) || 60)) };
   const quota = /RESOURCE_EXHAUSTED|quota|\b8\b/i.test(String(error?.code || '') + ' ' + String(error?.message || ''));
   return { afterSeconds: quota ? 900 : Math.min(900, 30 * 2 ** Math.min(5, Math.max(0, (metadata.deliveryCount || 1) - 1))) };
 }

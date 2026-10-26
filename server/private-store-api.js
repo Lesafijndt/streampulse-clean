@@ -4,6 +4,8 @@ import { normalizeActivityEvent } from '../src/activityLog.js';
 import { buildMediaMetadataPatch } from '../src/mediaMetadata.js';
 import { getPlaybackGeneration } from '../src/playerBridge.js';
 import { buildShuffleQueueTransition, buildUnshuffleQueueTransition, queueRequestKey } from '../src/queueShuffle.js';
+import { buildQueueRecovery, recordQueueRecovery, undoQueueRecovery } from './queue-recovery.js';
+import { metadataCachePath, sanitizeCachedMetadata } from './cached-media-metadata.js';
 
 const STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const SAFE_ID = /^[A-Za-z0-9_-]{1,180}$/;
@@ -16,6 +18,14 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
   try {
     const db = dependencies.db || await getPostgresStore(namespace);
     if (req.method === 'GET') {
+      if (req.query?.view === 'recovery') {
+        if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
+        const state = await db.readState({ collections: [prefix + 'queue_recovery', prefix + 'queue_actions'] });
+        const snapshots = Object.entries(state.documents).filter(([path]) => path.startsWith(prefix + 'queue_recovery/')).map(([,row]) =>
+          ({ id: row.id, at: row.at, actor: row.actor, action: row.action, affected: row.affected, restoredAt: row.restoredAt || null }));
+        const actions = Object.entries(state.documents).filter(([path]) => path.startsWith(prefix + 'queue_actions/')).map(([,row]) => row);
+        return res.status(200).json({ snapshots: snapshots.sort((a,b) => b.at-a.at), actions: actions.sort((a,b) => b.at-a.at) });
+      }
       const since = Number(req.query?.since ?? -1);
       const version = await db.getVersion();
       if (since === version) return res.status(200).json({ version, unchanged: true });
@@ -51,9 +61,14 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (body?.operation === 'undo-snapshot') {
+      if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
+      if (!SAFE_ID.test(body.id || '') || body.confirmation !== 'RESTORE') throw fail('restore_confirmation_required');
+      return res.status(200).json({ ok: true, ...await undoQueueRecovery(db, prefix, body.id, identity.login) });
+    }
     if (['shuffle', 'unshuffle'].includes(body?.operation)) {
       if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) throw fail('version_required');
-      const state = await db.readState({ collections: [prefix + 'queue_videos', prefix + 'room_settings'] });
+      const state = await db.readState({ collections: [prefix + 'queue_videos', prefix + 'room_settings', prefix + 'queue_recovery', prefix + 'queue_actions'] });
       if (state.version !== body.expectedVersion) throw fail('conflict', 409);
       const videos = Object.entries(state.documents).flatMap(([path, data]) => {
         if (!path.startsWith(prefix + 'queue_videos/') || path.slice((prefix + 'queue_videos/').length).includes('/') || data?.channelRoom !== '2o3a') return [];
@@ -67,6 +82,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       const original = videos.filter(video => video.status === 'queue').sort((a, b) => Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0) || a.id.localeCompare(b.id)).map(queueRequestKey);
       operations.push({ type: 'set', path: settingsPath, merge: true, data: { channelRoom: '2o3a',
         queueShuffleOriginal: body.operation === 'unshuffle' ? [] : snapshot.length ? snapshot : original } });
+      operations.push(...buildQueueRecovery(state.documents, operations, prefix, { actor: identity.login, action: body.operation === 'shuffle' ? 'Shuffle queue' : 'Restore queue order' }));
       const result = await db.commitOperations(operations, { expectedVersion: state.version });
       return res.status(200).json({ ok: true, version: result.version });
     }
@@ -79,7 +95,12 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
         const patch = buildMediaMetadataPatch(row, row, { title: body.patch.title, thumbnailUrl: body.patch.thumbnail,
           durationSec: body.patch.durationSec, durationProvider: body.patch.durationProvider });
         if (!Object.keys(patch).length) return false;
-        tx.update(ref, patch);return true;
+        const cacheRef = patch.durationSec ? db.doc(metadataCachePath(row.url, namespace)) : null;
+        const cached = cacheRef ? (await tx.get(cacheRef)).data() : null;
+        tx.update(ref, patch);
+        if (cacheRef) tx.set(cacheRef, { metadata: sanitizeCachedMetadata({ title: patch.title || cached?.metadata?.title, thumbnailUrl: patch.thumbnail || cached?.metadata?.thumbnailUrl, durationSec: patch.durationSec, durationProvider: patch.durationProvider }),
+          complete: true, attempts: 0, nextAt: 0, updatedAt: Date.now(), expiresAt: Date.now() + 7 * 86400000 });
+        return true;
       });
       return res.status(200).json({ ok: true, applied });
     }
@@ -118,6 +139,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       // Prevent an old browser importing deleted rows after an intentional reset.
       if (['queue', 'history', 'all'].includes(body.scope)) operations.push({ type: 'set',
         path: prefix + 'system_diagnostics/legacy-browser-import', data: { importedAt: now, resetBy: identity.login } });
+      operations.push(...buildQueueRecovery(state.documents, operations, prefix, { actor: identity.login, action: 'Reset ' + body.scope }));
       await db.commitOperations(operations, { expectedVersion: state.version });
       return res.status(200).json({ ok: true, version: state.version + 1, resetAt: now,
         statisticsResetAt: resetStatistics ? now : Number(settings.statisticsResetAt || 0) });
@@ -185,6 +207,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
           if (op.path.includes('/room_settings/') && Boolean(data.streamSettings?.queueOpen) !== Boolean(expected.queueOpen)) throw fail('conflict', 409);
         }
       }
+      await recordQueueRecovery(tx, db, prefix, operations, Object.fromEntries(refs.map((ref,index) => [ref.path, snapshots[index].data()])), { actor: identity.login });
       operations.forEach((op, index) => {
         if (op.type === 'delete') tx.delete(refs[index]);
         else if (op.type === 'set') tx.set(refs[index], op.data, { merge: op.merge === true });

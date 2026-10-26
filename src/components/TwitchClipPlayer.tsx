@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { parseTwitchClipPlayback, hasTwitchClipEnded } from '../twitchPlayback.js';
 import { getPlaybackGeneration } from '../playerBridge.js';
 
@@ -24,19 +24,20 @@ type Props = {
   muted: boolean;
   onAudioChange: (volume: number, muted: boolean) => void;
   onEnded: (id: string) => void;
+  onFailure?: () => void;
 };
-export default function TwitchClipPlayer({ video, storageKey, volume, muted, onAudioChange, onEnded }: Props) {
+export default function TwitchClipPlayer({ video, storageKey, volume, muted, onAudioChange, onEnded, onFailure }: Props) {
   const generation = getPlaybackGeneration(video);
   const key = storageKey || 'twitch-playback-v1-' + generation;
   const host = useRef<HTMLDivElement>(null);
   const native = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<any>(null);
-  const callbacks = useRef({ onEnded, onAudioChange, volume, muted });
-  callbacks.current = { onEnded, onAudioChange, volume, muted };
+  const callbacks = useRef({ onEnded, onAudioChange, volume, muted, onFailure });
+  callbacks.current = { onEnded, onAudioChange, volume, muted, onFailure };
   const intent = useRef({ paused: false, seconds: 0 });
   const completed = useRef(false);
   const started = useRef(false);
-  const fallbackAudio = useMemo(() => muted, [generation]);
+
   const [mode, setMode] = useState('loading');
   const [mediaUrl, setMediaUrl] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -137,7 +138,7 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
           if (time >= start && started.current) { intent.current.seconds = time - start;persist(); }
           if (started.current) callbacks.current.onAudioChange(Math.round(player.getVolume() * 100), player.getMuted());
         }, 250);
-      } catch { if (!disposed) setMode('clip'); }
+      } catch { if (!disposed) { setMode('error'); callbacks.current.onFailure?.(); } }
     })();
     return () => {
       disposed = true;controller.abort();window.clearInterval(timer);
@@ -178,15 +179,15 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
       onTimeUpdate={() => { if (native.current && started.current) { intent.current.seconds = native.current.currentTime;persist(); } }}
       onVolumeChange={() => { if (native.current && started.current) callbacks.current.onAudioChange(Math.round(native.current.volume * 100), native.current.muted); }}
       onEnded={finish}
-      onError={() => { if (!attempt) setAttempt(1);else setMode('clip'); }} />}
-    {mode === 'clip' && <iframe className="min-h-0 w-full flex-1" src={`https://clips.twitch.tv/embed?clip=${encodeURIComponent(video.videoId)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=${!intent.current.paused}&muted=${fallbackAudio}`} title={video.title} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen />}
+      onError={() => { if (!attempt) setAttempt(1);else { setMode('error'); callbacks.current.onFailure?.(); } }} />}
+    {mode === 'error' && <p className="m-auto p-4 text-sm text-slate-300">This clip could not start. <button type="button" onClick={() => setAttempt(value => value + 1)} className="ml-2 underline">Retry clip</button></p>}
     <div className="relative flex shrink-0 flex-wrap items-center gap-3 bg-slate-950 p-2 text-xs text-slate-200">
       {mode === 'vod' || mode === 'direct' ? <>
         <button type="button" onClick={toggle} className="rounded bg-purple-700 px-3 py-1.5">{segmentCompleted ? 'Replay clip' : paused || blocked ? 'Play clip' : 'Pause clip'}</button>
         <button type="button" aria-label={muted ? 'Unmute Twitch' : 'Mute Twitch'} onClick={() => onAudioChange(volume, !muted)}>{muted ? 'Unmute' : 'Mute'}</button>
         <label className="flex items-center gap-2">Volume {volume}%<input type="range" aria-label="Twitch volume" min="0" max="100" value={volume} onChange={event => onAudioChange(Number(event.target.value), muted)} className="w-24" /></label>
         {blocked && <span role="status">Press Play clip to allow playback with sound.</span>}
-      </> : mode === 'clip' ? <span role="status">Controllable playback unavailable. Use Twitch’s controls and Next when finished; automatic advance and saved pause/volume are unavailable.</span> : null}
+      </> : null}
     </div>
   </div>;
 }

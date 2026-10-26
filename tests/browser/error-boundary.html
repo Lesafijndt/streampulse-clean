@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><div id="root"></div><pre id="result">Running</pre><script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import{YediHubAppErrorBoundary}from'../../src/App.tsx';
+const showDiagnostics=new URLSearchParams(location.search).get('role')==='moderator';console.error=()=>{};
+function Broken(){throw Error('INTERNAL_DIAGNOSTIC_MARKER')}
+const root=createRoot(document.querySelector('#root'));root.render(React.createElement(YediHubAppErrorBoundary,{showDiagnostics},React.createElement(Broken)));
+setTimeout(()=>{try{const text=document.querySelector('#root').textContent;if(!text.includes('Reload dashboard'))throw Error('Recovery action missing');if(text.includes('INTERNAL_DIAGNOSTIC_MARKER')!==showDiagnostics)throw Error('Diagnostics leaked across role');document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: crash recovery works; raw diagnostics visible only to moderator';}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack}},200);
+</script>

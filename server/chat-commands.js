@@ -4,6 +4,7 @@ import { buildNextTrackTransition, getDurationEstimate } from '../src/queueLogic
 import { getQueueNamespace } from './firebase-guard.js';
 import { sendCommandReply, chunkCommandReply } from './command-reply.js';
 import { createActivityEvent } from '../src/activityLog.js';
+import { recordQueueRecovery } from './queue-recovery.js';
 
 export function parseServerCommand(event) {
   const incoming = parseChatNotification({ metadata: { message_type: 'notification' },
@@ -66,7 +67,11 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
       changed = true;
     } else if (command.type === 'remove') {
       const own = queue.filter(row => row.requestedBy?.toLowerCase() === command.login).sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))[0];
-      if (own) { tx.delete(db.doc(prefix + 'queue_videos/' + own.id));activity('request_removed', own);changed = true; }
+      if (own) {
+        const path = prefix + 'queue_videos/' + own.id;
+        await recordQueueRecovery(tx, db, prefix, [{ type: 'delete', path }], { [path]: own }, { actor: command.login, action: 'Chat request removed' });
+        tx.delete(db.doc(path));activity('request_removed', own);changed = true;
+      }
       reply = `@${command.login} ${own ? 'Removed your latest waiting request.' : 'No waiting request to remove.'}`;
     } else if (command.type === 'vote') {
       const target = queue[command.position - 1];

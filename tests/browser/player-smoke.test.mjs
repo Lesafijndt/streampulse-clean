@@ -117,3 +117,8 @@ test('TikTok startup crashes recover twice without skipping or overriding pause'
 const html=renderInChrome(baseUrl+'/tests/browser/tiktok-recovery-dashboard.html?provider=tiktok');
 assert.match(html,/data-test-status="pass"/,html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));
 });
+
+test('failed playback offers Retry/Open original/Skip without losing the request',()=>{const html=renderInChrome(baseUrl+'/tests/browser/failure-actions-dashboard.html?provider=youtube');assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));});
+for(const role of ['streamer','moderator'])test(role+' queue navigation and private recovery controls preserve playback',()=>{const html=renderInChrome(baseUrl+'/tests/browser/queue-controls-dashboard.html?provider=youtube&role='+role);assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));});
+
+for(const role of ['streamer','moderator'])test(role+' crash recovery protects raw diagnostics',()=>{const html=renderInChrome(baseUrl+'/tests/browser/error-boundary.html?role='+role);assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));});
