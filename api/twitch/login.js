@@ -1,3 +1,4 @@
+import { requestRedirectUri } from '../../server/app-origin.js';
 import { randomBytes } from 'node:crypto';
 import { obtainSession } from '../../server/chat-subscribe.js';
 
@@ -25,8 +26,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!clientId) return res.status(500).send('Twitch OAuth is not configured: set TWITCH_CLIENT_ID in Vercel.');
-  const origin = process.env.TWITCH_APP_URL || `https://${req.headers.host}`;
-  const redirectUri = process.env.TWITCH_REDIRECT_URI || `${origin}/api/twitch/callback`;
+  const redirectUri = requestRedirectUri(req);
   // This optional permission upgrade is available only to the already
   // verified moderator. The streamer signs in with ordinary profile scopes.
   const chatSetup = String(req.query?.chat_setup || '') === '1';

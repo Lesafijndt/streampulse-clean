@@ -1,3 +1,4 @@
+import { requestAppOrigin } from '../server/app-origin.js';
 import { normalizeActivityEvent } from '../src/activityLog.js';
 import { decodeServiceAccount } from '../server/firebase-guard.js';
 
@@ -137,7 +138,7 @@ export default async function handler(req, res) {
 
   let configuredOrigin = '';
   try {
-    configuredOrigin = new URL(process.env.TWITCH_APP_URL || `https://${req.headers.host}`).origin;
+    configuredOrigin = requestAppOrigin(req);
   } catch { return res.status(503).json({ error: 'The app origin is not configured.' }); }
   const requestOrigin = req.headers.origin;
   if ((requestOrigin && requestOrigin !== configuredOrigin) || (req.method === 'POST' && !requestOrigin)) {

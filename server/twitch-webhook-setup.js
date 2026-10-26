@@ -32,11 +32,12 @@ async function getBroadcasterId(headers) {
 }
 
 function expectedCallback() {
-  const origin = new URL(process.env.TWITCH_APP_URL || 'https://streampulse-clean.vercel.app').origin;
-  if (origin !== 'https://streampulse-clean.vercel.app') {
+  const callback = new URL(process.env.TWITCH_EVENTSUB_CALLBACK_URL || 'https://streampulse-clean.vercel.app' + CALLBACK_PATH);
+  const origin = callback.origin;
+  if (!['https://streampulse-clean.vercel.app', 'https://203a.vercel.app'].includes(origin) || callback.pathname + callback.search !== CALLBACK_PATH) {
     throw Object.assign(new Error('Only the production Twitch callback is supported'), { code: 'callback_origin_mismatch' });
   }
-  return origin + CALLBACK_PATH;
+  return callback.href;
 }
 
 let lastReceiptProbe = { at: 0, value: null };

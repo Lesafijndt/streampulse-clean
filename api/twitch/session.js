@@ -1,3 +1,4 @@
+import { requestAppOrigin } from '../../server/app-origin.js';
 import { sanitizePersonalPreferences } from '../../src/personalPreferences.js';
 import { decodeServiceAccount, getVerifiedFirestore, getQueueNamespace } from '../../server/firebase-guard.js';
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
@@ -79,7 +80,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST' && !preferencesAction && !storeAction) return res.status(405).json({ error: 'Method not allowed' });
   if (req.method === 'POST') {
     let allowedOrigin;
-    try { allowedOrigin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin; }
+    try { allowedOrigin = requestAppOrigin(req); }
     catch { return res.status(503).json({ code: 'origin_not_configured' }); }
     if (!req.headers.origin || req.headers.origin !== allowedOrigin) {
       return res.status(403).json({ code: 'origin_denied' });

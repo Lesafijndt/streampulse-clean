@@ -99,7 +99,7 @@ test('fallback chunks fill capacity without evicting earlier chunks and resume f
 });
 test('!queue points viewers to the public queue',async()=>{
   const replies=[];await persistChatCommand(store(),{event:event('!queue'),messageId:'queue-link'},{sendReply:async message=>{replies.push(message);return{sent:true}}});
-  assert.ok(replies[0].includes('https://streampulse-clean.vercel.app/queue'));
+  assert.ok(replies[0].includes('https://203a.vercel.app/queue'));
 });
 test('reply splitting preserves Unicode content and sender rejects oversize instead of truncating',async()=>{
   const text='\u{1F600}'.repeat(1100);const chunks=chunkCommandReply('@viewer '+text,'@viewer ');

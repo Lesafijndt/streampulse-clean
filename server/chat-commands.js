@@ -89,7 +89,7 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
         changed = true;reply = `@${command.login} +1 vote: ${title(target)}.`;
       }
     } else if (command.type === 'queue') {
-      reply = `@${command.login} ${playing ? 'Now: ' + title(playing) : 'Nothing playing'} | ${queue.length} waiting. Next: ${queue.slice(0, 3).map((row, index) => '#' + (index + 1) + ' ' + title(row)).join(', ') || 'empty'}. https://streampulse-clean.vercel.app/queue`;
+      reply = `@${command.login} ${playing ? 'Now: ' + title(playing) : 'Nothing playing'} | ${queue.length} waiting. Next: ${queue.slice(0, 3).map((row, index) => '#' + (index + 1) + ' ' + title(row)).join(', ') || 'empty'}. https://203a.vercel.app/queue`;
     } else if (command.type === 'position') {
       let seconds = playing ? getDurationEstimate(playing).seconds : 0;
       const entries = [];

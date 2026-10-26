@@ -1,3 +1,4 @@
+import { requestAppOrigin } from './app-origin.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { getPostgresStore } from './postgres-store.js';
 import { normalizeActivityEvent } from '../src/activityLog.js';
@@ -58,7 +59,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       return res.status(200).json({ version: state.version, collections,
         legacyImported: Boolean(state.documents[prefix + 'system_diagnostics/legacy-browser-import']) });
     }
-    const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
+    const origin = requestAppOrigin(req);
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     if (body?.operation === 'undo-snapshot') {

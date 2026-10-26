@@ -1,3 +1,4 @@
+import { requestRedirectUri } from '../../server/app-origin.js';
 const ALLOWED_ROLES = Object.freeze({ '2o3a': 'streamer', 'paim_beach_pete': 'moderator' });
 const BOT_LOGIN = 'gachibot69';
 const CHAT_WRITE_SCOPE = 'user:write:chat';
@@ -63,8 +64,7 @@ export default async function handler(req, res) {
   if (!clientId || !clientSecret || !req.query.code) {
     return res.status(500).send('Twitch OAuth is not configured correctly.');
   }
-  const origin = process.env.TWITCH_APP_URL || `https://${req.headers.host}`;
-  const redirectUri = process.env.TWITCH_REDIRECT_URI || `${origin}/api/twitch/callback`;
+  const redirectUri = requestRedirectUri(req);
 
   try {
     const tokenResponse = await fetch('https://id.twitch.tv/oauth2/token', {

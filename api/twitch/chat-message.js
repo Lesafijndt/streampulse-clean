@@ -1,3 +1,4 @@
+import { requestAppOrigin } from '../../server/app-origin.js';
 const CHAT_BOT_LOGIN = 'gachibot69';
 const ALLOWED_STAFF_LOGINS = new Set(['paim_beach_pete']);
 
@@ -54,7 +55,7 @@ export default async function handler(req, res) {
 
   // The API sends only to the configured Yedi Hub origin and rejects missing/cross-origin browser origins.
   try {
-    const configuredOrigin = new URL(process.env.TWITCH_APP_URL || `https://${req.headers.host}`).origin;
+    const configuredOrigin = requestAppOrigin(req);
     const requestOrigin = req.headers.origin;
     if (requestOrigin !== configuredOrigin) return res.status(403).json({ error: 'Chat messages must originate from the Yedi Hub site.' });
   } catch {
