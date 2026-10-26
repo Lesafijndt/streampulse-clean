@@ -109,6 +109,7 @@ import TwitchClipPlayer from './components/TwitchClipPlayer';
 import TransportNavigation from './components/TransportNavigation';
 import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
+import { probeYouTubeDuration } from './providerDurationProbe.js';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
 import { createPlaybackCompletionTracker, getPlaybackGeneration, buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
@@ -514,6 +515,7 @@ function YediHubAppContent() {
   // Track observed player state separately from the viewer's deliberate preference.
   const tiktokAudioStateRef = useRef({ requestId: '', muted: null });
   const [tiktokFrameReload, setTikTokFrameReload] = useState(0);
+  const tiktokRecoveryRef = useRef({ generation: '', attempts: 0 });
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
   const [chatReplyIssue, setChatReplyIssue] = useState('');
   const [webhookHealth, setWebhookHealth] = useState({
@@ -1279,7 +1281,7 @@ function YediHubAppContent() {
       const id = String(video?.id || '');
       if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsMetadataLookup(video)) return false;
       return shouldRetryDurationLookup(durationLookupOutcomes[getMetadataLookupKey(video)], Date.now(), forceRetry);
-    }).slice(0, 160);
+    }).sort((a, b) => Number(!['playing', 'queue'].includes(a.status)) - Number(!['playing', 'queue'].includes(b.status))).slice(0, 160);
     if (!candidates.length) return undefined;
 
     const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[getMetadataLookupKey(video)] || null]));
@@ -1308,7 +1310,7 @@ function YediHubAppContent() {
               cache: 'no-store',
               signal: AbortSignal.timeout(9000)
             });
-            const metadata = await response.json().catch(() => null);
+            const metadata = await response.json().catch(() => ({}));
             if (!response.ok) {
               setDurationLookupOutcomes((prev) => ({
                 ...prev,
@@ -1319,6 +1321,10 @@ function YediHubAppContent() {
                 })
               }));
               return;
+            }
+            if (video.platform === 'youtube' && video.status === 'queue' && videoNeedsDurationLookup(video) && !isValidMediaDuration(metadata?.durationSec)) {
+              const seconds = await probeYouTubeDuration(video.videoId);
+              if (seconds) Object.assign(metadata || {}, { durationSec: seconds, durationProvider: 'youtube-cued-player' });
             }
             const patch = await syncEnrichedMetadata(video, metadata);
             const current = videosRef.current.find((item) => String(item.id) === id);
@@ -2009,7 +2015,7 @@ function YediHubAppContent() {
           paused: getPlaybackIntentForVideo(currentVideo.id, 'tiktok').paused,
         })
       : ''
-  ), [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, channelRoom]);
+  ), [currentPlaybackGeneration, currentVideo?.videoId, currentVideo?.platform, channelRoom, tiktokFrameReload]);
 
   const recordPlaybackPosition = (videoId, seconds) => {
     const id = String(videoId || '');
@@ -2910,7 +2916,7 @@ function YediHubAppContent() {
     else addToast('Reached end of queue.', 'info');
   };
 
-  const handleShuffleQueue = async () => {
+  const handleShuffleQueue = async (operation = 'shuffle') => {
     if (!isStaff || !db?.privateCloud || shuffleInFlightRef.current) return;
     if (!Number.isSafeInteger(db.version) || db.version < 0) {
       addToast('Wait for the queue to finish syncing before shuffling.', 'warning');
@@ -2921,7 +2927,7 @@ function YediHubAppContent() {
     try {
       const response = await fetch('/api/twitch/session?action=store', {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operation: 'shuffle', expectedVersion: db.version }),
+        body: JSON.stringify({ operation, expectedVersion: db.version }),
         signal: AbortSignal.timeout(20000),
       });
       const result = await response.json().catch(() => ({}));
@@ -2932,7 +2938,7 @@ function YediHubAppContent() {
       }
       if (!response.ok || result.ok !== true) throw new Error('Queue could not be shuffled.');
       await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
-      addToast('Waiting queue shuffled. Pinned positions are preserved.', 'success');
+      addToast(operation === 'unshuffle' ? 'Original queue order restored. Pinned positions are preserved.' : 'Waiting queue shuffled. Pinned positions are preserved.', 'success');
     } catch (error) {
       addToast(error?.message || 'Queue could not be shuffled.', 'warning');
     } finally {
@@ -3276,15 +3282,30 @@ function YediHubAppContent() {
   // not a user's preference, so do not persist it until startup unmute is acknowledged.
   useEffect(() => {
     const video = currentVideo;
-    if (!video || video.platform !== 'tiktok' || !video.videoId) return undefined;
+    if (!video || video.platform !== 'tiktok' || !video.videoId || !twitchAuth.authenticated || twitchAuthLoading) return undefined;
     let cancelled = false;
     let startupUnmuteAttempts = 0;
     let startupAudioConfirmed = false;
     let playbackConfirmed = false;
+    let recoveryScheduled = false;
+    const generation = getPlaybackGeneration(video);
+    if (tiktokRecoveryRef.current.generation !== generation) tiktokRecoveryRef.current = { generation, attempts: 0 };
     const completion = createPlaybackCompletionTracker();
     let providerReady = false;
     let startupMuteGuardUntil = 0;
     const retryTimers = [];
+    const recoverStartup = () => {
+      if (cancelled || (playbackConfirmed && getPlaybackIntentForVideo(video.id, 'tiktok').seconds > 0.5) || getPlaybackGeneration(currentVideoRef.current) !== generation) return false;
+      if (recoveryScheduled) return true;
+      if (tiktokRecoveryRef.current.attempts >= 2) return false;
+      recoveryScheduled = true;
+      tiktokRecoveryRef.current.attempts += 1;
+      setTikTokPlayerState({ requestId: video.id, status: 'loading' });
+      retryTimers.push(window.setTimeout(() => {
+        if (!cancelled && (!playbackConfirmed || getPlaybackIntentForVideo(video.id, 'tiktok').seconds <= 0.5) && getPlaybackGeneration(currentVideoRef.current) === generation) setTikTokFrameReload(attempt => attempt + 1);
+      }, 750 * tiktokRecoveryRef.current.attempts));
+      return true;
+    };
     const playerWindow = tiktokIframeRef.current?.contentWindow;
     const getWindow = () => playerWindow;
     const initialIntent = getPlaybackIntentForVideo(video.id, 'tiktok');
@@ -3409,7 +3430,7 @@ function YediHubAppContent() {
         const suppressUnexpectedResume = state === 1 && intent.paused &&
           document.activeElement !== tiktokIframeRef.current && restoreGuard.videoId === videoId &&
           restoreGuard.paused && Date.now() < restoreGuard.until;
-        if (state === 2 && (playbackConfirmed || intent.paused)) {
+        if (state === 2 && (playbackConfirmed || intent.paused || document.activeElement === tiktokIframeRef.current)) {
           if (document.visibilityState !== 'hidden') {
             updatePlaybackIntent(videoId, { paused: true }, 'tiktok');
             keyboardPausedRef.current = { videoId, paused: true };
@@ -3432,11 +3453,12 @@ function YediHubAppContent() {
         if (completion.observe({ state, paused: getPlaybackIntentForVideo(video.id, 'tiktok').paused })) {
           handleMediaEndedRef.current?.(video.id);
         }
-      } else if (data.type === 'onPlayerError') {
-        const errorType = data.value?.errorType || 'playback error';
+      } else if (data.type === 'onPlayerError' || data.type === 'onError') {
+        const errorType = data.value?.errorType || (data.type === 'onError' ? ({ 2: 'SERVER_ERROR', 3: 'PLAYBACK_ERROR', 4: 'INVALID_VIDEO' }[Number(data.value)]) : ({ 1001: 'INVALID_VIDEO', 2001: 'SERVER_ERROR', 3001: 'PLAYBACK_ERROR', 3002: 'AUTOPLAY_ERROR' }[Number(data.value?.errorCode)])) || 'playback error';
         if (String(errorType) === 'AUTOPLAY_ERROR') {
           setTikTokPlayerState({ requestId: video.id, status: 'blocked' });
         } else {
+          if (['SERVER_ERROR', 'PLAYBACK_ERROR'].includes(String(errorType)) && recoverStartup()) return;
           setTikTokPlayerState({ requestId: video.id, status: 'error' });
           addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
         }
@@ -3444,7 +3466,7 @@ function YediHubAppContent() {
     };
     window.addEventListener('message', handleTikTokMessage);
     retryTimers.push(window.setTimeout(() => {
-      if (!cancelled && !providerReady) setTikTokPlayerState({ requestId: video.id, status: 'error' });
+      if (!cancelled && !providerReady && !recoverStartup()) setTikTokPlayerState({ requestId: video.id, status: 'error' });
     }, 12000));
     return () => {
       cancelled = true;
@@ -3900,12 +3922,6 @@ function YediHubAppContent() {
 
 
           <div className="flex items-center gap-2">
-            {isStaff && db?.privateCloud && <button type="button" onClick={() => void handleShuffleQueue()}
-              disabled={shuffleBusy || videos.filter(video => video.status === 'queue' && !video.pinned).length < 2}
-              title="Shuffle waiting videos; pinned positions stay fixed" aria-label="Shuffle waiting queue"
-              className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50">
-              <Shuffle className="h-4 w-4" />{shuffleBusy ? 'Shuffling…' : 'Shuffle'}
-            </button>}
             <a href="/queue" target="_blank" rel="noopener noreferrer" title="Open the public read-only queue"
               className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800">
               <ExternalLink className="h-4 w-4" />Public queue
@@ -4100,7 +4116,7 @@ function YediHubAppContent() {
           ========================================== */}
       <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
         <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
-        <img src="/images/cowboy-ranch.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-auto max-w-[66%] object-contain opacity-65" style={{ maskImage: 'linear-gradient(to right, transparent, black 25%)' }} />
+        <img src="/images/cowboy-barn.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-auto max-w-[66%] object-contain opacity-65" style={{ maskImage: 'linear-gradient(to right, transparent, black 25%)' }} />
         <div className="relative z-10 mx-auto flex min-h-[150px] w-full max-w-none flex-col justify-center px-5 py-5 sm:px-8 lg:px-10">
           <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
@@ -4114,7 +4130,7 @@ function YediHubAppContent() {
         </div>}
         {statisticsAccess && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
-          <img src="/images/cowboy-ranch.png" alt="Fit adult cowboys at a ranch at sunset" loading="lazy" className="aspect-[3/2] w-full rounded-xl object-cover object-top opacity-85" />
+          <img src="/images/cowboys-pasture.png" alt="Adult cowboys in a pasture at sunset" loading="lazy" className="w-full rounded-xl object-contain opacity-85" />
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents.filter(event => event.at > statisticsResetAt)}
@@ -4422,6 +4438,10 @@ function YediHubAppContent() {
               categoryCounts={categoryCounts}
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
+              canShuffle={isStaff && Boolean(db?.privateCloud) && videos.filter(video => video.status === 'queue' && !video.pinned).length > 1}
+              shuffleBusy={shuffleBusy}
+              onShuffle={() => void handleShuffleQueue('shuffle')}
+              onUnshuffle={() => void handleShuffleQueue('unshuffle')}
             />
 
             {/* Video Cards Feed */}

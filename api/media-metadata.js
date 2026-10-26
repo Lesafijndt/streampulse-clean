@@ -345,6 +345,12 @@ async function fetchMediaDuration(source, host) {
     };
   }
 
+  if (normalizedHost === 'clips.twitch.tv' || normalizedHost.endsWith('twitch.tv') && source.pathname.includes('/clip/')) {
+    const { getClipPlayback } = await import('../server/twitch-clip-playback.js');
+    const clip = await getClipPlayback(source, fetch, { metadataOnly: true });
+    if (isValidMediaDuration(clip?.durationSeconds)) return { seconds: clip.durationSeconds, provider: 'twitch-clip-metadata', reason: '' };
+  }
+
   const fromPage = await fetchDurationFromPage(source);
   return fromPage
     ? { seconds: fromPage, provider: normalizedHost.includes('twitch.tv') ? 'twitch-page' : 'kick-page', reason: '' }

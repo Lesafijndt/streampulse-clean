@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeClipPlayback, normalizePublicClip, getClipPlayback } from '../server/twitch-clip-playback.js';
+
+test('exact clip duration does not require a retained source broadcast or a duration in public playback data', async t => {
+  const before = { id: process.env.TWITCH_CLIENT_ID, secret: process.env.TWITCH_CLIENT_SECRET };
+  t.after(() => { for (const [key, value] of [['TWITCH_CLIENT_ID', before.id], ['TWITCH_CLIENT_SECRET', before.secret]]) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  } });
+  process.env.TWITCH_CLIENT_ID = 'metadata-clip-test'; process.env.TWITCH_CLIENT_SECRET = 'test-secret';
+  const urls = [];
+  const request = async url => {
+    urls.push(url);
+    if (url.includes('gql.twitch.tv')) return Response.json([{ data: { clip: { isPublished: true,
+      playbackAccessToken: { signature: 'public', value: 'public' }, assets: [{ videoQualities: [{ sourceURL: 'https://production.assets.clips.twitchcdn.net/clip.mp4' }] }] } } }]);
+    if (url.includes('/oauth2/token')) return Response.json({ access_token: 'private', expires_in: 3600 });
+    if (url.includes('/clips?')) return Response.json({ data: [{ video_id: '', vod_offset: null, duration: 13.5 }] });
+    throw Error('Metadata must not request the source broadcast');
+  };
+  const result = await getClipPlayback(new URL('https://clips.twitch.tv/MetadataClip'), request, { metadataOnly: true });
+  assert.equal(result.durationSeconds, 13.5); assert.equal(result.available, true);
+  assert.equal(JSON.stringify(result).includes('private'), false); assert.equal(urls.some(url => url.includes('/videos?')), false);
+});
 test('clip segment validates a retained VOD and preserves fractional timing', () => {
   assert.deepEqual(normalizeClipPlayback({ video_id: '123', vod_offset: 0, duration: 12.5 }),
     { available: true, videoId: '123', offsetSeconds: 0, durationSeconds: 12.5 });

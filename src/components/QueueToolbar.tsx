@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bookmark, CheckCircle2, ListVideo, Search, Sparkles, X } from 'lucide-react';
+import { Bookmark, CheckCircle2, ListVideo, Search, Sparkles, X, Shuffle, Undo2 } from 'lucide-react';
 
 export default function QueueToolbar({
   activeTab,
@@ -13,7 +13,11 @@ export default function QueueToolbar({
   categoryMeta,
   categoryCounts,
   searchQuery,
-  setSearchQuery
+  setSearchQuery,
+  canShuffle = false,
+  shuffleBusy = false,
+  onShuffle,
+  onUnshuffle
 }) {
   return (
     <>
@@ -48,6 +52,11 @@ export default function QueueToolbar({
                     </div>
       
                     {/* Sorter */}
+                    <div className="flex flex-wrap items-center gap-2">
+                    {activeTab === 'queue' && canShuffle && <>
+                      <button type="button" onClick={onShuffle} disabled={shuffleBusy} aria-label="Shuffle waiting queue" className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Shuffle className="h-4 w-4" />Shuffle</button>
+                      <button type="button" onClick={onUnshuffle} disabled={shuffleBusy} aria-label="Restore original queue order" title="Restore the order before shuffling. Earlier shuffles restore request priority." className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Undo2 className="h-4 w-4" />Unshuffle</button>
+                    </>}
                     <select
                       value={activeTab === 'queue' ? 'priority' : activeTab === 'watched' && sortBy === 'priority' ? 'played' : sortBy}
                       onChange={(e) => setSortBy(e.target.value)}
@@ -60,6 +69,7 @@ export default function QueueToolbar({
                       <option value="upvotes">Sort: Most Hype (Votes)</option>
                       <option value="newest">Sort: Recently Added</option>
                     </select>
+                    </div>
                   </div>
       
                   {/* Category Filter Pills & Search */}

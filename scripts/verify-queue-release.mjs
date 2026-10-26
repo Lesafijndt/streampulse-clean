@@ -26,6 +26,13 @@ try {
   assert.deepEqual(shuffled.documents[prefix + 'queue_videos/p'], playing);
   assert.deepEqual(shuffled.documents[prefix + 'queue_videos/h'], before.documents[prefix + 'queue_videos/h']);
   assert.equal(shuffled.documents[prefix + 'queue_videos/b'].queueOrder, 2000);
+  const originalOrder = shuffled.documents[prefix + 'room_settings/2o3a'].queueShuffleOriginal;
+  assert.equal((await call({ operation: 'shuffle', expectedVersion: shuffled.version })).code, 200);
+  const reshuffled = await db.readState();
+  assert.deepEqual(reshuffled.documents[prefix + 'room_settings/2o3a'].queueShuffleOriginal, originalOrder);
+  assert.equal((await call({ operation: 'unshuffle', expectedVersion: reshuffled.version })).code, 200);
+  const restored = await db.readState();
+  assert.deepEqual(['a', 'b', 'c'].sort((a, b) => restored.documents[prefix + 'queue_videos/' + a].queueOrder - restored.documents[prefix + 'queue_videos/' + b].queueOrder), ['a', 'b', 'c']);
   const metadataBody = { operation: 'enrich-metadata', id: 'p', url: playing.url, generation: getPlaybackGeneration(playing),
     patch: { title: 'Verified metadata', durationSec: 213, status: 'watched' } };
   assert.equal((await call({ ...metadataBody, generation: 'stale' })).body.applied, false);
@@ -38,7 +45,7 @@ try {
   assert.equal(JSON.stringify(publicResponse.body).includes('must-not-leak'), false);
   assert.equal(JSON.stringify(publicResponse.body).includes('"h"'), false);
   console.log(JSON.stringify({ check: 'live_queue_release', ok: true, atomicShuffle: true, staleVersionRejected: true,
-    pinnedSlotPreserved: true, playingAndHistoryPreserved: true, metadataGenerationGuard: true, publicWhitelist: true, chatMessagesSent: 0 }));
+    pinnedSlotPreserved: true, unshuffleRestoresOriginal: true, playingAndHistoryPreserved: true, metadataGenerationGuard: true, publicWhitelist: true, chatMessagesSent: 0 }));
   for (const url of ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'https://www.tiktok.com/@scout2015/video/6718335390845095173']) {
     const metadata = await lookupQueueMetadata(url);
     console.log(JSON.stringify({ check: 'live_provider_metadata', provider: new URL(url).hostname, title: metadata?.title || '', durationSec: metadata?.durationSec || null }));

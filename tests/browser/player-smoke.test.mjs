@@ -93,7 +93,7 @@ test('metadata generation changes during a lookup release pending state and retr
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
 
-test('header shuffle persists one atomic operation and preserves playback through success and conflict', () => {
+test('queue toolbar shuffle and unshuffle preserve playback through success and conflict', () => {
   const html = renderInChrome(baseUrl + '/tests/browser/shuffle-playback-dashboard.html?provider=youtube');
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
@@ -106,4 +106,14 @@ test('public /queue App route never starts staff authentication or private stora
 test('streamer webhook volume reaches native Twitch playback', () => {
   const html = renderInChrome(baseUrl + '/tests/browser/command-dashboard.html?provider=twitch');
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('queued duration probe never plays media and accepts only trusted metadata',()=>{
+const html=renderInChrome(baseUrl+'/tests/browser/duration-probe.html');
+assert.match(html,/data-test-status="pass"/,html.slice(-3000));
+});
+
+test('TikTok startup crashes recover twice without skipping or overriding pause',()=>{
+const html=renderInChrome(baseUrl+'/tests/browser/tiktok-recovery-dashboard.html?provider=tiktok');
+assert.match(html,/data-test-status="pass"/,html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));
 });

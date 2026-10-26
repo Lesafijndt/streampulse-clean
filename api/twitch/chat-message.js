@@ -50,7 +50,7 @@ export default async function handler(req, res) {
   // Require the private dashboard login as well as the dedicated bot login.
   // The bot account alone must not expose an arbitrary chat-send endpoint.
   if (!cookies.yedi_twitch_access) return res.status(401).json({ error: 'Sign in to Yedi Hub as 2o3a or paim_beach_pete first.' });
-  if (!cookies.yedi_twitch_bot_access) return res.status(401).json({ error: 'Connect the Twitch chat bot account @gachibot69 first.' });
+  if (!cookies.yedi_twitch_bot_access && !cookies.yedi_twitch_bot_refresh) return res.status(401).json({ error: 'Connect the Twitch chat bot account @gachibot69 first.' });
 
   // The API sends only to the configured Yedi Hub origin and rejects missing/cross-origin browser origins.
   try {
@@ -91,7 +91,7 @@ export default async function handler(req, res) {
     }
 
     let accessToken = cookies.yedi_twitch_bot_access;
-    let validation = await validateToken(accessToken);
+    let validation = accessToken ? await validateToken(accessToken) : null;
     if (!validation && cookies.yedi_twitch_bot_refresh && clientSecret) {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

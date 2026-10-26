@@ -3,7 +3,7 @@ import { getPostgresStore } from './postgres-store.js';
 import { normalizeActivityEvent } from '../src/activityLog.js';
 import { buildMediaMetadataPatch } from '../src/mediaMetadata.js';
 import { getPlaybackGeneration } from '../src/playerBridge.js';
-import { buildShuffleQueueTransition } from '../src/queueShuffle.js';
+import { buildShuffleQueueTransition, buildUnshuffleQueueTransition, queueRequestKey } from '../src/queueShuffle.js';
 
 const STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const SAFE_ID = /^[A-Za-z0-9_-]{1,180}$/;
@@ -51,16 +51,22 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    if (body?.operation === 'shuffle') {
+    if (['shuffle', 'unshuffle'].includes(body?.operation)) {
       if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) throw fail('version_required');
-      const state = await db.readState({ collections: [prefix + 'queue_videos'] });
+      const state = await db.readState({ collections: [prefix + 'queue_videos', prefix + 'room_settings'] });
       if (state.version !== body.expectedVersion) throw fail('conflict', 409);
       const videos = Object.entries(state.documents).flatMap(([path, data]) => {
         if (!path.startsWith(prefix + 'queue_videos/') || path.slice((prefix + 'queue_videos/').length).includes('/') || data?.channelRoom !== '2o3a') return [];
         return [{ ...data, id: path.split('/').at(-1) }];
       });
-      const { updates } = buildShuffleQueueTransition(videos, dependencies.random || Math.random);
+      const settingsPath = prefix + 'room_settings/2o3a';
+      const saved = state.documents[settingsPath]?.queueShuffleOriginal;
+      const snapshot = Array.isArray(saved) && videos.some(video => video.status === 'queue' && saved.includes(queueRequestKey(video))) ? saved : [];
+      const { updates } = body.operation === 'shuffle' ? buildShuffleQueueTransition(videos, dependencies.random || Math.random) : buildUnshuffleQueueTransition(videos, snapshot);
       const operations = [...updates].map(([id, data]) => ({ type: 'update', path: prefix + 'queue_videos/' + id, data }));
+      const original = videos.filter(video => video.status === 'queue').sort((a, b) => Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0) || a.id.localeCompare(b.id)).map(queueRequestKey);
+      operations.push({ type: 'set', path: settingsPath, merge: true, data: { channelRoom: '2o3a',
+        queueShuffleOriginal: body.operation === 'unshuffle' ? [] : snapshot.length ? snapshot : original } });
       const result = await db.commitOperations(operations, { expectedVersion: state.version });
       return res.status(200).json({ ok: true, version: result.version });
     }

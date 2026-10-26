@@ -21,6 +21,26 @@ async function api(db, { method = 'GET', body, since, login = 'paim_beach_pete',
   const res = response(); await handlePrivateStore({ method, body, query: { since }, headers: { origin,
     host: 'streampulse-clean.vercel.app' } }, res, { login }, { db, namespace }); return res;
 }
+
+test('unshuffle retains the first snapshot across repeated shuffles and keeps new arrivals and playback', async () => {
+  const { db, state } = setup(Object.fromEntries(['a', 'b', 'c', 'playing'].map((id, i) => [prefix + 'queue_videos/' + id,
+    row(id, { queueOrder: (i + 1) * 1000, status: id === 'playing' ? 'playing' : 'queue' })])));
+  const call = operation => api(db, { method: 'POST', body: { operation, expectedVersion: state().version } });
+  assert.equal((await call('shuffle')).statusCode, 200);
+  const original = structuredClone(state().documents[prefix + 'room_settings/2o3a'].queueShuffleOriginal);
+  assert.deepEqual(original, ['a:100', 'b:100', 'c:100']);
+  await db.doc(prefix + 'queue_videos/arrived').set(row('arrived', { timestamp: 200, queueOrder: 99999 }));
+  await db.doc(prefix + 'queue_videos/a').update({ status: 'watched' });
+  assert.equal((await call('shuffle')).statusCode, 200);
+  assert.deepEqual(state().documents[prefix + 'room_settings/2o3a'].queueShuffleOriginal, original);
+  const playing = structuredClone(state().documents[prefix + 'queue_videos/playing']);
+  assert.equal((await call('unshuffle')).statusCode, 200);
+  const waiting = Object.values(state().documents).filter(row => row.status === 'queue').sort((a, b) => a.queueOrder - b.queueOrder);
+  assert.deepEqual(waiting.map(row => row.id), ['b', 'c', 'arrived']);
+  assert.equal(state().documents[prefix + 'queue_videos/a'].status, 'watched');
+  assert.deepEqual(state().documents[prefix + 'queue_videos/playing'], playing);
+  assert.deepEqual(state().documents[prefix + 'room_settings/2o3a'].queueShuffleOriginal, []);
+});
 test('private store reads reject viewers and never expose profiles, receipts or technical data', async () => {
   const { db } = setup({ [prefix + 'queue_videos/a']: row('a'), [prefix + 'user_profiles/paim_beach_pete']: { secret: true },
     [prefix + 'twitch_eventsub_receipts/r']: { sender: 'private' }, [prefix + 'room_settings/2o3a']: { streamSettings: { queueOpen: true } } });

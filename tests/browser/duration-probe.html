@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><pre id="result">Running</pre><script type="module">
+import {probeYouTubeDuration} from '../../src/providerDurationProbe.js';
+const src=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'src');
+Object.defineProperty(HTMLIFrameElement.prototype,'src',{get(){return src.get.call(this)},set(value){this.dataset.providerSrc=value;src.set.call(this,'about:blank')}});
+const assert=(value,message)=>{if(!value)throw Error(message)};
+try{
+ const commands=[];let completed=false;
+ const pending=probeYouTubeDuration('XcKtI0Mxzv4').then(value=>{completed=true;return value});
+ const frame=document.querySelector('[data-duration-probe]');assert(frame,'Metadata frame exists');
+ frame.contentWindow.postMessage=message=>commands.push(JSON.parse(message));
+ const url=new URL(frame.dataset.providerSrc);assert(url.searchParams.get('autoplay')==='0'&&url.searchParams.get('mute')==='1','Probe must be silent and never autoplay');
+ const emit=(origin,source,data)=>window.dispatchEvent(new MessageEvent('message',{origin,source,data}));
+ emit('https://evil.example',frame.contentWindow,{event:'infoDelivery',info:{duration:999}});
+ emit('https://www.youtube.com',window,{event:'infoDelivery',info:{duration:999}});
+ await Promise.resolve();assert(!completed,'Untrusted window and origin must be ignored');
+ emit('https://www.youtube.com',frame.contentWindow,{event:'onReady'});
+ assert(commands.some(command=>command.func==='cueVideoById'),'Metadata request cues without playing');
+ assert(!commands.some(command=>command.func==='playVideo'),'Probe must never play');
+ emit('https://www.youtube.com',frame.contentWindow,{event:'infoDelivery',info:{duration:636}});
+ assert(await pending===636,'Real provider duration is returned');assert(!document.querySelector('[data-duration-probe]'),'Frame cleaned after result');
+ const controller=new AbortController();const cancelled=probeYouTubeDuration('VAw_LbbUmQ0',{signal:controller.signal});controller.abort();
+ assert(await cancelled===null&&!document.querySelector('[data-duration-probe]'),'Aborted probes clean up');
+ document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: exact cued metadata; no autoplay or play; trusted source only; cleanup and abort';
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
+</script>

@@ -70,12 +70,13 @@ export default async function handler(req, res) {
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
   const cookies = parseCookies(req.headers.cookie);
-  if (!clientId || !cookies.yedi_twitch_bot_access) return replyUnauthenticated(res);
+  if (!clientId || (!cookies.yedi_twitch_bot_access && !cookies.yedi_twitch_bot_refresh)) return replyUnauthenticated(res);
 
   try {
     let accessToken = cookies.yedi_twitch_bot_access;
-    let validationResponse = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${accessToken}` } });
-    let validation = validationResponse.ok ? await validationResponse.json() : null;
+    let validationResponse = accessToken ? await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${accessToken}` } }) : null;
+    if (validationResponse && !validationResponse.ok && validationResponse.status !== 401) return res.status(503).json({ connected: false, code: 'bot_service_unavailable' });
+    let validation = validationResponse?.ok ? await validationResponse.json() : null;
 
     if (!validation && cookies.yedi_twitch_bot_refresh && clientSecret) {
       const refreshResponse = await fetch('https://id.twitch.tv/oauth2/token', {
@@ -83,6 +84,7 @@ export default async function handler(req, res) {
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cookies.yedi_twitch_bot_refresh, client_id: clientId, client_secret: clientSecret })
       });
       const refreshed = await refreshResponse.json();
+      if (refreshResponse.status >= 500 || refreshResponse.status === 429) return res.status(503).json({ connected: false, code: 'bot_service_unavailable' });
       if (!refreshResponse.ok || !refreshed.access_token) {
         clearBotCookies(res);
         return replyUnauthenticated(res);

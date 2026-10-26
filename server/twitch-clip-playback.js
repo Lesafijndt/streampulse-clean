@@ -48,7 +48,7 @@ export function normalizeClipPlayback(clip) {
   }
   return { available: true, videoId: String(clip.video_id), offsetSeconds, durationSeconds };
 }
-export async function getClipPlayback(source, request = fetch, { refresh = false } = {}) {
+export async function getClipPlayback(source, request = fetch, { refresh = false, metadataOnly = false } = {}) {
   const parts = source.pathname.split('/').filter(Boolean);
   const slug = source.hostname === 'clips.twitch.tv' ? parts[0] : parts[parts.indexOf('clip') + 1];
   if (!['clips.twitch.tv', 'twitch.tv', 'www.twitch.tv'].includes(source.hostname) ||
@@ -56,7 +56,7 @@ export async function getClipPlayback(source, request = fetch, { refresh = false
     return { available: false, reason: 'invalid_clip' };
   }
   const direct = await getPublicClipPlayback(slug, request, refresh);
-  if (direct) return direct;
+  if (direct && (!metadataOnly || Number(direct.durationSeconds) > 0)) return direct;
   const id = process.env.TWITCH_CLIENT_ID, secret = process.env.TWITCH_CLIENT_SECRET;
   if (!id || !secret) return { available: false, reason: 'clip_playback_not_configured' };
   try {
@@ -74,6 +74,7 @@ export async function getClipPlayback(source, request = fetch, { refresh = false
     if (response.status === 401) cachedToken = null;
     if (!response.ok) throw Error('clip_lookup_failed');
     const clip = (await response.json()).data?.[0];
+    if (metadataOnly && Number(clip?.duration) > 0 && Number(clip.duration) <= 300) return { available: true, durationSeconds: Number(clip.duration) };
     const playback = normalizeClipPlayback(clip);
     if (!playback.available) return playback;
     const video = await request('https://api.twitch.tv/helix/videos?id=' + playback.videoId, { headers, signal: AbortSignal.timeout(7000) });

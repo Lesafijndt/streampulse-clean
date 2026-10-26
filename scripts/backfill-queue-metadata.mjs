@@ -8,7 +8,7 @@ const namespace = getQueueNamespace(), db = await getPostgresStore(namespace);
 const prefix = `artifacts/${namespace}/public/data/queue_videos/`;
 const state = await db.readState({ collections: [prefix.slice(0, -1)] });
 const candidates = Object.entries(state.documents).filter(([path, row]) => path.startsWith(prefix) &&
-  row.channelRoom === '2o3a' && videoNeedsMetadataLookup(row));
+  row.channelRoom === '2o3a' && (!process.argv.includes('--active') || ['playing', 'queue'].includes(row.status)) && videoNeedsMetadataLookup(row));
 candidates.sort((a, b) => Number(!['queue', 'playing'].includes(a[1].status)) - Number(!['queue', 'playing'].includes(b[1].status)));
 let cursor = 0, updated = 0, unavailable = 0, stale = 0;
 await Promise.all(Array.from({ length: 3 }, async () => {

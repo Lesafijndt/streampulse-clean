@@ -25,6 +25,7 @@ if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='store
 if(expired)return json({authenticated:false,user:null});
 if(opts.method==='POST'){
  const body=JSON.parse(opts.body);
+ if(body.operation==='unshuffle'){docs[base+'queue_videos/b'].queueOrder=2;docs[base+'queue_videos/c'].queueOrder=3;version++;return json({ok:true,version});}
  if(body.operation==='shuffle'){
    shuffleCalls++;
    if(body.expectedVersion!==version)throw Error('Shuffle did not use snapshot version');
@@ -71,11 +72,12 @@ try{
  const {default:App}=await import('../../src/App.tsx');const root=createRoot(document.querySelector('#root'));
  root.render(React.createElement(App));await wait(()=>imported&&frame());await sleep(100);
  const first=frame();const before=JSON.stringify(docs[base+'queue_videos/a']);
- const button=document.querySelector('[aria-label="Shuffle waiting queue"]');assert(button&&!button.disabled,'Header shuffle is available');
+ const button=document.querySelector('[aria-label="Shuffle waiting queue"]');assert(button&&!button.disabled,'Queue toolbar shuffle is available');assert(button.closest('section').querySelector('select'),'Shuffle is beside queue sorting');
  assert(document.querySelector('header a[href="/queue"]'),'Header exposes public queue link');
  button.click();button.click();await wait(()=>shuffleCalls===1&&docs[base+'queue_videos/c'].queueOrder===2);await sleep(50);
  assert(frame()===first,'Shuffle must not recreate playing iframe');assert(JSON.stringify(docs[base+'queue_videos/a'])===before,'Shuffle must preserve playing document');
  assert(transitionWrites===0,'Shuffle must not call Next');
+ const undo=document.querySelector('[aria-label="Restore original queue order"]');await wait(()=>!undo.disabled);undo.click();await wait(()=>docs[base+'queue_videos/b'].queueOrder===2&&docs[base+'queue_videos/c'].queueOrder===3);assert(frame()===first,'Unshuffle preserves playing iframe');
  conflict=true;await wait(()=>!button.disabled);button.click();await wait(()=>document.body.textContent.includes('The queue changed.'));
  await wait(()=>document.body.textContent.includes('Changed by another session'));
  assert(shuffleCalls===2&&frame()===first,'Conflict refresh must not resubmit or recreate playback');

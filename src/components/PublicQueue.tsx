@@ -61,6 +61,7 @@ export default function PublicQueue() {
           <div><h1 className="flex items-center gap-3 text-3xl font-bold"><ListVideo aria-hidden="true" /> Stream queue</h1><p className="mt-2 text-sm text-rose-200/70">See what’s playing and what’s coming up. Updates every 30 seconds.</p></div>
           <button type="button" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading} className="rounded-xl border border-rose-900 bg-[#260b19] p-3 disabled:opacity-50" aria-label="Refresh queue"><RefreshCw aria-hidden="true" className={loading ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></button>
         </header>
+        <img src="/images/cowboys-pasture.png" alt="Adult cowboys at a ranch at sunset" loading="lazy" className="max-h-64 w-full rounded-2xl object-contain" />
         {error && <p role="alert" className="rounded-xl border border-rose-800 bg-rose-950/50 p-4">{error}{data && ' Showing the last loaded queue.'}</p>}
         <section aria-labelledby="now-playing" className="rounded-2xl border border-rose-900/70 bg-[#210914] p-5"><h2 id="now-playing" className="mb-3 text-sm font-bold uppercase tracking-widest text-rose-300">Now playing</h2>{data?.playing ? details(data.playing) : <p className="text-rose-200/70">{!data && loading ? 'Loading queue…' : 'Nothing playing right now.'}</p>}</section>
         <section aria-labelledby="waiting-heading">

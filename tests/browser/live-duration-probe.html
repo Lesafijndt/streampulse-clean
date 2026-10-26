@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><pre id="result">Loading real YouTube metadata</pre><script type="module">
+import {probeYouTubeDuration} from '../../src/providerDurationProbe.js';
+window.durationResult=undefined;
+const seconds=await probeYouTubeDuration('XcKtI0Mxzv4',{timeoutMs:20000});
+window.durationResult=seconds;document.querySelector('#result').textContent=JSON.stringify({seconds});
+</script>

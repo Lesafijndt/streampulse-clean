@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildShuffleQueueTransition } from '../src/queueShuffle.js';
+import { buildShuffleQueueTransition, buildUnshuffleQueueTransition, queueRequestKey } from '../src/queueShuffle.js';
+
+test('unshuffle restores surviving original requests, preserves pinned slots and appends new generations', () => {
+  const original = ['a', 'pin', 'b', 'c'].map((id, i) => ({ id, timestamp: 1, status: 'queue', queueOrder: (i + 1) * 1000, pinned: id === 'pin' }));
+  const snapshot = original.map(queueRequestKey);
+  const shuffled = buildShuffleQueueTransition(original, () => 0).nextVideos;
+  const restored = buildUnshuffleQueueTransition(shuffled, snapshot).nextVideos;
+  assert.deepEqual(restored.sort((a, b) => a.queueOrder - b.queueOrder).map(row => row.id), ['a', 'pin', 'b', 'c']);
+  const later = [...shuffled.filter(row => row.id !== 'a'), { id: 'a', timestamp: 2, status: 'queue', queueOrder: 5000 }, { id: 'live', status: 'playing' }];
+  const transition = buildUnshuffleQueueTransition(later, snapshot);
+  assert.equal(transition.updates.has('live'), false);
+  const queue = transition.nextVideos.filter(row => row.status === 'queue').sort((a, b) => a.queueOrder - b.queueOrder);
+  assert.equal(queue.at(-1).id, 'a', 'rerequested generation must not reuse the old original slot');
+  assert.equal(queue.findIndex(row => row.id === 'pin'), 1);
+});
 
 test('shuffle conserves requests, keeps pinned slots and changes only waiting queueOrder', () => {
   const videos = [
