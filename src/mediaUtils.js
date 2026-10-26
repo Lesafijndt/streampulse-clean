@@ -36,7 +36,9 @@ export const CATEGORY_META = {
     keywords: [
       'meme', 'funny', 'try not to laugh', 'ylyl', 'shitpost', 'hilarious',
       'joke', 'parody', 'fails', 'vines', 'trolling', 'comedy', 'prank',
-      'skit', 'lol', 'kekw', 'cursed', 'brainrot'
+      'skit', 'lol', 'kekw', 'cursed', 'brainrot', 'memes', 'shitposts',
+      'shitposting', 'troll', 'trollface', 'rickroll', 'rickrolled', 'yes king',
+      'laughing', 'funniest', 'memes compilation', '???', '????', '??????', '???????'
     ]
   },
   Clips: {
@@ -66,59 +68,38 @@ export const CATEGORY_META = {
   }
 };
 
-/**
- * Multi-layered detection engine:
- * 1. Checks URL domains (music.youtube.com, clips.twitch.tv, tiktok.com, spotify, etc.)
- * 2. Checks hashtags in request command (e.g. #music, #gaming)
- * 3. Checks keyword heuristic weights across title & note
- * 4. Respects broadcaster mode (e.g. Music-Only streams)
- */
+// Category is content-based; the Twitch Clips bucket is reserved for actual Twitch URLs.
+export function isTwitchClipUrl(url = '') {
+  try {
+    const parsed = new URL(String(url));
+    const host = parsed.hostname.toLowerCase();
+    return (host === 'clips.twitch.tv' && /^\/[^/]+/.test(parsed.pathname)) ||
+      ((host === 'twitch.tv' || host === 'www.twitch.tv' || host === 'm.twitch.tv') && /^\/[^/]+\/clip\/[^/]+/.test(parsed.pathname));
+  } catch { return false; }
+}
+
 export function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all') {
-  const cleanUrl = (url || '').toLowerCase();
-  const textBlob = `${cleanUrl} ${(title || '')} ${(note || '')}`.toLowerCase();
-
-  // 1. Explicit hashtags
-  if (textBlob.includes('#music') || textBlob.includes('#song')) return 'Music';
-  if (textBlob.includes('#game') || textBlob.includes('#gaming')) return 'Gaming';
-  if (textBlob.includes('#meme') || textBlob.includes('#funny')) return 'Memes';
-  if (textBlob.includes('#clip')) return 'Clips';
-  if (textBlob.includes('#irl') || textBlob.includes('#podcast')) return 'IRL';
-
-  // 2. Strong URL Domain signals
-  if (cleanUrl.includes('music.youtube.com') || cleanUrl.includes('spotify.com') || cleanUrl.includes('soundcloud.com')) {
-    return 'Music';
+  const text = String(title || '') + ' ' + String(note || '');
+  // IDs, domains, creator usernames and arbitrary URL parameters are not content keywords.
+  const normalized = text.replace(/https?:\/\/\S+/gi, '').normalize('NFKC').toLowerCase()
+    .replace(/[^\p{L}\p{N}#]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  const padded = ' ' + normalized + ' ';
+  const has = phrase => padded.includes(' ' + phrase.toLowerCase().replace(/[^\p{L}\p{N}#]+/gu, ' ').trim() + ' ');
+  if (['#meme','#memes','#funny','#shitpost','#shitposts'].some(has)) return 'Memes';
+  if (['#music','#song'].some(has)) return 'Music';
+  if (['#game','#gaming'].some(has)) return 'Gaming';
+  if (['#irl','#podcast'].some(has)) return 'IRL';
+  if (isTwitchClipUrl(url)) return 'Clips';
+  const memeWords = CATEGORY_META.Memes.keywords;
+  if (memeWords.some(has)) return 'Memes';
+  let host = ''; try { host = new URL(String(url)).hostname.toLowerCase(); } catch { /* optional URL */ }
+  if (host === 'music.youtube.com' || host === 'spotify.com' || host.endsWith('.spotify.com') || host === 'soundcloud.com' || host.endsWith('.soundcloud.com')) return 'Music';
+  let best = streamMode === 'music_only' ? 'Music' : 'General', highest = 0;
+  for (const key of ['Music', 'Gaming', 'IRL']) {
+    const score = CATEGORY_META[key].keywords.reduce((sum, word) => sum + (has(word) ? (['official music video','official audio','lyric video','gameplay','speedrun'].includes(word) ? 3 : 1) : 0), 0);
+    if (score > highest) { best = key; highest = score; }
   }
-  if (cleanUrl.includes('clips.twitch.tv') || cleanUrl.includes('/clip/')) {
-    return 'Clips';
-  }
-  // 3. Keyword Scoring Heuristics
-  let bestCategory = streamMode === 'music_only' ? 'Music' : 'General';
-  let highestScore = 0;
-
-  for (const [catKey, catData] of Object.entries(CATEGORY_META)) {
-    if (catKey === 'General') continue;
-    let score = 0;
-    for (const kw of catData.keywords) {
-      if (textBlob.includes(kw)) {
-        // High-confidence keywords grant higher weight
-        if (kw === 'official music video' || kw === 'official audio' || kw === 'ost' || kw === 'lyric video') {
-          score += 4;
-        } else if (kw === 'valorant' || kw === 'cs2' || kw === 'speedrun' || kw === 'gameplay') {
-          score += 3;
-        } else if (kw === 'try not to laugh' || kw === 'shitpost') {
-          score += 3;
-        } else {
-          score += 1;
-        }
-      }
-    }
-    if (score > highestScore) {
-      highestScore = score;
-      bestCategory = catKey;
-    }
-  }
-
-  return bestCategory;
+  return best;
 }
 
 // Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
@@ -195,13 +176,12 @@ export function getVideoMediaType(video = {}) {
 
 export function getVideoCategory(video = {}) {
   const category = CATEGORY_META[video.category] ? video.category : 'General';
-  if (video.categoryManuallySet === true) return category;
-
-  // Keep auto-detected category and media-type filters mutually consistent.
-  // Older requests can still carry a stale "Music" category even when the
-  // stronger media-type detector identifies them as non-music.
-  if (getVideoMediaType(video) === 'Music') return 'Music';
-  return category === 'Music' ? 'General' : category;
+  // Preserve staff choices except impossible legacy non-Twitch "Twitch Clips" labels.
+  if (video.categoryManuallySet === true && (category !== 'Clips' || isTwitchClipUrl(video.url))) return category;
+  const detected = detectVideoCategory(video.url || '', video.title || '', video.note || '');
+  if (detected === 'Memes' || detected === 'Clips') return detected;
+  if (getVideoMediaType({ ...video, categoryManuallySet: false }) === 'Music') return 'Music';
+  return detected === 'Music' ? 'General' : detected;
 }
 
 /**

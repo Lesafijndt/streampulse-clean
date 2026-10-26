@@ -112,7 +112,7 @@ export async function makeQueueItems(event) {
     items.push({
       id, channelRoom: '2o3a', title, url,
       platform: media.platform, videoId: media.videoId,
-      category: mediaType === 'Music' ? 'Music' : category,
+      category: category === 'Memes' || category === 'Clips' ? category : mediaType === 'Music' ? 'Music' : category,
       categoryManuallySet: false, mediaType, duration: '',
       durationSource: 'unknown', requestedBy: login,
       userRole: 'viewer', status: 'queue', upvotes: 0, voters: [],

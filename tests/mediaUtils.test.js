@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  detectVideoCategory,
   dedupeMediaVideos,
   getMediaIdentityKey,
   getStableMediaDocumentId,
@@ -42,4 +43,27 @@ test('manual category is authoritative and auto music detection remains consiste
   assert.equal(getVideoMediaType({ url: 'https://www.tiktok.com/@c/video/1234567890123', category: 'General', categoryManuallySet: true }), 'Non-Music');
   assert.equal(getVideoMediaType({ url: 'https://music.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Unknown title' }), 'Music');
   assert.equal(getVideoCategory({ url: 'https://music.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Unknown title', category: 'General' }), 'Music');
+});
+
+test('Twitch Clips requires a real Twitch clip URL, never a generic short clip title', () => {
+ const tik='https://www.tiktok.com/@clip/video/1234567890123';
+ assert.equal(detectVideoCategory(tik,'TikTok Short Clip'),'General');
+ assert.equal(getVideoCategory({url:tik,title:'Yes King Creature And Winter',category:'Clips'}),'Memes');
+ assert.equal(getVideoCategory({url:tik,title:'TikTok Short Clip',category:'Clips',categoryManuallySet:true}),'General');
+ assert.equal(detectVideoCategory('https://youtu.be/abcdefghijk','Twitch clip reaction'),'IRL');
+ assert.equal(detectVideoCategory('https://clips.twitch.tv/ExampleSlug','A moment'),'Clips');
+ assert.equal(detectVideoCategory('https://www.twitch.tv/2o3a/clip/ExampleSlug','A moment'),'Clips');
+ assert.equal(detectVideoCategory('https://example.com/clip/ExampleSlug','A moment'),'General');
+ assert.equal(detectVideoCategory('https://clips.twitch.tv.attacker.example/Fake','A moment'),'General');
+});
+test('memes use content words, reclassify enriched automatic titles, and preserve manual choices', () => {
+ const url='https://youtu.be/abcdefghijk';
+ for(const title of ['Funny cat compilation','MEMES compilation','brainrot remix','Yes King Creature And Winter','A cursed gaming montage']) assert.equal(detectVideoCategory(url,title),'Memes',title);
+ assert.equal(getVideoCategory({url,title:'Meme remix',category:'Music'}),'Memes');
+ assert.equal(getVideoCategory({url,title:'Meme remix',category:'Music',categoryManuallySet:true}),'Music');
+ assert.equal(getVideoCategory({url,title:'Meme compilation',category:'General'}),'Memes');
+ assert.equal(detectVideoCategory('https://youtu.be/shitpost123','A landscape'),'General');
+ assert.equal(detectVideoCategory('https://www.tiktok.com/@meme/video/1234567890123','A landscape'),'General');
+ assert.equal(detectVideoCategory(url,'A telescope in space'),'General');
+ assert.equal(detectVideoCategory(url,'Album official audio'),'Music');
 });

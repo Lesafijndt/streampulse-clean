@@ -2716,7 +2716,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     const mediaType = categoryManuallySet
       ? (detectedCategory === 'Music' ? 'Music' : 'Non-Music')
       : detectMusicType(normalizedUrl, cleanTitle, note, detectedCategory);
-    const finalCategory = !categoryManuallySet && mediaType === 'Music' ? 'Music' : detectedCategory;
+    const finalCategory = getVideoCategory({ url: normalizedUrl, title: cleanTitle, note, category: detectedCategory, categoryManuallySet });
     const requestedAt = Date.now();
 
     const newVideo = {

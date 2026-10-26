@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2, GripVertical, SkipForward } from 'lucide-react';
-import { CATEGORY_META, getVideoCategory, getVideoMediaType } from '../mediaUtils.js';
+import { CATEGORY_META, getVideoCategory, getVideoMediaType, isTwitchClipUrl } from '../mediaUtils.js';
 import { getDurationEstimate, getThumbnailDurationLabel } from '../queueLogic.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.js';
 
@@ -123,15 +123,15 @@ export default function QueueVideoCard({
                                 className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border cursor-pointer focus:outline-none ${catObj.badgeBg}`}
                                 title="Click to fix or change category"
                               >
-                                {Object.keys(CATEGORY_META).map((cat) => (
+                                {Object.keys(CATEGORY_META).filter(cat => cat !== 'Clips' || isTwitchClipUrl(video.url)).map((cat) => (
                                   <option key={cat} value={cat} className="bg-[#141926] text-white">
-                                    {cat}
+                                    {CATEGORY_META[cat].label}
                                   </option>
                                 ))}
                               </select>
                             ) : (
                               <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${catObj.badgeBg}`}>
-                                {resolvedCategory}
+                                {catObj.label}
                               </span>
                             )}
 
