@@ -126,6 +126,33 @@ test('browser transport exercises real private API transaction, batch and authen
   await assert.rejects(setDoc(doc(videos, 'c'), row('c')), /session unavailable/);
 });
 
+test('filtered bottom-to-top reorder preserves unchanged queue rows and history through the real transport', async t => {
+  const initial = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [prefix + 'queue_videos/v' + i,
+    row('v' + i, { queueOrder: (i + 1) * 1000, title: 'Video ' + i, status: i === 29 ? 'watched' : 'queue' })]));
+  const { db, state } = setup(initial); const originalFetch = global.fetch; let writes = 0;
+  t.after(() => { global.fetch = originalFetch; });
+  global.fetch = async (url, options = {}) => {
+    if (options.method === 'POST') writes++;
+    const res = await api(db, { method: options.method || 'GET', since: new URL(url, 'https://streampulse-clean.vercel.app').searchParams.get('since'),
+      body: options.body ? JSON.parse(options.body) : undefined });
+    return Response.json(res.body, { status: res.statusCode });
+  };
+  const browser = createPrivateCloudDb(), videos = collection(browser, 'artifacts', namespace, 'public', 'data', 'queue_videos');
+  const rows = (await getDocs(videos)).docs.map(doc => doc.data()).filter(row => row.status === 'queue');
+  const [moving] = rows.splice(20, 1); rows.splice(3, 0, moving);
+  const batch = writeBatch(browser);
+  rows.forEach((video, i) => batch.set(doc(videos, video.id), { id: video.id, queueOrder: (i + 1) * 1000, channelRoom: '2o3a' }, { merge: true }));
+  await batch.commit();
+  assert.equal(Object.keys(state().documents).length, 30);
+  for (let i = 0; i < 30; i++) {
+    const fresh = state().documents[prefix + 'queue_videos/v' + i];
+    assert.equal(fresh.title, 'Video ' + i); assert.equal(fresh.status, i === 29 ? 'watched' : 'queue');
+  }
+  const noChange = writeBatch(browser);
+  for (const video of rows) noChange.set(doc(videos, video.id), { queueOrder: state().documents[prefix + 'queue_videos/' + video.id].queueOrder }, { merge: true });
+  await noChange.commit(); assert.equal(writes, 1);
+});
+
 test('reset sends the reviewed version without refreshing away a newly arrived request conflict', async t => {
   const { db, state } = setup({ [prefix + 'queue_videos/a']: row('a') });
   const original = globalThis.fetch, calls = [];

@@ -22,6 +22,15 @@ function memoryStore(options = {}) {
 const increment = value => ({ __op: 'increment', value });
 const arrayUnion = (...values) => ({ __op: 'arrayUnion', values });
 
+test('an empty top-level merge preserves the full video while nested empty maps still replace their map', async () => {
+  const { db } = memoryStore(); const ref = db.doc(path('unchanged'));
+  const original = { id: 'unchanged', channelRoom: '2o3a', status: 'queue', title: 'Keep this video', prefs: { a: 1 } };
+  await ref.set(original); await ref.set({}, { merge: true });
+  assert.deepEqual((await ref.get()).data(), original);
+  await ref.set({ prefs: {} }, { merge: true });
+  assert.deepEqual((await ref.get()).data(), { ...original, prefs: {} });
+});
+
 test('concurrent transactions retry their reads and preserve both updates', async () => {
   const { db, conflicts } = memoryStore();
   const counter = db.doc(path('counter'));

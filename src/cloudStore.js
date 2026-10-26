@@ -159,7 +159,8 @@ async function commit(db, operations, expectedVersion = db.version, baseline = n
         .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(current[key]))) };
     }
     return operation;
-  });
+  }).filter(operation => !(operation.type === 'set' && operation.merge && Object.keys(operation.data || {}).length === 0));
+  if (!operations.length) return;
   const response = await fetch('/api/twitch/session?action=store', {
     method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ operations, expectedVersion, expectations }), signal: AbortSignal.timeout(15000),

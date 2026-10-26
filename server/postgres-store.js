@@ -132,6 +132,9 @@ export function createDocumentStore({ readState: readBackend, compareAndSwap, re
       if (op.type === 'delete') { delete documents[path]; continue; }
       if (!['create', 'set', 'update'].includes(op.type) || !plain(op.data)) throw failure('invalid_operation');
       const data = clean(op.data);
+      // An unchanged client merge must never turn an existing video into {}.
+      // Nested empty maps still retain their normal replacement semantics.
+      if (op.type === 'set' && op.merge === true && exists && Object.keys(data).length === 0) continue;
       if (op.type === 'create' && exists) throw failure('already_exists', 409);
       if (op.type === 'update' && !exists) throw failure('not_found', 404);
       if (op.type === 'update') {
