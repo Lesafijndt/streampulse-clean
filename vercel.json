@@ -1,6 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/queue", "destination": "/index.html" },
+    { "source": "/queue/", "destination": "/index.html" },
     { "source": "/api/twitch/bot-logout", "destination": "/api/twitch/bot-session?action=logout" },
     { "source": "/api/twitch/eventsub", "destination": "/api/twitch/bot-session?action=webhook&legacy=1" }
   ],

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { parseMediaUrl, getMediaIdentityKey, getStableMediaDocumentId,
   detectVideoCategory, detectMusicType } from '../src/mediaUtils.js';
 import { getQueueNamespace } from './firebase-guard.js';
+import { buildMediaMetadataPatch } from '../src/mediaMetadata.js';
 
 const SUPPORTED = new Set([
   'youtube.com','www.youtube.com','m.youtube.com','music.youtube.com','youtu.be',
@@ -129,7 +130,7 @@ export async function makeQueueItems(event) {
  * webhook retries cannot enqueue twice. Different URLs in the same second
  * do not share a rate limit. Staff permissions are never applied to viewers.
  */
-export async function persistChatEvent(db, { event, messageId, subscriptionId }) {
+export async function persistChatEvent(db, { event, messageId, subscriptionId }, { lookupMetadata } = {}) {
   const namespace = getQueueNamespace();
   // Message identity is independent of subscription: an old and a replacement
   // webhook may briefly deliver the same Twitch message concurrently.
@@ -142,6 +143,12 @@ export async function persistChatEvent(db, { event, messageId, subscriptionId })
   // including rejected/duplicate cases needed by moderator diagnostics.
   if (['not_a_request', 'ignored_sender', 'wrong_broadcaster'].includes(pending.reason)) {
     return { status: pending.reason, queued: 0 };
+  }
+  if (lookupMetadata) {
+    await Promise.all(pending.items.map(async item => {
+      try { Object.assign(item, buildMediaMetadataPatch(item, item, await lookupMetadata(item.url))); }
+      catch { /* Metadata failure must never reject an otherwise valid request. */ }
+    }));
   }
   const result = await db.runTransaction(async tx => {
     const roomRef = base.collection('room_settings').doc('2o3a');

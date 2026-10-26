@@ -1,7 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDurationFromHtml, parseDurationFromPlayerResponse, parseIso8601Duration } from '../api/media-metadata.js';
+import { parseDurationFromHtml, parseDurationFromPlayerResponse, parseIso8601Duration, parsePageMetadata } from '../api/media-metadata.js';
 import { MAX_MEDIA_DURATION_SECONDS, isValidMediaDuration } from '../src/durationLookup.js';
+
+test('TikTok metadata selects the requested item instead of recommended videos', () => {
+  const html = '<script id="SIGI_STATE">' + JSON.stringify({ ItemModule: {
+    wrong: { desc: 'Recommended video', video: { duration: 99 } },
+    wanted: { desc: 'Actual caption', video: { duration: 37, cover: 'https://example.com/image.jpg' } }
+  } }) + '</script>';
+  assert.deepEqual(parsePageMetadata(html, 'wanted'), { title: 'Actual caption', durationSec: 37, thumbnailUrl: 'https://example.com/image.jpg' });
+  assert.equal(parsePageMetadata('<meta property="og:title" content="TikTok - Make Your Day">').title, '');
+  assert.equal(parsePageMetadata('<meta property="og:title" content="A &amp; B">').title, 'A & B');
+  const missing = '<script id="SIGI_STATE">' + JSON.stringify({ ItemModule: {
+    wrong: { desc: 'Recommended', video: { duration: 99 } },
+    wanted: { desc: 'Target without duration', video: {} },
+    untitled: { video: { duration: 12 } }
+  } }) + '</script>';
+  assert.equal(parsePageMetadata(missing, 'wanted').durationSec, null);
+  assert.equal(parsePageMetadata(missing, 'absent').durationSec, null);
+  assert.equal(parsePageMetadata(missing, 'untitled').durationSec, 12);
+});
 
 test('YouTube ISO-8601 duration values are parsed correctly', () => {
   assert.equal(parseIso8601Duration('PT3M45S'), 225);

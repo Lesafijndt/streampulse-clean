@@ -27,7 +27,7 @@ test('request is durably buffered independently of Firestore; quota failures can
   assert.equal(captured.options.retentionSeconds, 604800);
   assert.equal(captured.options.idempotencyKey, 'chat-message-123');
   const quota = Object.assign(new Error('RESOURCE_EXHAUSTED'), { code: 8 });
-  await assert.rejects(consumeRequest(captured.payload, { db: {
+  await assert.rejects(consumeRequest(captured.payload, { lookupMetadata: null, db: {
     collection() { throw quota; },
   } }), error => error === quota);
   assert.deepEqual(retryDelay(quota, { deliveryCount: 100 }), { afterSeconds: 900 });

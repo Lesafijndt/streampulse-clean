@@ -1,5 +1,20 @@
+// Split at Unicode code points; every character of the normalized reply is retained.
+export function chunkCommandReply(message, prefix = '') {
+  let text = String(message).replace(/\s+/g, ' ').trim();
+  const label = String(prefix).replace(/\s+/g, ' ').trim();
+  if (label && text.startsWith(label + ' ')) text = text.slice(label.length + 1);
+  const heading = label ? label + ' ' : '';
+  const capacity = 450 - Array.from(heading).length;
+  if (capacity < 1) throw new Error('chat_reply_prefix_too_long');
+  const points = Array.from(text), chunks = [];
+  while (points.length) chunks.push(heading + points.splice(0, capacity).join(''));
+  return chunks;
+}
+
 let cached;
 export async function sendCommandReply(message, request = fetch) {
+  const normalized = String(message).replace(/\s+/g, ' ').trim();
+  if (!normalized || Array.from(normalized).length > 450) return { sent: false, code: 'chat_reply_invalid_length' };
   const clientId = process.env.TWITCH_CLIENT_ID, secret = process.env.TWITCH_CLIENT_SECRET;
   if (!clientId || !secret) return { sent: false, code: 'twitch_app_not_configured' };
   try {
@@ -21,7 +36,7 @@ export async function sendCommandReply(message, request = fetch) {
     const response = await request('https://api.twitch.tv/helix/chat/messages', { method: 'POST',
       headers: { ...session.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ broadcaster_id: String(session.broadcaster), sender_id: String(session.sender),
-        message: Array.from(String(message).replace(/\s+/g, ' ').trim()).slice(0, 450).join(''), for_source_only: true }), signal: AbortSignal.timeout(5000) });
+        message: normalized, for_source_only: true }), signal: AbortSignal.timeout(5000) });
     const result = await response.json().catch(() => ({}));
     if (response.ok && result.data?.[0]?.is_sent === true) return { sent: true };
     if (response.status === 401) cached = null;

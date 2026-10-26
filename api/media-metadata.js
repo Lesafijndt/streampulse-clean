@@ -159,7 +159,34 @@ function getProviderFamily(hostname) {
   return '';
 }
 
-async function fetchDurationFromPage(source) {
+export function parsePageMetadata(html, videoId = '') {
+  const text = String(html || '').slice(0, 8_000_000);
+  let hasTikTokItemData = false;
+  for (const match of text.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const id = readAttribute(match[1], 'id');
+    if (!['__UNIVERSAL_DATA_FOR_REHYDRATION__', 'SIGI_STATE'].includes(id)) continue;
+    try {
+      const body = JSON.parse(match[2]);
+      hasTikTokItemData = true;
+      const main = body.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+      const item = main && (!videoId || String(main.id) === videoId) ? main :
+        videoId ? body.ItemModule?.[videoId] : Object.values(body.ItemModule || {})[0];
+      if (item) return { title: typeof item.desc === 'string' ? item.desc.trim() : '', durationSec: isValidMediaDuration(item.video?.duration) ? Math.round(Number(item.video.duration)) : null,
+        thumbnailUrl: typeof item.video?.cover === 'string' ? item.video.cover : '' };
+    } catch { /* Public pages can contain unrelated or malformed script blocks. */ }
+  }
+  let title = '', thumbnailUrl = '';
+  const decode = value => String(value).replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  for (const tag of text.match(/<meta\b[^>]*>/gi) || []) {
+    const key = readAttribute(tag, 'property') || readAttribute(tag, 'name');
+    if (key === 'og:title') title = decode(readAttribute(tag, 'content'));
+    if (key === 'og:image') thumbnailUrl = decode(readAttribute(tag, 'content'));
+  }
+  if (/^(?:TikTok(?: - Make Your Day)?|Make Your Day|YouTube)$/i.test(title)) title = '';
+  return { title, thumbnailUrl, durationSec: videoId && hasTikTokItemData ? null : parseDurationFromHtml(text) };
+}
+const pageMetadataCache = new Map();
+async function fetchPageMetadataUncached(source) {
   try {
     const initialFamily = getProviderFamily(source.hostname);
     if (!initialFamily) return null;
@@ -187,11 +214,20 @@ async function fetchDurationFromPage(source) {
       if (!response.ok) return null;
       const contentType = String(response.headers.get('content-type') || '').toLowerCase();
       if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) return null;
-      return parseDurationFromHtml(await response.text());
+      return parsePageMetadata(await response.text(), getTikTokVideoId(source));
     }
     return null;
   } catch { return null; }
 }
+function fetchPageMetadata(source) {
+  const key = source.href, saved = pageMetadataCache.get(key);
+  if (saved?.request === fetch && saved.until > Date.now()) return saved.promise;
+  if (pageMetadataCache.size >= 100) pageMetadataCache.delete(pageMetadataCache.keys().next().value);
+  const promise = fetchPageMetadataUncached(source);
+  pageMetadataCache.set(key, { request: fetch, until: Date.now() + 60000, promise });
+  return promise;
+}
+async function fetchDurationFromPage(source) { return (await fetchPageMetadata(source))?.durationSec || null; }
 
 async function fetchYouTubeApiDuration(videoId) {
   const apiKey = process.env.YOUTUBE_API_KEY;
@@ -349,17 +385,17 @@ export default async function handler(req, res) {
     }).then(async (response) => response.ok ? response.json().catch(() => ({})) : {}).catch(() => ({}))
     : Promise.resolve({});
   const durationPromise = fetchMediaDuration(source, host);
-  const [data, durationResult] = await Promise.all([metadataPromise, durationPromise]);
+  const [data, durationResult, page] = await Promise.all([metadataPromise, durationPromise, fetchPageMetadata(source)]);
   const durationSec = isValidMediaDuration(durationResult?.seconds) ? Math.round(durationResult.seconds) : null;
   return res.status(200).json({
-    title: typeof data.title === 'string' ? data.title.slice(0, 400) : '',
+    title: (typeof data.title === 'string' && data.title.trim() ? data.title : page?.title || '').slice(0, 400),
     authorName: typeof data.author_name === 'string' ? data.author_name.slice(0, 100) : '',
-    thumbnailUrl: typeof data.thumbnail_url === 'string' ? data.thumbnail_url : '',
+    thumbnailUrl: typeof data.thumbnail_url === 'string' && data.thumbnail_url ? data.thumbnail_url : page?.thumbnailUrl || '',
     durationSec,
     duration: durationSec ? formatDuration(durationSec) : '',
     durationSource: durationSec ? 'metadata' : 'unknown',
     durationProvider: String(durationResult?.provider || ''),
     durationReason: durationSec ? '' : String(durationResult?.reason || 'The provider did not return duration metadata.').slice(0, 360),
-    metadataAvailable: Boolean(data.title || durationSec)
+    metadataAvailable: Boolean(data.title || page?.title || durationSec)
   });
 }

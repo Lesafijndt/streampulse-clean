@@ -1,6 +1,9 @@
 import { getQueueNamespace } from './firebase-guard.js';
 import { getPostgresStore } from './postgres-store.js';
 import { normalizeActivityEvent } from '../src/activityLog.js';
+import { buildMediaMetadataPatch } from '../src/mediaMetadata.js';
+import { getPlaybackGeneration } from '../src/playerBridge.js';
+import { buildShuffleQueueTransition } from '../src/queueShuffle.js';
 
 const STAFF = new Set(['2o3a', 'paim_beach_pete']);
 const SAFE_ID = /^[A-Za-z0-9_-]{1,180}$/;
@@ -48,6 +51,32 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = new URL(process.env.TWITCH_APP_URL || 'https://' + req.headers.host).origin;
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (body?.operation === 'shuffle') {
+      if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) throw fail('version_required');
+      const state = await db.readState({ collections: [prefix + 'queue_videos'] });
+      if (state.version !== body.expectedVersion) throw fail('conflict', 409);
+      const videos = Object.entries(state.documents).flatMap(([path, data]) => {
+        if (!path.startsWith(prefix + 'queue_videos/') || path.slice((prefix + 'queue_videos/').length).includes('/') || data?.channelRoom !== '2o3a') return [];
+        return [{ ...data, id: path.split('/').at(-1) }];
+      });
+      const { updates } = buildShuffleQueueTransition(videos, dependencies.random || Math.random);
+      const operations = [...updates].map(([id, data]) => ({ type: 'update', path: prefix + 'queue_videos/' + id, data }));
+      const result = await db.commitOperations(operations, { expectedVersion: state.version });
+      return res.status(200).json({ ok: true, version: result.version });
+    }
+    if (body?.operation === 'enrich-metadata') {
+      if (!SAFE_ID.test(body.id || '') || typeof body.url !== 'string' || typeof body.generation !== 'string' || !body.patch || JSON.stringify(body.patch).length > 10000) throw fail('invalid_metadata');
+      const applied = await db.runTransaction(async tx => {
+        const ref = db.doc(prefix + 'queue_videos/' + body.id);
+        const row = (await tx.get(ref)).data();
+        if (!row || row.channelRoom !== '2o3a' || row.url !== body.url || getPlaybackGeneration(row) !== body.generation) return false;
+        const patch = buildMediaMetadataPatch(row, row, { title: body.patch.title, thumbnailUrl: body.patch.thumbnail,
+          durationSec: body.patch.durationSec, durationProvider: body.patch.durationProvider });
+        if (!Object.keys(patch).length) return false;
+        tx.update(ref, patch);return true;
+      });
+      return res.status(200).json({ ok: true, applied });
+    }
     if (body?.operation === 'claim-chat-command') {
       if (!SAFE_ID.test(body.id || '') || !['audio', 'reply'].includes(body.kind)) throw fail('invalid_command_claim');
       if (identity.login !== (body.kind === 'audio' ? '2o3a' : 'paim_beach_pete')) throw fail('command_role_required', 403);

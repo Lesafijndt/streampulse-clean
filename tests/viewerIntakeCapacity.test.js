@@ -38,7 +38,7 @@ for (const concurrency of [1, 4]) test(`100 ordinary viewers pass signed webhook
   for (let i = 0; i < 100; i++) await deliver(eventFor(i), `signed-${i}`);
   assert.equal(payloads.length, 100);
   for (let start = 0; start < 100; start += concurrency) {
-    const results = await Promise.all(payloads.slice(start, start + concurrency).map(payload => consumeRequest(payload, { db })));
+    const results = await Promise.all(payloads.slice(start, start + concurrency).map(payload => consumeRequest(payload, { db, lookupMetadata: null })));
     assert.ok(results.every(result => result.status === 'queued' && result.queued === 1));
   }
   const queue = db.collection(`${base}/queue_videos`), receipts = db.collection(`${base}/twitch_eventsub_receipts`);
@@ -47,19 +47,19 @@ for (const concurrency of [1, 4]) test(`100 ordinary viewers pass signed webhook
   assert.deepEqual(rows.map(row => row.get('requestedBy')).sort(), Array.from({ length: 100 }, (_, i) => `ordinary_viewer_${i}`).sort());
   assert.ok(rows.every(row => row.get('userRole') === 'viewer' && row.get('status') === 'queue'));
   assert.equal((await receipts.get()).size, 100);
-  assert.equal((await consumeRequest(payloads[0], { db })).status, 'duplicate_delivery');
+  assert.equal((await consumeRequest(payloads[0], { db, lookupMetadata: null })).status, 'duplicate_delivery');
   const duplicate = await deliver({ ...eventFor(0), message_id: 'duplicate' }, 'duplicate');
-  assert.equal((await consumeRequest(duplicate, { db })).status, 'duplicate_media');
+  assert.equal((await consumeRequest(duplicate, { db, lookupMetadata: null })).status, 'duplicate_media');
   const original = rows.find(row => row.get('requestedBy') === 'ordinary_viewer_0');
   await original.ref.update({ status: 'watched', playedAt: 12345, retainedVotes: ['alice'] });
   const replay = await deliver({ ...eventFor(0), chatter_user_login: 'another_ordinary_viewer', message_id: 'replay' }, 'replay');
-  assert.equal((await consumeRequest(replay, { db })).status, 'queued');
+  assert.equal((await consumeRequest(replay, { db, lookupMetadata: null })).status, 'queued');
   const history = (await queue.get()).docs.filter(row => row.id.startsWith('history-'));
   assert.equal(history.length, 1); assert.equal(history[0].get('playedAt'), 12345);
   assert.deepEqual(history[0].get('retainedVotes'), ['alice']);
   assert.equal((await original.ref.get()).get('requestedBy'), 'another_ordinary_viewer');
   const bot = await deliver({ ...eventFor(101), chatter_user_login: 'GachiBot69' }, 'bot');
-  assert.equal((await consumeRequest(bot, { db })).status, 'ignored_sender');
+  assert.equal((await consumeRequest(bot, { db, lookupMetadata: null })).status, 'ignored_sender');
   assert.equal((await queue.get()).size, 101); assert.equal((await receipts.get()).size, 102);
-  await assert.rejects(consumeRequest({ ...payloads[0], event: eventFor(999) }, { db }), /invalid_queue_signature/);
+  await assert.rejects(consumeRequest({ ...payloads[0], event: eventFor(999) }, { db, lookupMetadata: null }), /invalid_queue_signature/);
 });

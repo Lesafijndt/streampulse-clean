@@ -63,7 +63,7 @@ export default async function handler(req, res) {
 
   const { message: rawMessage } = parseBody(req.body);
   const message = String(rawMessage || '').trim();
-  if (!message || message.length > 450) return res.status(400).json({ error: 'Message must contain 1–450 characters.' });
+  if (!message || Array.from(message).length > 450) return res.status(400).json({ error: 'Message must contain 1–450 characters.' });
 
   try {
     let staffToken = cookies.yedi_twitch_access;

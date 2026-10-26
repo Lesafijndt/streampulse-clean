@@ -27,7 +27,7 @@ export function buildTikTokPlayerUrl(videoId, { paused = false } = {}) {
   // TikTok's muted=1 embed option prevents users from changing volume in the player.
   // Keep muted=0 so its inline volume button and the host's mute/unmute commands work.
   const autoplay = paused ? 0 : 1;
-  return `https://www.tiktok.com/player/v1/${encodeURIComponent(id)}?autoplay=${autoplay}&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`;
+  return `https://www.tiktok.com/player/v1/${encodeURIComponent(id)}?autoplay=${autoplay}&loop=0&muted=0&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1&timestamp=1&description=0&music_info=0&closed_caption=0&native_context_menu=0&rel=0`;
 }
 const YOUTUBE_COMMANDS = new Set(['addEventListener','playVideo','pauseVideo','mute','unMute','setVolume','seekTo','getCurrentTime','getDuration','getVolume','getPlayerState','isMuted']);
 
@@ -91,4 +91,31 @@ export function getVisibilityRestoreActions(platform, { paused = false, muted = 
 export function getPlaybackGeneration(video) {
   if (!video) return '';
   return [video.id, video.timestamp || video.createdAt || 0, video.playedAt || 0].map(String).join(':');
+}
+
+/** One completion per mounted request generation, based only on provider evidence. */
+export function createPlaybackCompletionTracker() {
+  let completed = false;
+  let playing = false;
+  let previousTime = null;
+  return {
+    get completed() { return completed; },
+    observe({ state, currentTime, duration, paused = false } = {}) {
+      if (completed) return false;
+      // ENDED is authoritative even if PAUSED immediately preceded it, or the
+      // listener attached too late to see PLAYING. A saved pause must not mask it.
+      if (state === 0) { completed = true; return true; }
+      if (Number.isFinite(state)) playing = state === 1;
+      const time = Number(currentTime);
+      const length = Number(duration);
+      // Some embeds report the final media time without an ended notification.
+      // Require actual forward progress at the boundary; never use elapsed wall
+      // time, metadata duration, a paused seek, or a near-end rewind as completion.
+      const atEnd = playing && !paused && Number.isFinite(time) && Number.isFinite(length) &&
+        length > 0 && previousTime !== null && time > previousTime && time >= length;
+      if (Number.isFinite(time) && time >= 0) previousTime = time;
+      if (atEnd) completed = true;
+      return atEnd;
+    },
+  };
 }

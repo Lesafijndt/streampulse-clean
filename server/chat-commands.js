@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { parseChatNotification } from '../src/twitchChatEvents.js';
 import { buildNextTrackTransition, getDurationEstimate } from '../src/queueLogic.js';
 import { getQueueNamespace } from './firebase-guard.js';
-import { sendCommandReply } from './command-reply.js';
+import { sendCommandReply, chunkCommandReply } from './command-reply.js';
 import { createActivityEvent } from '../src/activityLog.js';
 
 export function parseServerCommand(event) {
@@ -27,7 +27,7 @@ export function parseServerCommand(event) {
 }
 const order = (a, b) => Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0) || String(a.id).localeCompare(String(b.id));
 const title = video => String(video?.title || 'Untitled').replace(/\s+/g, ' ').slice(0, 35);
-export async function persistChatCommand(db, { event, messageId }, dependencies = {}) {
+export async function persistChatCommand(db, { event, messageId, expiresAt }, dependencies = {}) {
   const command = parseServerCommand(event);
   if (!command) return { status: 'ignored_command', queued: 0 };
   const prefix = `artifacts/${getQueueNamespace()}/public/data/`;
@@ -39,6 +39,7 @@ export async function persistChatCommand(db, { event, messageId }, dependencies 
   const result = await db.runTransaction(async tx => {
     const saved = await tx.get(receipt);
     if (saved.exists) return { ...saved.data(), duplicate: true };
+    if (Number.isFinite(expiresAt) && now > expiresAt) return { status: 'command_expired', queued: 0 };
     if (!command.permitted) {
       const denied = { status: 'command_denied', command: command.type, sender: command.login, receivedAt: now, queued: 0 };
       tx.create(receipt, denied);return denied;
@@ -53,8 +54,10 @@ export async function persistChatCommand(db, { event, messageId }, dependencies 
       id: id + '-' + type, type, room: '2o3a', at: now, video, actor: command.login, source: 'twitch-chat-command' }));
     if (command.type === 'volume') {
       const feed = Array.isArray(settings.chatCommandFeed) ? settings.chatCommandFeed : [];
-      tx.set(room, { ...settings, chatCommandFeed: [...feed.filter(entry => entry.at > now - 120000),
-        { id, at: now, volumeCommand: command.volumeCommand }].slice(-30), updatedAt: now });
+      const pending = feed.filter(entry => entry.at > now - 120000);
+      if (pending.length >= 30) throw new Error('chat_command_feed_full');
+      tx.set(room, { ...settings, chatCommandFeed: [...pending,
+        { id, at: now, volumeCommand: command.volumeCommand }], updatedAt: now });
     } else if (command.type === 'skip' && (playing || queue[0])) {
       const transition = buildNextTrackTransition(videos, playing || queue[0], order, now);
       for (const [key, patch] of transition.updatesById) tx.set(db.doc(prefix + 'queue_videos/' + key), patch, { merge: true });
@@ -81,38 +84,64 @@ export async function persistChatCommand(db, { event, messageId }, dependencies 
         changed = true;reply = `@${command.login} +1 vote: ${title(target)}.`;
       }
     } else if (command.type === 'queue') {
-      reply = `@${command.login} ${playing ? 'Now: ' + title(playing) : 'Nothing playing'} | ${queue.length} waiting. Next: ${queue.slice(0, 3).map((row, index) => '#' + (index + 1) + ' ' + title(row)).join(', ') || 'empty'}.`;
+      reply = `@${command.login} ${playing ? 'Now: ' + title(playing) : 'Nothing playing'} | ${queue.length} waiting. Next: ${queue.slice(0, 3).map((row, index) => '#' + (index + 1) + ' ' + title(row)).join(', ') || 'empty'}. https://streampulse-clean.vercel.app/queue`;
     } else if (command.type === 'position') {
       let seconds = playing ? getDurationEstimate(playing).seconds : 0;
       const entries = [];
-      if (playing?.requestedBy?.toLowerCase() === command.login) entries.push('Playing now: ' + title(playing));
-      queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + title(row) + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
-      reply = `@${command.login} ${entries.slice(0, 3).join('; ') || 'No upcoming requests.'}`;
+      videos.filter(row => row.status === 'playing' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Playing now: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim()));
+      queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
+      videos.filter(row => row.status === 'watch_later' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Watch later: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim()));
+      reply = `@${command.login} ${entries.join('; ') || 'No upcoming requests.'}`;
     } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !bigcock [#] / !vote [#]. Mods: !skip, !volume 0-100/up/down, !mute, !unmute.';
-    const outcome = { status: 'command_processed', command: command.type, sender: command.login, receivedAt: now, queued: 0, changed, reply };
+    const outcome = { status: 'command_processed', command: command.type, sender: command.login, receivedAt: now, queued: 0, changed, reply, replyChunks: reply ? chunkCommandReply(reply, command.type === 'position' ? `@${command.login} ` : '') : [] };
     tx.create(receipt, outcome);return outcome;
   });
   if (!result.reply || result.replyDelivery) return result;
+  const chunks = Array.isArray(result.replyChunks) && result.replyChunks.length ? result.replyChunks : chunkCommandReply(result.reply);
   const lease = randomUUID();
-  const claimed = await db.runTransaction(async tx => {
-    const current = (await tx.get(receipt)).data();
-    if (current.replyDelivery === 'sent' || current.replyDelivery === 'dashboard' || Number(current.replyLeaseUntil || 0) > Date.now()) return false;
-    tx.update(receipt, { replyLease: lease, replyLeaseUntil: Date.now() + 30000 });return true;
-  });
-  if (!claimed) return result;
-  const delivery = await (dependencies.sendReply || sendCommandReply)(result.reply);
-  await db.runTransaction(async tx => {
-    const current = (await tx.get(receipt)).data();
-    const settings = (await tx.get(room)).data() || { channelRoom: '2o3a' };
-    if (current.replyLease !== lease) return;
-    tx.update(receipt, { replyDelivery: delivery.sent ? 'sent' : 'dashboard', replyLeaseUntil: 0 });
-    if (!delivery.sent) {
-      const feed = Array.isArray(settings.chatCommandFeed) ? settings.chatCommandFeed : [];
-      tx.set(room, { ...settings, chatCommandFeed: [...feed.filter(entry => entry.at > now - 120000), { id, at: now, reply: result.reply }].slice(-30),
-        chatReplyDiagnostic: { code: delivery.code || 'chat_reply_failed', at: now }, updatedAt: now });
-    } else if (settings.chatReplyDiagnostic?.code && settings.chatReplyDiagnostic.code !== 'ok') {
-      tx.set(room, { ...settings, chatReplyDiagnostic: { code: 'ok', at: now }, updatedAt: now });
+  let deliveryState = result.replyDelivery;
+  let deliveredThisRun = 0;
+  for (let index = 0; index < chunks.length; index++) {
+    const claimed = await db.runTransaction(async tx => {
+      const current = (await tx.get(receipt)).data();
+      if (current.replyDelivery || current.replyProgress?.[index]) return 'done';
+      if (deliveredThisRun >= 8) return 'pending';
+      if (current.replyLease && current.replyLease !== lease && Number(current.replyLeaseUntil || 0) > Date.now()) return 'busy';
+      tx.update(receipt, { replyLease: lease, replyLeaseUntil: Date.now() + 30000 });return 'claimed';
+    });
+    if (claimed === 'done') continue;
+    if (claimed === 'busy') throw new Error('chat_reply_delivery_busy');
+    if (claimed === 'pending') throw new Error('chat_reply_pending');
+    try {
+      const delivery = await (dependencies.sendReply || sendCommandReply)(chunks[index]);
+      await db.runTransaction(async tx => {
+        const current = (await tx.get(receipt)).data();
+        const settings = (await tx.get(room)).data() || { channelRoom: '2o3a' };
+        if (current.replyLease !== lease) throw new Error('chat_reply_lease_lost');
+        const progress = { ...current.replyProgress, [index]: delivery.sent ? 'sent' : 'dashboard' };
+        const finished = chunks.every((_, chunk) => progress[chunk]);
+        deliveryState = finished ? Object.values(progress).every(value => value === 'sent') ? 'sent' : 'dashboard' : undefined;
+        if (!delivery.sent) {
+          const at = Date.now();
+          const feed = (Array.isArray(settings.chatCommandFeed) ? settings.chatCommandFeed : []).filter(entry => entry.at > at - 120000);
+          // Never evict earlier chunks to fit a long reply. Retry remaining chunks after capacity frees.
+          if (feed.length >= 30) throw new Error('chat_reply_feed_full');
+          tx.set(room, { ...settings, chatCommandFeed: [...feed, { id: chunks.length === 1 ? id : id + '-reply-' + index, at, reply: chunks[index] }],
+            chatReplyDiagnostic: { code: delivery.code || 'chat_reply_failed', at }, updatedAt: at });
+        } else if (settings.chatReplyDiagnostic?.code && settings.chatReplyDiagnostic.code !== 'ok') {
+          tx.set(room, { ...settings, chatReplyDiagnostic: { code: 'ok', at: Date.now() }, updatedAt: Date.now() });
+        }
+        tx.update(receipt, { replyProgress: progress, replyLeaseUntil: 0, ...(deliveryState ? { replyDelivery: deliveryState } : {}) });
+      });
+      deliveredThisRun++;
+    } catch (error) {
+      // Keep completed chunks durable while allowing the unsent remainder to resume immediately.
+      await db.runTransaction(async tx => {
+        const current = (await tx.get(receipt)).data();
+        if (current.replyLease === lease) tx.update(receipt, { replyLeaseUntil: 0 });
+      });
+      throw error;
     }
-  });
-  return { ...result, replyDelivery: delivery.sent ? 'sent' : 'dashboard' };
+  }
+  return { ...result, ...(deliveryState ? { replyDelivery: deliveryState } : {}) };
 }

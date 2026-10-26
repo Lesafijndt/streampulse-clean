@@ -1,7 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createPlaybackCompletionTracker } from '../src/playerBridge.js';
 import { buildTikTokPlayerUrl, getVisibilityRestoreActions, getVisibilityRestoreCommands, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from '../src/playerBridge.js';
+
+test('provider ended overrides a preceding pause and is latched across replay notifications', () => {
+  const tracker = createPlaybackCompletionTracker();
+  assert.equal(tracker.observe({ state: 1, currentTime: 2.9, duration: 3 }), false);
+  assert.equal(tracker.observe({ state: 2, currentTime: 0, paused: true }), false);
+  assert.equal(tracker.observe({ state: 0, paused: true }), true);
+  for (const state of [0, 1, 0, 2, 0]) assert.equal(tracker.observe({ state }), false);
+  assert.equal(createPlaybackCompletionTracker().observe({ state: 0, paused: true }), true);
+});
+
+test('completion fallback requires advancing provider time at its actual duration while playing', () => {
+  const tracker = createPlaybackCompletionTracker();
+  assert.equal(tracker.observe({ state: 1, currentTime: 2.9, duration: 3 }), false);
+  assert.equal(tracker.observe({ currentTime: 0, duration: 3 }), false, 'rewind is not completion');
+  assert.equal(tracker.observe({ state: 2, currentTime: 3, duration: 3, paused: true }), false);
+  assert.equal(tracker.observe({ state: 1, currentTime: 2, duration: 3 }), false);
+  assert.equal(tracker.observe({ currentTime: 3, duration: 3 }), true);
+  assert.equal(tracker.observe({ state: 0 }), false);
+});
 
 test('TikTok commands are allowlisted and target the official embed origin', () => {
   const messages = []; const target = { postMessage: (data, origin) => messages.push({ data, origin }) };

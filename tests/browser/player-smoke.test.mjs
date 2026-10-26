@@ -71,8 +71,35 @@ for (const provider of ['tiktok', 'youtube']) test(provider + ' actual dashboard
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
 
+for (const provider of ['tiktok', 'youtube']) for (const scenario of ['ended', 'boundary', 'paused', 'stopped']) {
+  test(provider + ' dashboard completion ' + scenario + ' persists one transition and autoplays next', () => {
+    const html = renderInChrome(baseUrl + '/tests/browser/completion-dashboard.html?provider=' + provider + '&scenario=' + scenario);
+    assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+  });
+}
+
 for (const role of ['streamer', 'moderator']) test(role + ' dashboard consumes verified webhook feed exactly once with isolated audio/replies', () => {
   const html = renderInChrome(baseUrl + '/tests/browser/command-dashboard.html?role=' + role);
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('actual dashboard enriches a playing placeholder title through the metadata store operation', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/metadata-playback-dashboard.html?provider=youtube');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('metadata generation changes during a lookup release pending state and retry the playing request', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/metadata-generation-dashboard.html?provider=youtube');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('header shuffle persists one atomic operation and preserves playback through success and conflict', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/shuffle-playback-dashboard.html?provider=youtube');
+  assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});
+
+test('public /queue App route never starts staff authentication or private storage', () => {
+  const html = renderInChrome(baseUrl + '/tests/browser/public-queue-route.html');
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
 

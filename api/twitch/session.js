@@ -67,6 +67,10 @@ async function getFirebaseAdminAuth() {
 }
 
 export default async function handler(req, res) {
+  if (String(req.query?.action || '') === 'queue-view') {
+    const { handlePublicQueue } = await import('../../server/public-queue.js');
+    return handlePublicQueue(req, res);
+  }
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Vary', 'Cookie');
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });

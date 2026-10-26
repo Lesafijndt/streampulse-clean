@@ -1,0 +1,20 @@
+<!doctype html><html><body><div id="root"></div><pre id="result">Running</pre><script type="module">
+import React from 'react';import {createRoot} from 'react-dom/client';import '../../src/index.css';
+history.replaceState(null,'','/queue');
+const nativeFetch=fetch.bind(window);const calls=[];
+window.fetch=(input,opts={})=>{
+ const url=new URL(typeof input==='string'?input:input.url,location.href);
+ if(!url.pathname.startsWith('/api/'))return nativeFetch(input,opts);
+ calls.push({url:url.pathname+url.search,method:opts.method||'GET'});
+ if(url.searchParams.get('action')!=='queue-view')throw Error('Public route attempted private API '+url);
+ return Promise.resolve(new Response(JSON.stringify({playing:{id:'a',title:'Current public video',platform:'youtube',durationSec:25,requestedBy:'viewer'},queue:[{position:1,id:'b',title:'Next public video',platform:'tiktok',durationSec:10,requestedBy:'requester'}],updatedAt:Date.now()}),{headers:{'Content-Type':'application/json'}}));
+};
+try{
+ const {default:App}=await import('/src/App.tsx');const root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
+ for(let i=0;i<100&&!document.body.textContent.includes('Next public video');i++)await new Promise(r=>setTimeout(r,20));
+ if(!document.body.textContent.includes('Current public video')||!document.body.textContent.includes('Next public video'))throw Error('Public queue did not render');
+ if(!calls.length||calls.some(c=>c.url!=='/api/twitch/session?action=queue-view'||c.method!=='GET'))throw Error('Unexpected API call '+JSON.stringify(calls));
+ if(document.querySelector('iframe')||document.querySelector('a[href*="login"]')||document.querySelector('[aria-label="Shuffle waiting queue"]'))throw Error('Public route exposed dashboard controls');
+ root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual /queue App route is read-only and makes no staff OAuth, private store, or preferences request';
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
+</script></body></html>

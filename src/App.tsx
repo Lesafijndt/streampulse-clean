@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'rea
 import {
   Play,
   SkipForward,
+  Shuffle,
   RotateCcw,
   Clock,
   CheckCircle2,
@@ -102,6 +103,7 @@ import {
 } from './queueLogic.js';
 import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
 const StatsBoard = lazy(() => import('./components/StatsBoard'));
+const PublicQueue = lazy(() => import('./components/PublicQueue'));
 import { WorkspaceGrid, WorkspacePanel } from './components/WorkspaceGrid';
 import TwitchClipPlayer from './components/TwitchClipPlayer';
 import TransportNavigation from './components/TransportNavigation';
@@ -109,10 +111,11 @@ import KeyboardShortcutHint from './components/KeyboardShortcutHint';
 import QueueToolbar from './components/QueueToolbar';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
-import { getPlaybackGeneration, buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
+import { createPlaybackCompletionTracker, getPlaybackGeneration, buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
 import { parseChatNotification, requestLikeChatMessage } from './twitchChatEvents.js';
 import { sanitizePersonalPreferences } from './personalPreferences.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
+import { buildMediaMetadataPatch, getMetadataLookupKey, videoNeedsMetadataLookup, videoNeedsTitleLookup } from './mediaMetadata.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 
 
@@ -406,6 +409,9 @@ function YediHubAppContent() {
   const pendingMediaRequestKeysRef = useRef(new Set());
   const durationEnrichmentInFlightRef = useRef(new Set());
   const [durationRefreshCount, setDurationRefreshCount] = useState(0);
+  const [metadataRetryTick, setMetadataRetryTick] = useState(0);
+  const [shuffleBusy, setShuffleBusy] = useState(false);
+  const shuffleInFlightRef = useRef(false);
   const durationRefreshProcessedRef = useRef(0);
   const [durationLookupOutcomes, setDurationLookupOutcomes] = useState(() => {
     const saved = readStoredValue(roomStorageKey(channelRoom, 'duration-lookup-status'), {});
@@ -1162,6 +1168,38 @@ function YediHubAppContent() {
     }
   };
 
+  const syncEnrichedMetadata = async (original, metadata) => {
+    const id = String(original.id);
+    const current = videosRef.current.find((item) => String(item.id) === id);
+    const patch = buildMediaMetadataPatch(original, current, metadata);
+    if (!Object.keys(patch).length) return patch;
+    if (db && firebaseUser) {
+      if (db.privateCloud) {
+        const response = await fetch('/api/twitch/session?action=store', {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation: 'enrich-metadata', id, url: original.url,
+            generation: getPlaybackGeneration(original), patch }), signal: AbortSignal.timeout(12000),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.ok !== true) throw new Error(body.code || 'Metadata could not be saved');
+        if (body.applied !== true) return {};
+      } else {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'queue_videos', id);
+        await runTransaction(db, async (transaction) => {
+          const snapshot = await transaction.get(ref);
+          const freshPatch = buildMediaMetadataPatch(original, snapshot.exists() ? snapshot.data() : null, metadata);
+          if (Object.keys(freshPatch).length) transaction.update(ref, freshPatch);
+        });
+      }
+    }
+    // Recheck after the network write: playback or a custom title may have changed meanwhile.
+    const latest = videosRef.current.find((item) => String(item.id) === id);
+    const localPatch = buildMediaMetadataPatch(original, latest, metadata);
+    videosRef.current = videosRef.current.map((item) => String(item.id) === id ? { ...item, ...localPatch } : item);
+    setVideos(videosRef.current);
+    return localPatch;
+  };
+
   const cacheVideoDuration = (video, rawDurationSeconds, source = 'metadata') => {
     const seconds = Math.round(Number(rawDurationSeconds));
     const key = getDurationCacheKey(video);
@@ -1228,26 +1266,30 @@ function YediHubAppContent() {
   // becoming permanently stuck; in-flight IDs are locked before state updates to prevent races.
   const durationScanKey = videos.map((video) =>
     String(video.id) + ':' + String(video.platform || '') + ':' + String(video.url || '') + ':' +
-    String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
+    String(video.title || '') + ':' + getPlaybackGeneration(video) + ':' + String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
   ).join('|');
   useEffect(() => {
+    // Do not mark a cached row enriched before authentication and the first
+    // authoritative snapshot: otherwise a local-only success can suppress the
+    // guarded metadata write when the original cloud row arrives.
+    if (!db || !firebaseUser || !cloudSynced) return undefined;
     const forceRetry = durationRefreshProcessedRef.current !== durationRefreshCount;
     durationRefreshProcessedRef.current = durationRefreshCount;
     const candidates = videosRef.current.filter((video) => {
       const id = String(video?.id || '');
-      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsDurationLookup(video)) return false;
-      return shouldRetryDurationLookup(durationLookupOutcomes[id], Date.now(), forceRetry);
+      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsMetadataLookup(video)) return false;
+      return shouldRetryDurationLookup(durationLookupOutcomes[getMetadataLookupKey(video)], Date.now(), forceRetry);
     }).slice(0, 160);
     if (!candidates.length) return undefined;
 
-    const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[String(video.id)] || null]));
+    const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[getMetadataLookupKey(video)] || null]));
     const startedAt = Date.now();
     candidates.forEach((video) => durationEnrichmentInFlightRef.current.add(String(video.id)));
     setDurationLookupOutcomes((prev) => ({
       ...prev,
       ...Object.fromEntries(candidates.map((video) => {
         const id = String(video.id);
-        return [id, createDurationLookupOutcome({
+        return [getMetadataLookupKey(video), createDurationLookupOutcome({
           status: 'pending', platform: video.platform, previous: previousOutcomes.get(id), at: startedAt,
         })];
       }))
@@ -1259,6 +1301,7 @@ function YediHubAppContent() {
         await Promise.all(batch.map(async (video) => {
           const id = String(video.id);
           const platform = String(video.platform || 'external').toLowerCase();
+          const lookupKey = getMetadataLookupKey(video);
           try {
             const response = await fetch('/api/media-metadata?url=' + encodeURIComponent(video.url), {
               credentials: 'same-origin',
@@ -1269,7 +1312,7 @@ function YediHubAppContent() {
             if (!response.ok) {
               setDurationLookupOutcomes((prev) => ({
                 ...prev,
-                [id]: createDurationLookupOutcome({
+                [lookupKey]: createDurationLookupOutcome({
                   status: 'error', platform, previous: previousOutcomes.get(id),
                   reason: metadata?.error || ('Metadata endpoint returned HTTP ' + response.status + '.'),
                   at: Date.now(),
@@ -1277,35 +1320,18 @@ function YediHubAppContent() {
               }));
               return;
             }
-            const seconds = Number(metadata?.durationSec);
-            if (!isValidMediaDuration(seconds)) {
-              setDurationLookupOutcomes((prev) => ({
-                ...prev,
-                [id]: createDurationLookupOutcome({
-                  status: 'unavailable', platform, previous: previousOutcomes.get(id),
-                  reason: metadata?.durationReason || 'The provider did not return a valid duration.',
-                  provider: metadata?.durationProvider || '',
-                  at: Date.now(),
-                })
-              }));
-              return;
-            }
-
+            const patch = await syncEnrichedMetadata(video, metadata);
             const current = videosRef.current.find((item) => String(item.id) === id);
-            if (!current) return;
-            cacheVideoDuration(current, seconds, 'metadata');
-            if (!['metadata', 'player'].includes(String(current.durationSource || ''))) {
-              void syncUpdateVideo(id, {
-                duration: formatMediaDuration(seconds),
-                durationSec: seconds,
-                durationSource: 'metadata',
-                durationProvider: String(metadata?.durationProvider || ''),
-              });
+            if (!current || getPlaybackGeneration(video) !== getPlaybackGeneration(current) || video.url !== current.url) return;
+            if (Object.keys(patch).length) {
+              if (patch.durationSec) cacheVideoDuration(current, patch.durationSec, 'metadata');
             }
+            const complete = !videoNeedsMetadataLookup({ ...current, ...patch });
             setDurationLookupOutcomes((prev) => ({
               ...prev,
-              [id]: createDurationLookupOutcome({
-                status: 'found', platform, previous: previousOutcomes.get(id),
+              [lookupKey]: createDurationLookupOutcome({
+                status: complete ? 'found' : 'unavailable', platform, previous: previousOutcomes.get(id),
+                reason: videoNeedsTitleLookup({ ...current, ...patch }) ? 'The provider did not return a usable title.' : (metadata?.durationReason || 'The provider did not return a valid duration.'),
                 provider: metadata?.durationProvider || '', at: Date.now(),
               })
             }));
@@ -1315,37 +1341,46 @@ function YediHubAppContent() {
               : String(error?.message || 'Network error during duration lookup.');
             setDurationLookupOutcomes((prev) => ({
               ...prev,
-              [id]: createDurationLookupOutcome({
+              [lookupKey]: createDurationLookupOutcome({
                 status: 'error', platform, previous: previousOutcomes.get(id), reason, at: Date.now(),
               })
             }));
           } finally {
             durationEnrichmentInFlightRef.current.delete(id);
+            const latest = videosRef.current.find((item) => String(item.id) === id);
+            if (!latest || getPlaybackGeneration(latest) !== getPlaybackGeneration(video) || latest.url !== video.url) {
+              // Queue -> playing changes the generation while duration-only
+              // outcomes still share the document-id key. Retire this attempt
+              // after unlocking so its pending/found state cannot strand the
+              // new generation or suppress a fresh metadata request.
+              setDurationLookupOutcomes((prev) => {
+                const next = { ...prev };
+                delete next[lookupKey];
+                return next;
+              });
+              setMetadataRetryTick((tick) => tick + 1);
+            }
           }
         }));
       }
     };
     void enrich();
     return undefined;
-  }, [durationScanKey, channelRoom, durationRefreshCount, durationLookupOutcomes]);
+  }, [durationScanKey, channelRoom, durationRefreshCount, metadataRetryTick, durationLookupOutcomes, db, firebaseUser, cloudSynced]);
 
   // Retry failed duration lookups even when the dashboard stays open. Persisted retry times
   // let a reload resume a bounded backoff schedule rather than leaving failed entries stuck.
   useEffect(() => {
-    const currentIds = new Set(videos.map((video) => String(video.id)));
-    const retryTimes = Object.entries(durationLookupOutcomes)
-      .filter(([id, outcome]) => currentIds.has(String(id)) &&
-        ['unavailable', 'error'].includes(typeof outcome === 'string' ? outcome : outcome?.status))
-      .filter(([id]) => {
-        const video = videosRef.current.find((item) => String(item.id) === String(id));
-        return videoNeedsDurationLookup(video) && !durationEnrichmentInFlightRef.current.has(String(id));
-      })
-      .map(([, outcome]) => Number(typeof outcome === 'object' ? outcome?.nextRetryAt : 0) || 0)
+    const retryTimes = videos.filter((video) => videoNeedsMetadataLookup(video) &&
+        !durationEnrichmentInFlightRef.current.has(String(video.id)))
+      .map((video) => durationLookupOutcomes[getMetadataLookupKey(video)])
+      .filter((outcome) => ['unavailable', 'error'].includes(outcome?.status))
+      .map((outcome) => Number(outcome.nextRetryAt) || 0)
       .filter((time) => time > Date.now())
       .sort((a, b) => a - b);
     if (!retryTimes.length) return undefined;
     const delay = Math.max(1000, Math.min(2_147_000_000, retryTimes[0] - Date.now()));
-    const timer = window.setTimeout(() => setDurationRefreshCount((count) => count + 1), delay);
+    const timer = window.setTimeout(() => setMetadataRetryTick((count) => count + 1), delay);
     return () => window.clearTimeout(timer);
   }, [durationLookupOutcomes, durationScanKey]);
 
@@ -2706,7 +2741,7 @@ function YediHubAppContent() {
     if (deferredMetadataPromise && !resolvedDurationSec) {
       const newVideoId = String(newVideo.id);
       const previousLookup = durationLookupOutcomes[newVideoId] || null;
-      void deferredMetadataPromise.then((metadata) => {
+      void deferredMetadataPromise.then(async (metadata) => {
         const candidateDuration = Number(metadata?.durationSec);
         if (!isValidMediaDuration(candidateDuration)) {
           setDurationLookupOutcomes((prev) => ({
@@ -2723,14 +2758,9 @@ function YediHubAppContent() {
           return;
         }
         const current = videosRef.current.find((video) => String(video.id) === newVideoId);
-        if (!current) return;
-        cacheVideoDuration(current, candidateDuration, 'metadata');
-        void syncUpdateVideo(newVideoId, {
-          duration: formatMediaDuration(candidateDuration),
-          durationSec: candidateDuration,
-          durationSource: 'metadata',
-          durationProvider: String(metadata?.durationProvider || ''),
-        });
+        if (!current || getPlaybackGeneration(newVideo) !== getPlaybackGeneration(current) || newVideo.url !== current.url) return;
+        const patch = await syncEnrichedMetadata(newVideo, metadata);
+        if (patch.durationSec) cacheVideoDuration(current, patch.durationSec, 'metadata');
         setDurationLookupOutcomes((prev) => ({
           ...prev,
           [newVideoId]: createDurationLookupOutcome({
@@ -2748,6 +2778,17 @@ function YediHubAppContent() {
         }));
       }).finally(() => {
         durationEnrichmentInFlightRef.current.delete(newVideoId);
+        const latest = videosRef.current.find((video) => String(video.id) === newVideoId);
+        if (!latest || getPlaybackGeneration(latest) !== getPlaybackGeneration(newVideo) || latest.url !== newVideo.url) {
+          setDurationLookupOutcomes((prev) => {
+            const next = { ...prev };
+            delete next[newVideoId];
+            return next;
+          });
+        }
+        // Release the lock before waking the normal enrichment scanner, including
+        // when a submitted request started playing during this deferred lookup.
+        setMetadataRetryTick((tick) => tick + 1);
       });
     }
 
@@ -2867,6 +2908,37 @@ function YediHubAppContent() {
 
     if (nextOne) addToast(`Now playing: ${String(nextOne.title || 'video').slice(0, 32)}...`, 'info');
     else addToast('Reached end of queue.', 'info');
+  };
+
+  const handleShuffleQueue = async () => {
+    if (!isStaff || !db?.privateCloud || shuffleInFlightRef.current) return;
+    if (!Number.isSafeInteger(db.version) || db.version < 0) {
+      addToast('Wait for the queue to finish syncing before shuffling.', 'warning');
+      return;
+    }
+    shuffleInFlightRef.current = true;
+    setShuffleBusy(true);
+    try {
+      const response = await fetch('/api/twitch/session?action=store', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'shuffle', expectedVersion: db.version }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
+        addToast('The queue changed. It is refreshed; try Shuffle again.', 'warning');
+        return;
+      }
+      if (!response.ok || result.ok !== true) throw new Error('Queue could not be shuffled.');
+      await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'));
+      addToast('Waiting queue shuffled. Pinned positions are preserved.', 'success');
+    } catch (error) {
+      addToast(error?.message || 'Queue could not be shuffled.', 'warning');
+    } finally {
+      shuffleInFlightRef.current = false;
+      setShuffleBusy(false);
+    }
   };
 
   // Keep audio commands in the saved browser preference shared by YouTube and native Twitch.
@@ -3051,7 +3123,7 @@ function YediHubAppContent() {
     const iframe = youtubeIframeRef.current;
     if (!video || video.platform !== 'youtube' || !video.videoId || !iframe) {
       youtubePlayerRef.current = null;
-      youtubePlaybackInfoRef.current = { currentTime: 0, duration: 0, volume: 100, muted: false, playerState: -1 };
+      youtubePlaybackInfoRef.current = { currentTime: 0, duration: 0, volume: 50, muted: false, playerState: -1 };
       return undefined;
     }
 
@@ -3060,8 +3132,7 @@ function YediHubAppContent() {
     let cancelled = false;
     let hasStarted = false;
     let volumeAcknowledged = false;
-    let endedHandled = false;
-    let previousState = -1;
+    const completion = createPlaybackCompletionTracker();
     const postCommand = (func, args = []) => {
       if (cancelled) return;
       try {
@@ -3095,6 +3166,9 @@ function YediHubAppContent() {
       postCommand('getCurrentTime');
       postCommand('getDuration');
       postCommand('getVolume');
+      // Retrying a startup Play after a short clip ends replays it. Once started,
+      // leave transport and position entirely to the provider and viewer.
+      if (hasStarted || completion.completed) return;
       const intent = getPlaybackIntentForVideo(video.id);
       const pending = pendingPlaybackRestoreRef.current;
       const known = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : 0;
@@ -3173,12 +3247,10 @@ function YediHubAppContent() {
           keyboardPausedRef.current = { videoId, paused: false };
         }
         if (stateFromEvent === 1 && !suppressUnexpectedResume) hasStarted = true;
-        if (stateFromEvent === 0 && hasStarted && !intent.paused && previousState !== 0 && !endedHandled) {
-          endedHandled = true;
-          if (currentVideoRef.current?.id === video.id) handleMediaEndedRef.current?.(video.id);
-        }
-        if (stateFromEvent !== 0) endedHandled = false;
-        previousState = stateFromEvent;
+      }
+      if (completion.observe({ state: stateFromEvent, currentTime: info?.currentTime,
+        duration: info?.duration, paused: getPlaybackIntentForVideo(video.id).paused })) {
+        handleMediaEndedRef.current?.(video.id);
       }
       if (payload.event === 'onError') {
         console.warn('YouTube embed reported playback error:', payload.info);
@@ -3209,7 +3281,7 @@ function YediHubAppContent() {
     let startupUnmuteAttempts = 0;
     let startupAudioConfirmed = false;
     let playbackConfirmed = false;
-    let endedHandled = false;
+    const completion = createPlaybackCompletionTracker();
     let providerReady = false;
     let startupMuteGuardUntil = 0;
     const retryTimers = [];
@@ -3252,6 +3324,7 @@ function YediHubAppContent() {
       if (data.type === 'onPlayerReady') {
         providerReady = true;
         retryTimers.forEach(timer => window.clearTimeout(timer));
+        if (playbackConfirmed || completion.completed) return;
         // A recreated iframe must restore playback position and audio preference.
         const intent = getPlaybackIntentForVideo(video.id, 'tiktok');
         const pending = pendingPlaybackRestoreRef.current;
@@ -3267,7 +3340,7 @@ function YediHubAppContent() {
           // TikTok may be buffering when its ready signal arrives. Retries are
           // strictly bounded and stop as soon as playback is confirmed.
           [450, 1200, 2300].forEach(delay => retryTimers.push(window.setTimeout(() => {
-            if (cancelled || playbackConfirmed || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video) ||
+            if (cancelled || playbackConfirmed || completion.completed || getPlaybackGeneration(currentVideoRef.current) !== getPlaybackGeneration(video) ||
                 getPlaybackIntentForVideo(video.id, 'tiktok').paused || document.visibilityState === 'hidden') return;
             sendCommand('play');
             if (delay === 2300 && !playbackConfirmed) {
@@ -3325,6 +3398,9 @@ function YediHubAppContent() {
           }
           setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
         }
+        if (completion.observe({ currentTime, duration, paused: getPlaybackIntentForVideo(video.id, 'tiktok').paused })) {
+          handleMediaEndedRef.current?.(video.id);
+        }
       } else if (data.type === 'onStateChange') {
         const state = Number(data.value);
         const videoId = String(video.id);
@@ -3353,11 +3429,9 @@ function YediHubAppContent() {
         if (state === 1 && !suppressUnexpectedResume && !startupAudioConfirmed) {
           requestStartupUnmute();
         }
-        if (state === 0 && playbackConfirmed && !intent.paused && !endedHandled) {
-          endedHandled = true;
+        if (completion.observe({ state, paused: getPlaybackIntentForVideo(video.id, 'tiktok').paused })) {
           handleMediaEndedRef.current?.(video.id);
         }
-        if (state === 1 && !suppressUnexpectedResume) endedHandled = false;
       } else if (data.type === 'onPlayerError') {
         const errorType = data.value?.errorType || 'playback error';
         if (String(errorType) === 'AUTOPLAY_ERROR') {
@@ -3468,8 +3542,9 @@ function YediHubAppContent() {
   handleUpvoteRef.current = handleUpvote;
 
   const sendTwitchChatReply = (message) => {
-    const safeMessage = String(message || '').trim().slice(0, 450);
+    const safeMessage = String(message || '').trim();
     if (!safeMessage) return;
+    if ([...safeMessage].length > 450) throw new RangeError('Twitch chat replies must be at most 450 characters.');
 
     // Serialize replies; the server sends through the dedicated @gachibot69 account and enforces Twitch limits.
     chatReplyQueueRef.current = chatReplyQueueRef.current
@@ -3824,7 +3899,20 @@ function YediHubAppContent() {
           </button>
 
 
-          {/* All top-bar actions live inside a single compact dropdown. */}
+          <div className="flex items-center gap-2">
+            {isStaff && db?.privateCloud && <button type="button" onClick={() => void handleShuffleQueue()}
+              disabled={shuffleBusy || videos.filter(video => video.status === 'queue' && !video.pinned).length < 2}
+              title="Shuffle waiting videos; pinned positions stay fixed" aria-label="Shuffle waiting queue"
+              className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50">
+              <Shuffle className="h-4 w-4" />{shuffleBusy ? 'Shuffling…' : 'Shuffle'}
+            </button>}
+            <a href="/queue" target="_blank" rel="noopener noreferrer" title="Open the public read-only queue"
+              className="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800">
+              <ExternalLink className="h-4 w-4" />Public queue
+            </a>
+          </div>
+
+          {/* Additional top-bar actions. */}
           <div className="gachi-topbar-menu relative z-50" ref={topMenuRef}>
             <button
               type="button"
@@ -4726,5 +4814,8 @@ class YediHubAppErrorBoundary extends React.Component<React.PropsWithChildren<{}
 }
 
 export default function YediHubApp() {
+  if (window.location.pathname.replace(/\/+$/, '') === '/queue') {
+    return <Suspense fallback={<main className="min-h-screen bg-[#090a0f] p-8 text-slate-200">Loading queue…</main>}><PublicQueue /></Suspense>;
+  }
   return <YediHubAppErrorBoundary><YediHubAppContent /></YediHubAppErrorBoundary>;
 }
