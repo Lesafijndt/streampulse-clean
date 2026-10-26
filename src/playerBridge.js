@@ -98,6 +98,7 @@ export function createPlaybackCompletionTracker() {
   let completed = false;
   let playing = false;
   let previousTime = null;
+  let providerDuration = null;
   return {
     get completed() { return completed; },
     observe({ state, currentTime, duration, paused = false } = {}) {
@@ -107,7 +108,9 @@ export function createPlaybackCompletionTracker() {
       if (state === 0) { completed = true; return true; }
       if (Number.isFinite(state)) playing = state === 1;
       const time = Number(currentTime);
-      const length = Number(duration);
+      const reportedLength = Number(duration);
+      if (Number.isFinite(reportedLength) && reportedLength > 0) providerDuration = reportedLength;
+      const length = providerDuration;
       // Some embeds report the final media time without an ended notification.
       // Require actual forward progress at the boundary; never use elapsed wall
       // time, metadata duration, a paused seek, or a near-end rewind as completion.

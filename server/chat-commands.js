@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { parseChatNotification } from '../src/twitchChatEvents.js';
+import { parseChatNotification, maySkipCurrentRequest } from '../src/twitchChatEvents.js';
 import { buildNextTrackTransition, getDurationEstimate } from '../src/queueLogic.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { sendCommandReply, chunkCommandReply } from './command-reply.js';
@@ -19,7 +19,7 @@ export function parseServerCommand(event) {
   else if (['!mute', '!unmute'].includes(text)) volumeCommand = { action: text.slice(1) };
   const staff = ['streamer', 'moderator'].includes(incoming.role) || incoming.login === '2o3a';
   if (volumeCommand) return { ...incoming, type: 'volume', volumeCommand, permitted: staff };
-  if (text === '!skip') return { ...incoming, type: 'skip', permitted: staff };
+  if (text === '!skip') return { ...incoming, type: 'skip', permitted: true };
   if (['!remove', '!unrequest'].includes(text)) return { ...incoming, type: 'remove', permitted: true };
   if (['!queue', '!help', '!commands'].includes(text)) return { ...incoming, type: text === '!queue' ? 'queue' : 'help', permitted: true };
   if (['!when', '!position', '!myqueue', '!queueposition'].includes(text)) return { ...incoming, type: 'position', permitted: true };
@@ -50,6 +50,11 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
     const videos = snapshot.docs.map(row => ({ ...row.data(), id: row.id })).filter(row => row.channelRoom === '2o3a');
     const queue = videos.filter(row => row.status === 'queue').sort(order);
     const playing = videos.find(row => row.status === 'playing');
+    // Recheck ownership against the authoritative current row inside the transaction.
+    if (command.type === 'skip' && !maySkipCurrentRequest(command, playing)) {
+      const denied = { status: 'command_denied', command: command.type, sender: command.login, receivedAt: now, queued: 0 };
+      tx.create(receipt, denied);return denied;
+    }
     let reply = '', changed = false;
     const activity = (type, video) => tx.create(db.doc(prefix + 'queue_events/' + id + '-' + type), createActivityEvent({
       id: id + '-' + type, type, room: '2o3a', at: now, video, actor: command.login, source: 'twitch-chat-command' }));
@@ -97,7 +102,7 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
       queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
       videos.filter(row => row.status === 'watch_later' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Watch later: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim()));
       reply = `@${command.login} ${entries.join('; ') || 'No upcoming requests.'}`;
-    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !bigcock [#] / !vote [#]. Mods: !skip, !volume 0-100/up/down, !mute, !unmute.';
+    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !bigcock [#] / !vote [#]. !skip your own playing request. Mods: !skip any video, !volume 0-100/up/down, !mute, !unmute.';
     const outcome = { status: 'command_processed', command: command.type, sender: command.login, receivedAt: now, queued: 0, changed, reply, replyChunks: reply ? chunkCommandReply(reply, command.type === 'position' ? `@${command.login} ` : '') : [] };
     tx.create(receipt, outcome);return outcome;
   });

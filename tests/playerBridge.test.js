@@ -161,3 +161,14 @@ test('TikTok mute intent is isolated from legacy autoplay mute reports and start
   assert.match(appSource, /requestStartupUnmute/);
   assert.match(appSource, /tiktokAudioStateRef/);
 });
+
+test('completion retains provider duration across partial time reports and never borrows it across requests', () => {
+ const tracker = createPlaybackCompletionTracker();
+ assert.equal(tracker.observe({duration:3}),false);
+ assert.equal(tracker.observe({state:1,currentTime:1}),false);
+ assert.equal(tracker.observe({currentTime:3}),true);
+ assert.equal(tracker.observe({state:0}),false);
+ const paused = createPlaybackCompletionTracker();paused.observe({duration:3,state:1,currentTime:1});
+ assert.equal(paused.observe({state:2,currentTime:3,paused:true}),false);
+ assert.equal(createPlaybackCompletionTracker().observe({state:1,currentTime:300}),false);
+});

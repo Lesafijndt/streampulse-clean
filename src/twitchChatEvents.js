@@ -28,3 +28,12 @@ export function requestLikeChatMessage(text = '') {
   return /^!assr(?:\s|$)/i.test(content) ||
     /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|m\.youtube\.com|music\.youtube\.com|youtu\.be|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|twitch\.tv|clips\.twitch\.tv|kick\.com|clip\.kick\.com)\//i.test(content);
 }
+
+// Call only with identity decoded from Twitch, never a role claimed in chat text.
+export function maySkipCurrentRequest(identity, video) {
+  const login = String(identity?.login || '').trim().toLowerCase();
+  if (!login || login === 'gachibot69') return false;
+  if (login === '2o3a' || ['streamer','moderator'].includes(identity?.role)) return true;
+  return video?.channelRoom === '2o3a' && video?.status === 'playing' &&
+    String(video.requestedBy || '').trim().replace(/^@/, '').toLowerCase() === login;
+}

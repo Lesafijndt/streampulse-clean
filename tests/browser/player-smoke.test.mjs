@@ -122,3 +122,8 @@ test('failed playback offers Retry/Open original/Skip without losing the request
 for(const role of ['streamer','moderator'])test(role+' queue navigation and private recovery controls preserve playback',()=>{const html=renderInChrome(baseUrl+'/tests/browser/queue-controls-dashboard.html?provider=youtube&role='+role);assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));});
 
 for(const role of ['streamer','moderator'])test(role+' crash recovery protects raw diagnostics',()=>{const html=renderInChrome(baseUrl+'/tests/browser/error-boundary.html?role='+role);assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));});
+
+test('YouTube Shorts advance with partial provider updates and progress bursts stay within render/storage budgets', () => {
+ const html=renderInChrome(baseUrl+'/tests/browser/completion-dashboard.html?provider=youtube&scenario=partial');
+ assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3500));
+});

@@ -52,6 +52,7 @@ const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promis
 
 // Same-origin stand-ins capture the actual App's provider protocol without loading remote media.
 const errors=[];window.addEventListener('error',e=>errors.push(e.message));
+let renderCommits=0,playbackWrites=0;const originalStorageSet=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(this===sessionStorage&&String(key).includes('player-playback-intent'))playbackWrites++;return originalStorageSet.call(this,key,value)};
 const commands=[];const setAttribute=Element.prototype.setAttribute;
 Element.prototype.setAttribute=function(name,value){if(this.tagName==='IFRAME'&&name==='src'){this.dataset.providerSrc=value;return setAttribute.call(this,name,'about:blank')}return setAttribute.call(this,name,value)};
 const descriptor=Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype,'contentWindow');const registered=new WeakSet();
@@ -63,7 +64,7 @@ const frame=()=>[...document.querySelectorAll('iframe[data-provider-src]')].find
 try{
  const scenario=new URLSearchParams(location.search).get('scenario')||'ended';
  const {default:App}=await import('../../src/App.tsx');const root=createRoot(document.querySelector('#root'));
- root.render(React.createElement(App));await wait(()=>imported&&frame());await sleep(100);
+ root.render(React.createElement(React.Profiler,{id:"playback",onRender:()=>{renderCommits++}},React.createElement(App)));await wait(()=>imported&&frame());await sleep(100);
  const first=frame();const time=(seconds,state=1)=>provider==='tiktok'
    ?emit(first,'onCurrentTime',{currentTime:seconds,duration:3})
    :emit(first,'infoDelivery',{currentTime:seconds,duration:3,playerState:state,volume:50,muted:false});
@@ -71,7 +72,7 @@ try{
  window.dispatchEvent(new MessageEvent('message',{source:first.contentWindow,origin:'https://evil.example',data:{event:'onStateChange',info:0,type:'onStateChange',value:0,'x-tiktok-player':true}}));
  window.dispatchEvent(new MessageEvent('message',{source:window,origin:'https://www.youtube.com',data:{event:'onStateChange',info:0}}));
  assert(transitionWrites===0,'Untrusted messages must not transition');
- emit(first,'onStateChange',1);time(1);await sleep(20);
+ emit(first,'onStateChange',1);if(scenario!=='partial')time(1);await sleep(20);
  if(scenario==='stopped'){
    const before=calls(first,provider==='tiktok'?'play':'playVideo').length;
    emit(first,'onStateChange',0);
@@ -81,7 +82,19 @@ try{
    assert(calls(first,provider==='tiktok'?'play':'playVideo').length===before,'Startup retries and late Ready must not replay a completed clip');
    root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS '+provider+': completed clip is not replayed by startup retries';
  }else{
- if(scenario==='paused'){
+ if(scenario==='partial'){
+   emit(first,'initialDelivery',{duration:3,playerState:1,currentTime:1});await sleep(50);
+   const beforeRender=renderCommits,beforeWrites=playbackWrites;
+   for(let group=0;group<10;group++){
+     for(let tick=0;tick<10;tick++)emit(first,'infoDelivery',{currentTime:1+(group*10+tick)/1000,duration:3,playerState:1,volume:50,muted:false});
+     await sleep(15);
+   }
+   assert(renderCommits-beforeRender<6,'Progress burst must not rerender dashboard for each tick: '+(renderCommits-beforeRender));
+   assert(playbackWrites-beforeWrites<4,'Progress burst must not synchronously persist every tick: '+(playbackWrites-beforeWrites));
+   window.dispatchEvent(new PageTransitionEvent('pagehide'));
+   assert(Object.values(sessionStorage).some(value=>{try{return JSON.parse(value).seconds===1.099}catch{return false}}),'Closing/reloading the tab flushes its latest precise position');
+   emit(first,'infoDelivery',{currentTime:2.95,playerState:1});emit(first,'infoDelivery',{currentTime:3,playerState:1});
+ }else if(scenario==='paused'){
    first.focus();emit(first,'onStateChange',2);time(3,2);await sleep(2200);
    assert(transitionWrites===0&&docs[base+'queue_videos/a'].status==='playing','Paused timeline at duration must not skip');
    emit(first,'onStateChange',1);time(1);time(3);

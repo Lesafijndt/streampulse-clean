@@ -13,7 +13,7 @@ const video=(id,by,status='queue',queueOrder=1)=>({id,channelRoom:'2o3a',status,
 test('command parsing excludes requests/bots and derives staff authority from signed event badges',()=>{
   for(const text of ['https://youtu.be/dQw4w9WgXcQ','!assr https://youtu.be/dQw4w9WgXcQ','hello'])assert.equal(parseServerCommand(event(text)),null);
   assert.equal(parseServerCommand(event('!help','gachibot69')),null);
-  assert.equal(parseServerCommand(event('!skip')).permitted,false);
+  assert.equal(parseServerCommand(event('!skip')).permitted,true); // Ownership is checked transactionally, after loading the current video.
   assert.equal(parseServerCommand(event('!skip','random_mod',['moderator'])).permitted,true);
   assert.equal(parseServerCommand(event('!volume 50','2o3a')).volumeCommand.value,50);
 });
@@ -120,4 +120,34 @@ test('volume commands do not evict live fallback reply chunks from a full feed',
   const payload={event:event('!volume 50','2o3a'),messageId:'full-volume'};
   await assert.rejects(persistChatCommand(db,payload),/chat_command_feed_full/);assert.deepEqual((await room.get()).get('chatCommandFeed'),feed);
   await room.set({chatCommandFeed:feed.slice(1)});await persistChatCommand(db,payload);assert.equal((await room.get()).get('chatCommandFeed').at(-1).volumeCommand.value,50);
+});
+
+test('viewers can skip only their own currently playing request; duplicate delivery cannot skip the next person', async () => {
+ const db=store();let replies=0;const sendReply=async()=>{replies++;return{sent:true}};
+ await db.doc(prefix+'queue_videos/current').set(video('current','Ordinary_Viewer','playing'));
+ await db.doc(prefix+'queue_videos/next').set(video('next','other','queue',2));
+ const own={event:event('!skip'),messageId:'own-skip'};
+ const blocked=await persistChatCommand(db,{event:event('!skip','other'),messageId:'other-skip'},{sendReply});
+ assert.equal(blocked.status,'command_denied');assert.equal((await db.doc(prefix+'queue_videos/current').get()).get('status'),'playing');
+ assert.equal((await persistChatCommand(db,own,{sendReply})).changed,true);
+ await persistChatCommand(db,own,{sendReply});
+ assert.equal((await db.doc(prefix+'queue_videos/current').get()).get('status'),'watched');
+ assert.equal((await db.doc(prefix+'queue_videos/next').get()).get('status'),'playing');
+ assert.equal((await persistChatCommand(db,{event:event('!skip'),messageId:'cannot-skip-next'},{sendReply})).status,'command_denied');
+ assert.equal((await db.collection(prefix+'queue_events').get()).size,2);
+ assert.equal(replies,0);
+});
+test('own waiting request gives no skip rights when nobody is playing', async () => {
+ const db=store();await db.doc(prefix+'queue_videos/own').set(video('own','ordinary_viewer'));
+ assert.equal((await persistChatCommand(db,{event:event('!skip'),messageId:'empty-player'},{sendReply:async()=>{throw Error('No chat alert')}})).status,'command_denied');
+ assert.equal((await db.doc(prefix+'queue_videos/own').get()).get('status'),'queue');
+});
+
+test('concurrent own-skip commands recheck ownership after the first queue transition', async () => {
+ const db=store();await db.doc(prefix+'queue_videos/current').set(video('current','ordinary_viewer','playing'));
+ await db.doc(prefix+'queue_videos/next').set(video('next','someone_else','queue',2));
+ const results=await Promise.all(['race-a','race-b'].map(messageId=>persistChatCommand(db,{event:event('!skip'),messageId},{sendReply:async()=>{throw Error('No skip alerts')}})));
+ assert.equal(results.filter(result=>result.changed).length,1);
+ assert.equal(results.filter(result=>result.status==='command_denied').length,1);
+ assert.equal((await db.doc(prefix+'queue_videos/next').get()).get('status'),'playing');
 });

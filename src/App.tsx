@@ -116,7 +116,7 @@ import { probeYouTubeDuration } from './providerDurationProbe.js';
 import QueueVideoCard from './components/QueueVideoCard';
 import { createActivityEvent, mergeActivityEvents, normalizeActivityEvent } from './activityLog.js';
 import { createPlaybackCompletionTracker, getPlaybackGeneration, buildTikTokPlayerUrl, getVisibilityRestoreActions, postTikTokPlayerCommand, postYouTubePlayerCommand, shouldAutoUnmuteTikTok, shouldIgnoreTikTokStartupMute } from './playerBridge.js';
-import { parseChatNotification, requestLikeChatMessage } from './twitchChatEvents.js';
+import { parseChatNotification, requestLikeChatMessage, maySkipCurrentRequest } from './twitchChatEvents.js';
 import { sanitizePersonalPreferences } from './personalPreferences.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
 import { buildMediaMetadataPatch, getMetadataLookupKey, videoNeedsMetadataLookup, videoNeedsTitleLookup } from './mediaMetadata.js';
@@ -580,6 +580,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   // distinguish a deliberate pause/mute from autoplay behavior after tab visibility changes.
   const playbackIntentRef = useRef({ videoId: '', storageKey: '', paused: false, muted: null });
   const playbackPositionRef = useRef({ videoId: '', seconds: 0 });
+  const playbackWriteRef = useRef({ key: '', at: 0 });
+  const progressUpdateRef = useRef({ generation: '', at: 0 });
   const playbackVisibilitySnapshotRef = useRef(null);
   const pendingPlaybackRestoreRef = useRef(null);
   const playbackRestoreGuardRef = useRef({ videoId: '', until: 0, paused: false, muted: null, currentTime: 0 });
@@ -1265,7 +1267,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
 
     // A real provider player report is stronger than an earlier failed server lookup.
     // Clear the stale error even when the value was already saved from metadata.
-    const markPlayerDurationFound = () => setDurationLookupOutcomes((prev) => ({
+    const markPlayerDurationFound = () => setDurationLookupOutcomes((prev) => prev[id]?.status === 'found' && prev[id]?.provider === platform + '-player' ? prev : ({
       ...prev,
       [id]: createDurationLookupOutcome({
         status: 'found',
@@ -2015,9 +2017,14 @@ function YediHubAppContent({ onDiagnosticAccess }) {
 
   const updatePlaybackIntent = (videoId, updates, platformOverride = '') => {
     const previous = getPlaybackIntentForVideo(videoId, platformOverride);
+    if (Object.keys(updates).every(key => previous[key] === updates[key])) return previous;
     const next = { ...previous, ...updates, videoId: String(videoId || '') };
     playbackIntentRef.current = next;
     if (typeof updates.paused === 'boolean') setPlaybackPaused(next.paused);
+    const positionOnly = Object.keys(updates).length === 1 && Object.hasOwn(updates, 'seconds');
+    const lastWrite = playbackWriteRef.current;
+    if (positionOnly && lastWrite.key === next.storageKey && Date.now() - lastWrite.at < 1000) return next;
+    playbackWriteRef.current = { key: next.storageKey, at: Date.now() };
     try {
       // Keep TikTok preference separate so legacy autoplay mute cannot override startup audio.
       window.sessionStorage.setItem(next.storageKey, JSON.stringify({
@@ -2029,6 +2036,24 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     } catch { /* Playback state remains available in memory if storage is unavailable. */ }
     return next;
   };
+
+  // Keep precise position in refs, but avoid rerendering the whole queue for each provider tick.
+  const updatePlaybackProgress = value => {
+    const generation = getPlaybackGeneration(currentVideoRef.current);
+    const previous = progressUpdateRef.current;
+    if (previous.generation === generation && Date.now() - previous.at < 1000) return;
+    progressUpdateRef.current = { generation, at: Date.now() };
+    setSimProgress(value);
+  };
+  useEffect(() => {
+    const flush = () => {
+      const intent = playbackIntentRef.current;
+      if (!intent.storageKey) return;
+      try { sessionStorage.setItem(intent.storageKey, JSON.stringify({ paused: intent.paused, generation: intent.generation, seconds: intent.seconds || 0 })); } catch { /* Storage unavailable. */ }
+    };
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
 
   const isPlaybackPaused = (videoId) => getPlaybackIntentForVideo(videoId).paused;
 
@@ -2386,10 +2411,10 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
           sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). Mods: !skip, !volume up/down/0-100, !mute, !unmute.');
+          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
-        } else if (lowerText === '!skip' && isStaffRole(role)) {
+        } else if (lowerText === '!skip' && maySkipCurrentRequest(incoming, currentVideoRef.current)) {
           handleSkipNextRef.current?.();
         } else if (volumeCommand && isStaffRole(role)) {
           handleVolumeCommandRef.current?.(volumeCommand, role);
@@ -3240,7 +3265,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       }
       if (!payload || typeof payload !== 'object') return;
 
-      const info = payload.event === 'infoDelivery' && payload.info && typeof payload.info === 'object'
+      const info = ['infoDelivery', 'initialDelivery'].includes(payload.event) && payload.info && typeof payload.info === 'object'
         ? payload.info
         : null;
       const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
@@ -3268,7 +3293,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         if (Number.isFinite(duration) && duration > 0 && currentVideoRef.current?.id === video.id) {
           playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
           reportPlayerDuration(video.id, duration);
-          if (Number.isFinite(now)) setSimProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
+          if (Number.isFinite(now)) updatePlaybackProgress(Math.min(100, Math.max(0, (now / duration) * 100)));
         }
       }
       if (Number.isFinite(stateFromEvent)) {
@@ -3477,7 +3502,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
             playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
             reportPlayerDuration(video.id, duration);
           }
-          setSimProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+          updatePlaybackProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
         }
         if (completion.observe({ currentTime, duration, paused: getPlaybackIntentForVideo(video.id, 'tiktok').paused })) {
           handleMediaEndedRef.current?.(video.id);
