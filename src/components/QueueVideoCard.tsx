@@ -74,10 +74,11 @@ export default function QueueVideoCard({
                       }`}
                     >
                       {/* Left: Thumbnail + Metadata */}
-                      {isStaff && activeTab === 'queue' && video.status === 'queue' && <span title="Drag to reorder request" className="cursor-grab touch-none self-center text-slate-500 active:cursor-grabbing"><GripVertical className="h-5 w-5" aria-hidden="true" /></span>}
-                      <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1 w-full">
+
+                      <div className="gachi-queue-summary flex items-start sm:items-center gap-3.5 min-w-0 flex-1 w-full">
                         {/* Order indicator */}
                         <div className="hidden sm:flex flex-col items-center justify-center w-7 text-center shrink-0">
+                          {isStaff && activeTab === 'queue' && video.status === 'queue' && <span title="Drag to reorder request" className="cursor-grab touch-none self-center text-slate-500 active:cursor-grabbing"><GripVertical className="h-5 w-5" aria-hidden="true" /></span>}
                           {video.pinned ? (
                             <Pin className="w-4 h-4 text-amber-400 fill-current" />
                           ) : (

@@ -2194,6 +2194,7 @@ body { background: #03070b; }
 
 /* Refined queue card layout: compact information first, neatly grouped controls below. */
 .gachi-queue-item {
+  container-type: inline-size;
   display: flex !important;
   flex-direction: column !important;
   align-items: stretch !important;
@@ -2308,10 +2309,16 @@ body { background: #03070b; }
 }
 .gachi-queue-actions button {
   flex: 0 0 auto !important;
-  min-height: 1.75rem !important;
-  height: 1.75rem !important;
-  padding: 0 .5rem !important;
-  font-size: .65rem !important;
+  width: auto !important;
+  min-width: 2rem !important;
+  max-width: 100% !important;
+  min-height: 2rem !important;
+  height: auto !important;
+  padding: .4rem .55rem !important;
+  gap: .3rem !important;
+  white-space: nowrap !important;
+  line-height: 1.2 !important;
+  font-size: .7rem !important;
 }
 .gachi-queue-actions button svg {
   width: .8rem !important;
@@ -2420,4 +2427,17 @@ body { background: #03070b; }
   height: calc(100dvh - 210px) !important;
   min-height: 300px !important;
   max-height: none !important;
+}
+
+/* Narrow queue widgets stack metadata instead of squeezing labels beside thumbnails. */
+@container (max-width: 280px) {
+  .gachi-queue-item > div.gachi-queue-summary {
+    display: grid !important;
+    grid-template-columns: 1.75rem minmax(0, 1fr) !important;
+    gap: .5rem !important;
+  }
+  .gachi-queue-summary .gachi-queue-details {
+    grid-column: 1 / -1;
+    width: 100% !important;
+  }
 }
