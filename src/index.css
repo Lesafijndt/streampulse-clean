@@ -2444,34 +2444,35 @@ body { background: #03070b; }
 
 /* One continuous banquet mural, with the title anchored at the left. */
 .gachi-masthead.gachi-supper-masthead {
-  display: grid !important;
-  grid-template-columns: clamp(260px, 24vw, 420px) minmax(0, 1fr);
-  height: clamp(112px, 12vh, 172px);
+  display: block !important;
+  height: clamp(160px, 18vh, 212px);
   min-height: 0 !important;
-  max-height: 172px;
+  max-height: 212px;
   background: #130a06 !important;
 }
 .gachi-supper-panorama {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 0;
   object-fit: cover;
-  object-position: center 28%;
+  object-position: center 23%;
 }
 .gachi-supper-caption {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 0;
-  height: 100%;
-  padding: .65rem clamp(14px, 1.5vw, 26px);
-  background: linear-gradient(110deg, #190810, #130a06);
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  left: clamp(12px, 1.5vw, 30px);
+  max-width: calc(100% - 32px);
+  padding: .45rem 2.5rem .75rem .65rem;
+  background: radial-gradient(ellipse at left center, rgba(12,3,7,.78), rgba(12,3,7,.25) 65%, transparent 85%);
+  text-shadow: 0 2px 6px #080305;
 }
+.gachi-supper-caption > p { letter-spacing: .28em; color: #ffd5ba; }
 .gachi-supper-caption .gachi-masthead-title {
-  margin-top: .25rem !important;
-  font-size: clamp(1.6rem, 2.5vw, 2.9rem) !important;
+  margin-top: .3rem !important;
+  font-size: clamp(1.8rem, 2.8vw, 3.15rem) !important;
   line-height: 1 !important;
+  filter: drop-shadow(0 3px 2px rgba(0,0,0,.9)) drop-shadow(0 0 14px rgba(255,49,95,.2));
 }
 .public-screening-banner {
   position: relative;
@@ -2493,11 +2494,11 @@ body { background: #03070b; }
   background: linear-gradient(transparent, rgba(12,4,6,.97));
 }
 @media (max-width: 767px) {
-  .gachi-masthead.gachi-supper-masthead { grid-template-columns: minmax(150px, 40%) minmax(0, 1fr); }
-  .gachi-supper-caption { padding: .75rem; }
-  .gachi-supper-caption > p { font-size: .5rem; letter-spacing: .12em; }
-  .gachi-supper-caption .gachi-masthead-title { font-size: 1.4rem !important; }
-  .gachi-supper-panorama { height: 100%; object-fit: contain; }
+  .gachi-masthead.gachi-supper-masthead { height: 148px; }
+  .gachi-supper-caption { top: 4px; left: 8px; padding: .25rem 1.5rem .4rem .25rem; }
+  .gachi-supper-caption > p { font-size: .45rem; letter-spacing: .15em; }
+  .gachi-supper-caption .gachi-masthead-title { font-size: 1.5rem !important; }
+  .gachi-supper-panorama { height: 100%; object-fit: cover; }
   .public-screening-caption { position: relative; padding: 1rem; background: #160b0c; align-items: center; }
   .public-screening-caption h1 { font-size: 1.5rem; }
 }
