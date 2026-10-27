@@ -4237,7 +4237,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-100">PRIVATE GACHI ARENA</p>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
         </div>
-        <img src="/images/cowboy-last-supper-compact-v2.jpg" width="2172" height="724" alt="A panoramic Western banquet with thirteen adult cowboys" decoding="async" fetchPriority="low" className="gachi-supper-panorama" />
+        <img src="/images/ranch-party-v2.jpg" width="2172" height="724" alt="Adult cowboys dancing and socializing at a sunset ranch party" decoding="async" fetchPriority="low" className="gachi-supper-panorama" />
       </section>
 
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
