@@ -103,7 +103,7 @@ import {
   createQueueBackup,
   validateQueueBackup
 } from './queueLogic.js';
-import { CATEGORY_META, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
+import { CATEGORY_META, getDisplayMediaNote, detectVideoCategory, detectMusicType, getVideoMediaType, getVideoCategory, getMediaIdentityKey, isVerticalMedia, getStableMediaDocumentId, dedupeMediaVideos, parseMediaUrl } from './mediaUtils.js';
 const StatsBoard = lazy(() => import('./components/StatsBoard'));
 const PublicQueue = lazy(() => import('./components/PublicQueue'));
 import { WorkspaceGrid, WorkspacePanel } from './components/WorkspaceGrid';
@@ -208,7 +208,7 @@ function normalizeLegacyVideoVotes(video) {
     ...raw,
     url: typeof raw.url === 'string' ? raw.url : '',
     title,
-    note: typeof raw.note === 'string' ? raw.note : '',
+    note: getDisplayMediaNote(raw.note),
     category: rawCategory,
     categoryManuallySet,
   };
@@ -240,7 +240,7 @@ function normalizeLegacyVideoVotes(video) {
     durationSource: legacyEstimatedDuration ? 'unknown' : (raw.durationSource || 'unknown'),
     addedAt: typeof raw.addedAt === 'string' ? raw.addedAt : 'Previously added',
     watchedAt: typeof raw.watchedAt === 'string' ? raw.watchedAt : '',
-    note: typeof raw.note === 'string' ? raw.note : '',
+    note: getDisplayMediaNote(raw.note),
     thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : '',
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
     queueOrder: raw.queueOrder === undefined || raw.queueOrder === null || !Number.isFinite(Number(raw.queueOrder)) ? undefined : Number(raw.queueOrder),
@@ -2634,7 +2634,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     // Media requests remain quiet; failures belong in the moderator dashboard.
     await processAndQueueRequest({
       url, title, requestedBy: username, userRole: role,
-      note: 'Requested via Twitch chat', manualCategory: null, fromChat: true
+      note: '', manualCategory: null, fromChat: true
     });
   };
 
@@ -2782,7 +2782,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       addedAt: new Date(requestedAt).toISOString(),
       queueOrder: getNextQueueOrder(),
       timestamp: requestedAt,
-      note: note || `Added to ${channelRoom} deck`,
+      note: note || (fromChat ? '' : `Added to ${channelRoom} deck`),
       thumbnail: resolvedThumbnail || parsed.thumbnail,
       isVertical: parsed.platform === 'tiktok' || normalizedUrl.toLowerCase().includes('youtube.com/shorts/')
     };

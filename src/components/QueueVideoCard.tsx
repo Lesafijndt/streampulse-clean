@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2, GripVertical, SkipForward } from 'lucide-react';
-import { CATEGORY_META, getVideoCategory, getVideoMediaType, isTwitchClipUrl } from '../mediaUtils.js';
+import { CATEGORY_META, getDisplayMediaNote, getVideoCategory, getVideoMediaType, isTwitchClipUrl } from '../mediaUtils.js';
 import { getDurationEstimate, getThumbnailDurationLabel } from '../queueLogic.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.js';
 
@@ -174,9 +174,9 @@ export default function QueueVideoCard({
                                 <span className="text-emerald-400 font-medium" title={formatAbsoluteTimestamp(video.playedAt || video.watchedAt)}>Played {formatRelativeTimestamp(video.playedAt || video.watchedAt, now)}</span>
                               </>
                             )}
-                            {video.note && (
+                            {getDisplayMediaNote(video.note) && (
                               <>
-                                <span className="text-slate-300 italic max-w-xs">"{video.note}"</span>
+                                <span className="text-slate-300 italic max-w-xs">"{getDisplayMediaNote(video.note)}"</span>
                               </>
                             )}
                           </div>

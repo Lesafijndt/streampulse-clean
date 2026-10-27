@@ -106,7 +106,7 @@ export async function makeQueueItems(event) {
         media.platform === 'tiktok' ? 'TikTok Short Clip' :
         media.platform === 'twitch' ? 'Twitch Clip (' + media.videoId + ')' :
         'Kick Clip (' + media.videoId + ')');
-    const category = detectVideoCategory(url, title, 'Requested via Twitch chat', 'all');
+    const category = detectVideoCategory(url, title, '', 'all');
     const mediaType = detectMusicType(url, title, '', category);
     const now = Date.now();
     items.push({
@@ -118,7 +118,7 @@ export async function makeQueueItems(event) {
       userRole: 'viewer', status: 'queue', upvotes: 0, voters: [],
       pinned: false, addedAt: new Date(now).toISOString(),
       queueOrder: now, timestamp: now, createdAt: now,
-      note: 'Requested via Twitch chat', thumbnail: media.thumbnail || '',
+      note: '', thumbnail: media.thumbnail || '',
       isVertical: media.platform === 'tiktok' || url.toLowerCase().includes('/shorts/'),
     });
   }

@@ -1,6 +1,10 @@
 import { learnedCategory, sanitizeClassificationMetadata } from './categoryMemory.js';
 import { Gamepad2, Laugh, Music, Radio, Scissors, Sparkles } from 'lucide-react';
 
+export function getDisplayMediaNote(note) {
+  return typeof note === 'string' && !/^requested via twitch chat[.!]?$/i.test(note.trim()) ? note : '';
+}
+
 // Pure media-domain helpers live here so queue identity, platform parsing, and
 // category classification can be tested without mounting the dashboard.
 export const CATEGORY_META = {
