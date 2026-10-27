@@ -20,6 +20,7 @@ try{
  const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'@REQUESTER');input.dispatchEvent(new Event('input',{bubbles:true}));
  await new Promise(r=>setTimeout(r,50));
  if(document.querySelector('ol').textContent.includes('Current public video')||!document.querySelector('ol').textContent.includes('Next public video')||!document.body.textContent.includes('1 matching waiting request'))throw Error('Requester search lost global position or matching request');
+ if(keepVisual)await Promise.all([...document.images].map(image=>image.decode().catch(()=>{})));
  if(!keepVisual)root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual /queue App route is read-only and makes no staff OAuth, private store, or preferences request';
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
 </script></body></html>

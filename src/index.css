@@ -2442,55 +2442,48 @@ body { background: #03070b; }
   }
 }
 
-/* Ranch gallery: full image framing keeps faces and hats visible. */
-.gachi-masthead > div.gachi-masthead-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, 28%) minmax(0, 1fr);
-  align-items: center;
-  gap: clamp(1rem, 2vw, 2rem);
-  padding: .7rem clamp(180px, 25vw, 460px) .7rem clamp(14px, 2vw, 40px) !important;
-}
-.gachi-masthead-left-art {
+/* One continuous banquet mural, with the title anchored at the left. */
+.gachi-supper-masthead { min-height: 0 !important; background: #130a06 !important; }
+.gachi-supper-panorama {
+  display: block;
   width: 100%;
-  height: clamp(110px, 13vw, 180px);
-  object-fit: contain;
-  border-radius: .75rem;
-  filter: saturate(.85);
+  height: clamp(220px, 20vw, 620px);
+  object-fit: cover;
+  object-position: center 18%;
 }
-.gachi-masthead-copy { position: relative; }
-.gachi-masthead-copy > div { flex-wrap: wrap; }
-.public-queue-layout {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(0, 768px) minmax(140px, 1fr);
-  align-items: start;
-  gap: 1.25rem;
+.gachi-supper-caption {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  max-width: 45%;
+  padding: clamp(14px, 1.5vw, 26px);
+  background: linear-gradient(135deg, rgba(8,3,5,.82), transparent 90%);
 }
-.public-queue-content { grid-column: 2; grid-row: 1; }
-.public-queue-art { position: sticky; top: 1.5rem; }
-.public-queue-art img {
-  width: 100%;
-  height: auto;
-  object-fit: contain;
-  border-radius: 1rem;
-  border: 1px solid rgba(255,49,95,.22);
-  box-shadow: 0 10px 28px rgba(0,0,0,.25);
+.gachi-supper-caption .gachi-masthead-title { margin-top: .35rem !important; }
+.public-screening-banner {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(234,180,112,.3);
+  border-radius: 1.25rem;
+  background: #160b08;
+  box-shadow: 0 12px 40px rgba(0,0,0,.3);
 }
-.public-queue-art-left { grid-column: 1; grid-row: 1; }
-.public-queue-art-right { grid-column: 3; grid-row: 1; }
-@media (max-width: 1023px) {
-  .public-queue-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 768px; }
-  .public-queue-content { grid-column: 1 / -1; grid-row: 1; }
-  .public-queue-art { position: static; grid-row: 2; }
-  .public-queue-art-left { grid-column: 1; }
-  .public-queue-art-right { grid-column: 2; }
+.public-screening-banner > img { display: block; width: 100%; height: auto; object-fit: contain; }
+.public-screening-caption {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 3.5rem 1.5rem 1.25rem;
+  background: linear-gradient(transparent, rgba(12,4,6,.97));
 }
 @media (max-width: 767px) {
-  .gachi-masthead > div.gachi-masthead-layout {
-    grid-template-columns: minmax(100px, 32%) minmax(0, 1fr);
-    gap: .75rem;
-    padding: .75rem !important;
-  }
-  .gachi-masthead-left-art { height: auto; }
-  .gachi-masthead-copy > div { font-size: .55rem; letter-spacing: .12em; }
-  .gachi-masthead-copy > p { font-size: .6rem; letter-spacing: .12em; }
+  .gachi-supper-caption { position: relative; max-width: none; padding: 1rem; background: #12080c; }
+  .gachi-supper-caption .gachi-masthead-title { font-size: 2rem !important; }
+  .gachi-supper-panorama { height: auto; object-fit: contain; }
+  .public-screening-caption { position: relative; padding: 1rem; background: #160b0c; align-items: center; }
+  .public-screening-caption h1 { font-size: 1.5rem; }
 }

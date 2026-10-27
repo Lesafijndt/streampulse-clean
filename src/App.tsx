@@ -4232,17 +4232,12 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
-      <section className="gachi-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
-        <div className="gachi-masthead-art absolute inset-0" aria-hidden="true" />
-        <img src="/images/cowboy-barn.png" alt="" aria-hidden="true" className="absolute inset-y-0 right-0 h-full w-auto max-w-[66%] object-contain opacity-65" style={{ maskImage: 'linear-gradient(to right, transparent, black 25%)' }} />
-        <div className="gachi-masthead-layout relative z-10">
-          <img src="/images/cowboys-pasture-gallery.jpg" width="1983" height="793" alt="" aria-hidden="true" decoding="async" fetchPriority="low" className="gachi-masthead-left-art" />
-          <div className="gachi-masthead-copy min-w-0">
-          <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black uppercase tracking-[0.32em] text-rose-200"><span className="gachi-live-dot" /> PRIVATE GACHI ARENA <span className="text-fuchsia-400">♂</span> LIVE DECK</div>
+      <section className="gachi-masthead gachi-supper-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
+        <div className="gachi-supper-caption">
+          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-100">PRIVATE GACHI ARENA</p>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
-          <p className="mt-1 text-xs sm:text-sm font-black uppercase italic tracking-[0.22em] text-slate-100">REAL MEN WATCH REAL CONTENT</p>
         </div>
-        </div>
+        <img src="/images/cowboy-last-supper.jpg" width="2172" height="724" alt="A panoramic Western banquet with thirteen adult cowboys" decoding="async" fetchPriority="low" className="gachi-supper-panorama" />
       </section>
 
       <WorkspaceGrid key={twitchAuth.username} username={twitchAuth.username}>
@@ -4251,7 +4246,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         </div>}
         {statisticsAccess && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
-          <img src="/images/cowboys-pasture-gallery.jpg" alt="Adult cowboys in a pasture at sunset" loading="lazy" className="w-full rounded-xl object-contain opacity-85" />
+          <img src="/images/cowboys-pasture.png" alt="Adult cowboys in a pasture at sunset" loading="lazy" className="w-full rounded-xl object-contain opacity-85" />
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents.filter(event => event.at > statisticsResetAt)}

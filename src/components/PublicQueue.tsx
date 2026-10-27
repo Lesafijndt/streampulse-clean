@@ -58,13 +58,14 @@ export default function PublicQueue() {
 
   return (
     <main className="min-h-screen bg-[#090308] px-4 py-10 text-rose-50 sm:px-8">
-      <div className="public-queue-layout mx-auto max-w-7xl">
-      <div className="public-queue-content min-w-0 space-y-6">
-        <header className="flex items-start justify-between gap-4">
-          <div><h1 className="flex items-center gap-3 text-3xl font-bold"><ListVideo aria-hidden="true" /> Stream queue</h1><p className="mt-2 text-sm text-rose-200/70">See what’s playing and what’s coming up. Updates every 30 seconds.</p></div>
-          <button type="button" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading} className="rounded-xl border border-rose-900 bg-[#260b19] p-3 disabled:opacity-50" aria-label="Refresh queue"><RefreshCw aria-hidden="true" className={loading ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></button>
+      <div className="mx-auto max-w-5xl space-y-6">
+        <header className="public-screening-banner">
+          <img src="/images/cowboy-last-supper.jpg" width="2172" height="724" alt="Thirteen adult cowboys gathered around a long ranch banquet table" decoding="auto" fetchPriority="high" />
+          <div className="public-screening-caption">
+            <div className="min-w-0"><p className="mb-1 text-[10px] font-bold uppercase tracking-[.25em] text-amber-200">2o3a's screening room</p><h1 className="flex items-center gap-3 text-3xl font-bold"><ListVideo aria-hidden="true" /> Stream queue</h1><p className="mt-2 text-sm text-rose-100/80">{queue.length} waiting &middot; Read-only &middot; Updates every 30 seconds</p></div>
+            <button type="button" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading} className="shrink-0 rounded-xl border border-amber-200/30 bg-black/50 p-3 disabled:opacity-50" aria-label="Refresh queue"><RefreshCw aria-hidden="true" className={loading ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></button>
+          </div>
         </header>
-        <img src="/images/cowboys-pasture-gallery.jpg" alt="Adult cowboys at a ranch at sunset" loading="lazy" className="max-h-64 w-full rounded-2xl object-contain" />
         {error && <p role="alert" className="rounded-xl border border-rose-800 bg-rose-950/50 p-4">{error}{data && ' Showing the last loaded queue.'}</p>}
         <section aria-labelledby="now-playing" className="rounded-2xl border border-rose-900/70 bg-[#210914] p-5"><h2 id="now-playing" className="mb-3 text-sm font-bold uppercase tracking-widest text-rose-300">Now playing</h2>{data?.playing ? details(data.playing) : <p className="text-rose-200/70">{!data && loading ? 'Loading queue…' : 'Nothing playing right now.'}</p>}</section>
         <section aria-labelledby="waiting-heading">
@@ -75,9 +76,6 @@ export default function PublicQueue() {
           <ol className="space-y-3">{visible.map((item) => <li key={item.id} className="flex gap-4 rounded-xl border border-rose-900/50 bg-[#190710] p-4"><span className="min-w-8 text-lg font-bold text-rose-300" aria-label={`Position ${item.position}`}>{item.position}</span>{details(item)}</li>)}</ol>
           {data && visible.length === 0 && <p className="py-6 text-center text-rose-200/70">{query || owner ? 'No requests match your search.' : 'The waiting queue is empty.'}</p>}
         </section>
-      </div>
-      <aside className="public-queue-art public-queue-art-left" aria-hidden="true"><img src="/images/cowboys-pasture-gallery.jpg" width="1983" height="793" alt="" loading="lazy" decoding="async" /></aside>
-      <aside className="public-queue-art public-queue-art-right" aria-hidden="true"><img src="/images/cowboy-barn-gallery.jpg" width="1536" height="1024" alt="" loading="lazy" decoding="async" /></aside>
       </div>
     </main>
   );
