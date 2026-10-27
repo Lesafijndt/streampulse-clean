@@ -60,8 +60,8 @@ if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('St
 await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('header'));
 const masthead=document.querySelector('.gachi-supper-masthead');if(masthead.getBoundingClientRect().height>213)throw Error('Banner pushes player down: compact height exceeded');
 const caption=document.querySelector('.gachi-supper-caption').getBoundingClientRect(),art=document.querySelector('.gachi-supper-panorama').getBoundingClientRect(),banner=masthead.getBoundingClientRect();
-if(caption.left<art.left||caption.right>art.right||caption.top<art.top||caption.bottom>art.bottom)throw Error('Title must overlay inside the artwork');
-if(Math.abs(art.width-banner.width)>3)throw Error('Artwork must fill the banner behind the title');
+if(caption.left<banner.left||caption.right>banner.right||caption.top<banner.top||caption.bottom>banner.bottom)throw Error('Title must overlay inside the banner');
+if(art.width<banner.width*.7||getComputedStyle(masthead).backgroundImage==='none')throw Error('Zoomed-out artwork needs a full banner backdrop');
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
 await wait(()=>document.querySelector('[data-widget="stats"]')&&anonymousReads>0);
 if(login==='2o3a'&&document.body.textContent.includes('Technical diagnostics'))throw Error('Streamer received moderator diagnostics');
