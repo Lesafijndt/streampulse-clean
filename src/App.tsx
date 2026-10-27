@@ -4269,9 +4269,11 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                     <span className={`px-2 py-0.5 rounded-lg font-bold border ${CATEGORY_META[getVideoCategory(currentVideo)]?.badgeBg || 'bg-slate-800 text-slate-300'}`}>
                       {getVideoCategory(currentVideo)}
                     </span>
+                    {getVideoMediaType(currentVideo) !== getVideoCategory(currentVideo) && (
                     <span className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${getVideoMediaType(currentVideo) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
                       {getVideoMediaType(currentVideo)}
                     </span>
+                    )}
                     <span className={`px-2 py-0.5 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700 capitalize`}>
                       {currentVideo.platform}
                     </span>
