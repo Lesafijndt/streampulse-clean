@@ -58,6 +58,8 @@ await wait(()=>document.querySelector('header')&&!document.body.textContent.incl
 if(Object.keys(docs).some(path=>path.includes('/queue_videos/')))throw Error('Stale cache resurrected cleared requests');
 }else{
 await wait(()=>imported&&document.body.textContent.includes('Imported queued video')&&document.querySelector('header'));
+const masthead=document.querySelector('.gachi-supper-masthead');if(masthead.getBoundingClientRect().height>173)throw Error('Banner pushes player down: compact height exceeded');
+if(document.querySelector('.gachi-supper-caption').getBoundingClientRect().right>document.querySelector('.gachi-supper-panorama').getBoundingClientRect().left+1)throw Error('Title overlaps banquet faces');
 if(!docs[base+'queue_videos/a']||!docs[base+'queue_videos/b'])throw Error('Cached queue was not preserved');
 await wait(()=>document.querySelector('[data-widget="stats"]')&&anonymousReads>0);
 if(login==='2o3a'&&document.body.textContent.includes('Technical diagnostics'))throw Error('Streamer received moderator diagnostics');

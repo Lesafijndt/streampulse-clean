@@ -60,7 +60,7 @@ export default function PublicQueue() {
     <main className="min-h-screen bg-[#090308] px-4 py-10 text-rose-50 sm:px-8">
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="public-screening-banner">
-          <img src="/images/cowboy-last-supper.jpg" width="2172" height="724" alt="Thirteen adult cowboys gathered around a long ranch banquet table" decoding="auto" fetchPriority="high" />
+          <img src="/images/cowboy-last-supper-compact-v2.jpg" width="2172" height="724" alt="Thirteen adult cowboys gathered around a long ranch banquet table" decoding="auto" fetchPriority="high" />
           <div className="public-screening-caption">
             <div className="min-w-0"><p className="mb-1 text-[10px] font-bold uppercase tracking-[.25em] text-amber-200">2o3a's screening room</p><h1 className="flex items-center gap-3 text-3xl font-bold"><ListVideo aria-hidden="true" /> Stream queue</h1><p className="mt-2 text-sm text-rose-100/80">{queue.length} waiting &middot; Read-only &middot; Updates every 30 seconds</p></div>
             <button type="button" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading} className="shrink-0 rounded-xl border border-amber-200/30 bg-black/50 p-3 disabled:opacity-50" aria-label="Refresh queue"><RefreshCw aria-hidden="true" className={loading ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></button>
