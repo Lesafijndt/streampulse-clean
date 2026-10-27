@@ -1,7 +1,8 @@
+import PaymentRecoveryForm from './PaymentRecoveryForm';
 import React, { useEffect, useState } from 'react';
 
-type Purchase = {id: string; login: string; title: string; points: number; state: string; code?: string};
-type Diagnostics = {configured: boolean; purchases: Purchase[]};
+type Purchase = {id: string; login: string; title: string; points: number; state: string; at:number; code?: string};
+type Diagnostics = {configured: boolean; purchases: Purchase[];audit?:{id:string;purchaseId:string;actor:string;from:string;to:string;at:number;evidence:string}[]};
 // Mounted only for paim_beach_pete; the API independently enforces that identity.
 export default function PointsDiagnostics() {
   const [open, setOpen] = useState(false);
@@ -16,6 +17,9 @@ export default function PointsDiagnostics() {
       .then(setData).catch(error => { if (error.name !== 'AbortError') setMessage(error.message); });
     return () => controller.abort();
   }, [open]);
+  const refresh=async()=>{
+    try{const response=await fetch('/api/twitch/session?action=store&view=points',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw Error('Unable to refresh payments.');setData(await response.json());}catch(error){setMessage(error.message);}
+  };
   const verify = async () => {
     setChecking(true);
     try {
@@ -31,11 +35,14 @@ export default function PointsDiagnostics() {
     {open && <div className="mt-3 space-y-2">
       <p>{data ? data.configured ? 'Server credential configured. Authorization is checked when a points command runs.' : 'STREAMELEMENTS_JWT is missing from this deployment.' : 'Loading…'}</p>
       <button type="button" disabled={checking} onClick={() => void verify()} className="rounded border border-slate-600 px-2 py-1 disabled:opacity-50">{checking ? 'Checking…' : 'Check connection (read-only)'}</button>
+      <button type="button" onClick={()=>void refresh()} className="ml-2 rounded border border-slate-600 px-2 py-1">Refresh payments</button>
       <p aria-live="polite">{message}</p>
       <p>Unknown charge/refund results require manual verification in StreamElements. They are never retried automatically.</p>
       <ul className="max-h-64 space-y-2 overflow-auto">{data?.purchases?.map(purchase => <li key={purchase.id} className="break-words border-t border-slate-800 pt-2">
         @{purchase.login} · {purchase.title} · {purchase.points} points · {purchase.state}{purchase.code ? ' · ' + purchase.code : ''}<br />{purchase.id}
+        <PaymentRecoveryForm purchase={purchase} onResolved={refresh} />
       </li>)}</ul>
+      <details><summary>Payment recovery audit</summary><ul className="mt-2 space-y-2">{data?.audit?.map(entry=><li key={entry.id} className="break-words">{new Date(entry.at).toLocaleString()} - {entry.actor}: {entry.from} to {entry.to}. {entry.evidence}</li>)}</ul></details>
     </div>}
   </section>;
 }

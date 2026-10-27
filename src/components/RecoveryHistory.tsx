@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-export default function RecoveryHistory({ onRestored }) {
+export default function RecoveryHistory({ onRestored, label="Moderator recovery history" }) {
   const [data, setData] = useState({ snapshots: [], actions: [] });
   const [busy, setBusy] = useState(''); const [message, setMessage] = useState('');
   const load = async () => {
@@ -22,9 +22,9 @@ export default function RecoveryHistory({ onRestored }) {
       await onRestored(); await load();
     } catch (error) { setMessage(error.message); } finally { setBusy(''); }
   };
-  return <section className="rounded-xl border border-slate-700 p-3 space-y-3" aria-label="Moderator recovery history">
+  return <section className="rounded-xl border border-slate-700 p-3 space-y-3" aria-label={label}>
     <div className="flex items-center justify-between"><h4 className="font-bold text-slate-100">Recovery history</h4><button type="button" onClick={() => void load()} className="text-xs text-cyan-300">Refresh recovery history</button></div>
-    <p className="text-xs text-slate-400">The last 12 queue changes are saved on the server. Restore only affected requests and positions; playback and new arrivals remain intact.</p>
+    <p className="text-xs text-slate-400">The last 12 queue changes are saved. Restore only affected requests and positions; playback and new arrivals remain intact.</p>
     {message && <p role="status" className="text-xs text-amber-200">{message}</p>}
     <ul className="max-h-56 overflow-y-auto space-y-2">{data.snapshots.map(snapshot => <li key={snapshot.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-950 p-2 text-xs">
       <div><p className="font-bold text-slate-100">{snapshot.action} · {snapshot.affected} requests</p><p className="text-slate-400">{new Date(snapshot.at).toLocaleString()} · {snapshot.actor}</p></div>

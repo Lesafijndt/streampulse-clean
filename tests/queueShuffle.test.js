@@ -70,3 +70,14 @@ test('legacy timestamps establish initial pinned slots and normalize ranks', () 
  assert.equal(waiting.at(-1).id,'pin');
  assert.deepEqual(buildUnshuffleQueueTransition(result.nextVideos,original).nextVideos.filter(v=>v.status==='queue').sort((a,b)=>a.queueOrder-b.queueOrder).map(v=>v.id),original.map(key=>key.split(':')[0]));
  });
+test('shuffle, fair shuffle and unshuffle preserve fully and partly promoted positions',()=>{
+ const videos=Array.from({length:7},(_,index)=>({id:String(index),status:'queue',timestamp:100+index,queueOrder:(index+1)*1000,requestedBy:index%2?'alice':'bob',...(index===0||index===3?{promotion:{version:2,state:'active',points:index===0?450:50,requestTimestamp:100+index}}:{})}));
+ videos.push({id:'live',status:'playing',timestamp:1,playedAt:123,url:'https://youtu.be/live'});
+ const original=structuredClone(videos),snapshot=videos.filter(row=>row.status==='queue').map(queueRequestKey).reverse();
+ for(const result of [buildShuffleQueueTransition(videos,()=>0),buildShuffleQueueTransition(videos,()=>0,true),buildUnshuffleQueueTransition(videos,snapshot)]){
+  const waiting=result.nextVideos.filter(row=>row.status==='queue').sort((a,b)=>a.queueOrder-b.queueOrder);
+  assert.equal(waiting[0].id,'0');assert.equal(waiting[3].id,'3');assert.equal(result.updates.has('0'),false);assert.equal(result.updates.has('3'),false);
+  assert.deepEqual(result.nextVideos.find(row=>row.id==='live'),original.at(-1));assert.deepEqual(waiting.map(row=>row.id).sort(),['0','1','2','3','4','5','6']);
+ }
+ assert.deepEqual(videos,original);
+});

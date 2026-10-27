@@ -25,7 +25,7 @@ export function parseServerCommand(event) {
   if (['!remove', '!unrequest'].includes(text)) return { ...incoming, type: 'remove', permitted: true };
   if (['!queue', '!help', '!commands'].includes(text)) return { ...incoming, type: text === '!queue' ? 'queue' : 'help', permitted: true };
   if (['!when', '!position', '!myqueue', '!queueposition'].includes(text)) return { ...incoming, type: 'position', permitted: true };
-  const promotion = text.match(/^!(promote|unpromote)(?:\s+#?([1-9]\d{0,3}))?(?:\s+(\d{1,10}))?$/);
+  const promotion = text.match(/^!q(promote|unpromote)(?:\s+#?([1-9]\d{0,3}))?(?:\s+(\d{1,10}))?$/);
   if (promotion) return {...incoming,type:promotion[1],position:promotion[2] ? Number(promotion[2]) : undefined,points:promotion[3] ? Number(promotion[3]) : undefined,permitted:true};
   const vote = text.match(/^!(?:bigcock|vote)(?:\s+(\d{1,4}))?$/);
   return vote ? { ...incoming, type: 'vote', position: Math.max(1, Number(vote[1] || 1)), permitted: true } : null;
@@ -109,7 +109,7 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
       queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + (promotionLabel(row) ? ' ['+promotionLabel(row)+']' : '') + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
       videos.filter(row => row.status === 'watch_later' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Watch later: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + (promotionLabel(row) ? ' ['+promotionLabel(row)+']' : '')));
       reply = `@${command.login} ${entries.join('; ') || 'No upcoming requests.'}`;
-    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !promote <#> <points> (50 points/position of priority; contributions combine), !unpromote <#> (refund your contributions before playback), !bigcock [#] / !vote [#]. !skip your own playing request. Mods: !skip any video, !volume 0-100/up/down, !mute, !unmute.';
+    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !qpromote <#> <points> (50 points/position of priority; contributions combine), !qunpromote <#> (refund your contributions before playback), !bigcock [#] / !vote [#]. !skip your own playing request. Mods: !skip any video, !volume 0-100/up/down, !mute, !unmute.';
     const outcome = { status: 'command_processed', command: command.type, sender: command.login, receivedAt: now, queued: 0, changed, reply, replyChunks: reply ? chunkCommandReply(reply, command.type === 'position' ? `@${command.login} ` : '') : [] };
     tx.create(receipt, outcome);return outcome;
   });

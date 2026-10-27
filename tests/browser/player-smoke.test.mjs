@@ -137,3 +137,9 @@ test('queue card controls contain labels and wrap without overlap at narrow widg
  const html=renderInChrome(baseUrl+'/tests/browser/queue-card-layout.html');
  assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3000));
 });
+
+
+test('promotion details and guarded recovery work through real React browser controls',()=>{
+  const html=renderInChrome(baseUrl+'/tests/browser/promotion-tools.html');
+  assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
+});

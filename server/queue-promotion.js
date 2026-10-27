@@ -5,7 +5,7 @@ import { PROMOTION_RATE, isActivePromotion } from '../src/promotion.js';
 const order = (a,b) => Number(a.queueOrder ?? a.timestamp ?? 0)-Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0)-Number(b.timestamp || 0) || a.id.localeCompare(b.id);
 const owner = row => String(row?.requestedBy || '').replace(/^@/,'').trim().toLowerCase();
 const retry = () => { throw Object.assign(Error('promotion_in_progress'), {code:'promotion_in_progress'}); };
-const unfinished = new Set(['reserved','charging','charged','refund_ready','refunding','charge_unknown','refund_unknown']);
+const unfinished = new Set(['reserved','charging','charged','refund_ready','refunding','refund_acknowledged','charge_unknown','refund_unknown']);
 const changedRequest = (row, purchase) => !row || row.channelRoom !== '2o3a' || owner(row) !== purchase.requestedBy || row.url !== purchase.url || Number(row.timestamp || 0) !== purchase.timestamp || row.status !== 'queue' || Number(row.playedAt || 0) !== Number(purchase.playedAt || 0);
 
 // External point changes happen ONLY outside retryable database callbacks.
@@ -30,6 +30,7 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
     const transition=applyPromotionOrder(queue,target,promotion,baseline);
     transition.rows.forEach((row,index)=>tx.update(db.doc(prefix+'queue_videos/'+row.id),{queueOrder:(index+1)*1000,...(row.id===target.id ? {promotion} : {})}));
     tx.set(roomRef,{...settings,promotionPriority:transition.priority});
+    return transition.rows.findIndex(row=>row.id===target.id)+1;
   };
   const purchaseRef = db.doc(prefix+'point_purchases/'+id);
   const outcome = (reply) => ({status:'command_processed',command:command.type,sender:command.login,receivedAt:now(),queued:0,reply:reply ? '@'+command.login+' '+reply : ''});
@@ -43,7 +44,7 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
   };
   const prepared = await db.runTransaction(async tx => {
     const saved = await tx.get(receipt);
-    if (saved.exists) return {result:saved.data()};
+    if (saved.exists && !dependencies.resumePayment) return {result:saved.data()};
     const [purchases, videos, existingRow] = await Promise.all([tx.get(journal.where('login','==',command.login).where('state','in',[...unfinished]).limit(1)),tx.get(collection),tx.get(purchaseRef)]);
     const existing = existingRow.data();
     if (existing) return {purchase:existing};
@@ -54,7 +55,7 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
     const queue=rows.filter(row=>row.status==='queue').sort(order);
     const pending=purchases.docs.map(row=>({...row.data(),id:row.id})).find(row=>row.login===command.login && unfinished.has(row.state));
     if (pending) return reject('Your previous points transaction is still pending. Please wait; do not repeat it.');
-    if (!Number.isInteger(command.position) || command.position<1 || (command.type==='promote' && (!Number.isSafeInteger(command.points) || command.points<50 || command.points>2147483647 || command.points%PROMOTION_RATE!==0))) return reject('Use !promote <queue position> <points>, in multiples of 50. Cancel your contribution with !unpromote <queue position>.');
+    if (!Number.isInteger(command.position) || command.position<1 || (command.type==='promote' && (!Number.isSafeInteger(command.points) || command.points<50 || command.points>2147483647 || command.points%PROMOTION_RATE!==0))) return reject('Use !qpromote <queue position> <points>, in multiples of 50. Cancel your contribution with !qunpromote <queue position>.');
     const target=queue[command.position-1];
     if (!target) return reject('There is no waiting video at that position.');
     const funding=await contributions(tx,target);
@@ -138,8 +139,8 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
       const active=[...funding.filter(row=>row.state==='fulfilled' && !row.originalPurchaseId && !row.originalPurchaseIds),{...purchase,state:'fulfilled'}];
       const refunds=funding.filter(row=>row.kind==='refund' || row.originalPurchaseId || row.originalPurchaseIds);
       const settings=(await tx.get(roomRef)).data() || {channelRoom:'2o3a'};
-      await reorder(tx,queue,target,summarizeFunding(active,refunds,target,now()),settings);
-      tx.update(purchaseRef,{state:'fulfilled',fulfilledAt:now()});return 'fulfilled';
+      const transitionPosition=await reorder(tx,queue,target,summarizeFunding(active,refunds,target,now()),settings);
+      tx.update(purchaseRef,{state:'fulfilled',fulfilledAt:now(),position:transitionPosition});return 'fulfilled';
     });
     purchase.state=state;
   }
@@ -158,22 +159,36 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
       if (!error.uncertain) retry();
       return finish('The refund needs review. Please do not repeat the cancellation.');
     }
-    await db.runTransaction(async tx=>{
-      const videoRef=db.doc(prefix+'queue_videos/'+purchase.videoId);
-      const row=(await tx.get(videoRef)).data();
-      if(row && Number(row.timestamp || 0)===purchase.timestamp && row.url===purchase.url && owner(row)===purchase.requestedBy){
-        const funding=await contributions(tx,{...row,id:purchase.videoId,playedAt:purchase.playedAt});
-        const active=funding.filter(entry=>entry.state==='fulfilled' && !entry.originalPurchaseId && !entry.originalPurchaseIds);
-        const refunds=funding.filter(entry=>(entry.kind==='refund' || entry.originalPurchaseId || entry.originalPurchaseIds) && entry.id!==id);
-        refunds.push({...purchase,state:'refunded',kind:'refund'});
-        tx.update(videoRef,{promotion:summarizeFunding(active,refunds,row,now())});
-      }
-      tx.update(purchaseRef,{state:'refunded',refundedAt:now()});
-    });
+    await save({state:'refund_acknowledged'});
+  }
+  if (purchase.state==='refund_acknowledged') {
+    await completePromotionRefund(db,prefix,purchase,now);
     purchase.state='refunded';
   }
-  if (purchase.state==='fulfilled') return finish('Added '+purchase.points+' points ('+purchase.places+' positions of priority) to '+purchase.title+'. Cancel before it starts with !unpromote <queue position>.');
+  if (purchase.state==='fulfilled') {
+    const final=(await purchaseRef.get()).data();
+    return finish('Promoted '+purchase.title+' for '+purchase.points+' points. New position: #'+final.position+'. Cancel before playback: !qunpromote '+final.position+'.');
+  }
   if (purchase.state==='refunded') return finish('Promotion cancelled; '+purchase.points+' points refunded.');
   if (['charge_unknown','refund_unknown'].includes(purchase.state)) return finish('Your points transaction needs review. Please do not repeat it.');
   return finish('The promotion was not applied. No further points were charged.');
+}
+
+export async function completePromotionRefund(db,prefix,purchase,now=Date.now) {
+  const id=purchase.id, journal=db.collection(prefix+'point_purchases'), purchaseRef=db.doc(prefix+'point_purchases/'+id);
+  await db.runTransaction(async tx=>{
+    const current=(await tx.get(purchaseRef)).data();
+    if(current?.state==='refunded')return;
+    if(current?.state!=='refund_acknowledged')throw Object.assign(Error('payment_state_changed'),{code:'payment_state_changed',status:409});
+    const videoRef=db.doc(prefix+'queue_videos/'+purchase.videoId),row=(await tx.get(videoRef)).data();
+    if(row && Number(row.timestamp || 0)===purchase.timestamp && row.url===purchase.url && owner(row)===purchase.requestedBy){
+      const records=await tx.get(journal.where('videoId','==',purchase.videoId).where('timestamp','==',purchase.timestamp));
+      const funding=records.docs.map(entry=>entry.data()).filter(entry=>entry.url===purchase.url && Number(entry.playedAt || 0)===Number(purchase.playedAt || 0));
+      const active=funding.filter(entry=>entry.state==='fulfilled' && !entry.originalPurchaseId && !entry.originalPurchaseIds);
+      const refunds=funding.filter(entry=>(entry.kind==='refund' || entry.originalPurchaseId || entry.originalPurchaseIds) && entry.id!==id);
+      refunds.push({...purchase,state:'refunded',kind:'refund'});
+      tx.update(videoRef,{promotion:summarizeFunding(active,refunds,row,now())});
+    }
+    tx.update(purchaseRef,{state:'refunded',refundedAt:now(),updatedAt:now()});
+  });
 }

@@ -1,4 +1,4 @@
-export function isActivePromotion(video) { return video?.promotion?.state === 'active' && Number(video.promotion.requestTimestamp) === Number(video.timestamp || 0); }
+export function isActivePromotion(video) { return Number.isSafeInteger(video?.promotion?.points) && video.promotion.points>0 && video.promotion.state === 'active' && Number(video.promotion.requestTimestamp) === Number(video.timestamp || 0); }
 export const PROMOTION_RATE = 50;
 export function promotionLabel(video) {
   const p = video?.promotion;

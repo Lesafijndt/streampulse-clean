@@ -1,3 +1,5 @@
+import {recoverPointsPayment} from './points-recovery.js';
+import {readPromotionDetails} from './promotion-details.js';
 import {createPointsClient} from './streamelements-points.js';
 import {getVideoCategory, getVideoMediaType} from '../src/mediaUtils.js';
 import {learnQueueCategory, savePlaybackReport} from './queue-learning.js';
@@ -22,15 +24,17 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
   try {
     const db = dependencies.db || await getPostgresStore(namespace);
     if (req.method === 'GET') {
+      if(req.query?.view==='promotion')return res.status(200).json(await readPromotionDetails(db,prefix,req.query,true));
       if (req.query?.view === 'points') {
         if (identity.login !== 'paim_beach_pete') throw fail('moderator_required',403);
         if (req.query.verify === '1') {
           try {await (dependencies.points || createPointsClient()).verify();return res.status(200).json({ok:true,channel:'2o3a'});}
           catch(error) {return res.status(200).json({ok:false,code:['streamelements_not_configured','streamelements_wrong_channel','streamelements_authorization_required'].includes(error.code) ? error.code : 'streamelements_unavailable'});}
         }
-        const records=await db.collection(prefix+'point_purchases').orderBy('createdAt','desc').limit(50).get();
-        const purchases=records.docs.map(row=>{const p=row.data();return {id:row.id,login:p.login,title:p.title,points:p.points,state:p.state,code:p.code || '',at:p.updatedAt || p.createdAt};}).sort((a,b)=>b.at-a.at).slice(0,50);
-        return res.status(200).json({configured:Boolean(process.env.STREAMELEMENTS_JWT),purchases});
+        const [records,pending,audit]=await Promise.all([db.collection(prefix+'point_purchases').orderBy('createdAt','desc').limit(50).get(),db.collection(prefix+'point_purchases').where('state','in',['charge_unknown','refund_unknown','charged','refund_ready','refund_acknowledged','charging','refunding']).get(),db.collection(prefix+'points_reconciliations').orderBy('at','desc').limit(30).get()]);
+        const merged=new Map([...records.docs,...pending.docs].map(row=>[row.id,row]));
+        const purchases=[...merged.values()].map(row=>{const p=row.data();return {id:row.id,login:p.login,title:p.title,points:p.points,state:p.state,code:p.code || '',at:p.updatedAt || p.createdAt};}).sort((a,b)=>b.at-a.at);
+        return res.status(200).json({configured:Boolean(process.env.STREAMELEMENTS_JWT),purchases,audit:audit.docs.map(row=>row.data())});
       }
       if (req.query?.view === 'playback-reports') {
         if (identity.login !== 'paim_beach_pete') throw fail('moderator_required',403);
@@ -38,7 +42,6 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
         return res.status(200).json({reports:saved.data()?.reports || []});
       }
       if (req.query?.view === 'recovery') {
-        if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
         const state = await db.readState({ collections: [prefix + 'queue_recovery', prefix + 'queue_actions'] });
         const snapshots = Object.entries(state.documents).filter(([path]) => path.startsWith(prefix + 'queue_recovery/')).map(([,row]) =>
           ({ id: row.id, at: row.at, actor: row.actor, action: row.action, affected: row.affected, restoredAt: row.restoredAt || null }));
@@ -80,13 +83,13 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = requestAppOrigin(req);
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if(body?.operation==='recover-points')return res.status(200).json(await recoverPointsPayment(db,prefix,identity,body,dependencies));
     if (['learn-category','report-playback'].includes(body?.operation)) {
       if (!SAFE_ID.test(body.id || '') || typeof body.generation !== 'string' || body.generation.length > 600) throw fail('invalid_request');
       if (body.operation === 'learn-category') return res.status(200).json({ok:true,categoryCorrections:await learnQueueCategory(db,prefix,identity,body)});
       return res.status(200).json({ok:true,report:await savePlaybackReport(db,prefix,identity,body)});
     }
     if (body?.operation === 'undo-snapshot') {
-      if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
       if (!SAFE_ID.test(body.id || '') || body.confirmation !== 'RESTORE') throw fail('restore_confirmation_required');
       return res.status(200).json({ ok: true, ...await undoQueueRecovery(db, prefix, body.id, identity.login) });
     }
@@ -256,8 +259,8 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     return res.status(200).json({ ok: true, version: await db.getVersion() });
   } catch (error) {
     const status = Number(error.status || error.statusCode) || 503;
-    return res.status([400, 403, 409].includes(status) ? status : 503).json({
-      code: [400, 403, 409].includes(status) ? error.code : 'queue_storage_unavailable',
+    return res.status([400, 403, 404, 409].includes(status) ? status : 503).json({
+      code: [400, 403, 404, 409].includes(status) ? error.code : 'queue_storage_unavailable',
     });
   }
 }

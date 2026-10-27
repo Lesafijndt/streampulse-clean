@@ -1,0 +1,32 @@
+<!doctype html><html><body><div id="root"></div><pre id="result">Running</pre><script type="module">
+import React from 'react';import {createRoot} from 'react-dom/client';import '../../src/index.css';
+import PromotionDetails from '../../src/components/PromotionDetails.tsx';
+import PaymentRecoveryForm from '../../src/components/PaymentRecoveryForm.tsx';
+const calls=[];let copied='',resolved=0;
+Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{copied=value}},configurable:true});
+const json=value=>Promise.resolve(new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}}));
+window.fetch=(input,options={})=>{
+ const url=new URL(input,location.href);calls.push({url,options});
+ if(options.method==='POST')return json({ok:true,state:'fulfilled'});
+ return json({contributors:[{login:'alice',activePoints:450,refundedPoints:150,pendingRefundPoints:0},{login:'bob',activePoints:300,refundedPoints:0,pendingRefundPoints:50}],totalContributors:2,nextOffset:null});
+};
+const wait=async condition=>{for(let i=0;i<200;i++){if(condition())return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('Timed out: '+document.body.textContent);};
+const assert=(value,message)=>{if(!value)throw Error(message)};
+try{
+ const root=createRoot(document.querySelector('#root'));
+ root.render(React.createElement('main',null,React.createElement(PromotionDetails,{video:{id:'video',title:'Promoted video',timestamp:123,promotion:{version:2,state:'active',points:750,contributorCount:2,requestTimestamp:123}},quote:{points:150,position:4,command:'!qpromote 4 150'}}),React.createElement(PaymentRecoveryForm,{purchase:{id:'payment',state:'charge_unknown',at:100,login:'alice',points:150},onResolved:async()=>{resolved++}})));
+ await wait(()=>document.querySelector('summary'));assert(calls.length===0,'Contributor requests must be on demand');
+ document.querySelector('[aria-label="Copy promotion command for Promoted video"]').click();await wait(()=>copied==='!qpromote 4 150');
+ document.querySelector('.promotion-details details').open=true;await wait(()=>document.body.textContent.includes('@alice: 450 active points'));
+ assert(document.body.textContent.includes('150 refunded')&&document.body.textContent.includes('50 refund pending'),'Per-payer refund details missing');
+ assert(calls[0].url.searchParams.get('action')==='queue-view'&&calls[0].url.searchParams.get('timestamp')==='123','Public details must use the public scoped endpoint');
+ const button=[...document.querySelectorAll('button')].find(button=>button.textContent==='Apply verified recovery');assert(button.disabled,'Unknown payment cannot be recovered without verification');
+ const select=document.querySelector('[aria-label="Verified payment outcome payment"]');select.value='charge_confirmed';select.dispatchEvent(new Event('change',{bubbles:true}));
+ const set=(label,value)=>{const input=document.querySelector('[aria-label="'+label+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
+ set('Payment verification note payment','Verified provider statement entry');set('Payment recovery confirmation payment','VERIFIED');await wait(()=>!button.disabled);button.click();await wait(()=>resolved===1);
+ const post=calls.find(call=>call.options.method==='POST'),body=JSON.parse(post.options.body);
+ assert(body.operation==='recover-points'&&body.id==='payment'&&body.expectedState==='charge_unknown'&&body.expectedAt===100&&body.confirmation==='VERIFIED','Recovery must send guarded purchase identity and explicit verification');
+ assert(calls.filter(call=>call.options.method==='POST').length===1,'Recovery submits exactly once');
+ root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: on-demand contributors, copy command, and explicitly verified payment recovery';
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
+</script></body></html>

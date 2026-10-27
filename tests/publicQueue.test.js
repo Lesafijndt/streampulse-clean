@@ -37,7 +37,7 @@ test('public queue loads without auth, polls only visible pages, retains data af
   const source = fs.readFileSync(new URL('../src/components/PublicQueue.tsx', import.meta.url), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  const localRequire = (name) => name === 'react' ? hooks : name === '../queueLogic.js' ? { formatMediaDuration: (seconds) => `${seconds}s` } : require(name);
+  const localRequire = (name) => name === './PromotionDetails' ? (()=>null) : name === 'react' ? hooks : name === '../queueLogic.js' ? { formatMediaDuration: (seconds) => `${seconds}s` } : require(name);
   new Function('require', 'module', 'exports', 'document', 'window', 'fetch', 'location', code)(localRequire, module, module.exports, document, window, fetch, {search:''});
   const render = () => { index = 0; return module.exports.default(); };
   render();

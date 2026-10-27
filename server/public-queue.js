@@ -1,3 +1,5 @@
+import {promotionQuotes} from '../src/promotionPriority.js';
+import {readPromotionDetails} from './promotion-details.js';
 import { promotionLabel } from '../src/promotion.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { getPostgresStore } from './postgres-store.js';
@@ -14,7 +16,10 @@ export function projectPublicQueue(documents, namespace, updatedAt = Date.now())
     if (!path.startsWith(prefix) || !path.slice(prefix.length) || path.slice(prefix.length).includes('/') || row?.channelRoom !== '2o3a' || !['queue', 'playing'].includes(row.status)) return [];
     return [{ ...row, id: path.slice(prefix.length) }];
   });
+  const ordered=rows.filter(row=>row.status==='queue').sort(compare);
+  const quotes=promotionQuotes(ordered,documents['artifacts/'+namespace+'/public/data/room_settings/2o3a']?.promotionPriority);
   const project = (row, position) => ({
+    timestamp:Number(row.timestamp || 0),promotionQuote:position>0 ? quotes.get(row.id) || null : null,
     promotionLabel: promotionLabel(row), position, id: row.id, title: text(row.title, 1000),
     url: /^https?:\/\//i.test(text(row.url, 4096)) ? text(row.url, 4096) : '',
     platform: text(row.platform, 40),
@@ -22,7 +27,7 @@ export function projectPublicQueue(documents, namespace, updatedAt = Date.now())
     requestedBy: text(row.requestedBy, 100)
   });
   const playing = rows.filter(row => row.status === 'playing').sort(compare)[0];
-  return { queue: rows.filter(row => row.status === 'queue').sort(compare).map((row, index) => project(row, index + 1)),
+  return { queue: ordered.map((row, index) => project(row, index + 1)),
     playing: playing ? project(playing, 0) : null, updatedAt };
 }
 
@@ -32,16 +37,18 @@ export async function handlePublicQueue(req, res, dependencies = {}) {
   try {
     const namespace = dependencies.namespace || getQueueNamespace();
     const db = dependencies.db || await getPostgresStore(namespace);
+    if(req.query?.view==='promotion')return res.status(200).json(await readPromotionDetails(db,'artifacts/'+namespace+'/public/data/',req.query));
     const now = (dependencies.now || Date.now)();
     let entry = cache.get(db);
     if (!entry || entry.namespace !== namespace || now - entry.at >= CACHE_MS) {
-      const state = await db.readState({ collections: [`artifacts/${namespace}/public/data/queue_videos`] });
+      const state = await db.readState({ collections: ['queue_videos','room_settings'].map(name=>'artifacts/'+namespace+'/public/data/'+name) });
       entry = { at: now, namespace, body: projectPublicQueue(state.documents, namespace, now) };
       cache.set(db, entry);
     }
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=10');
     return res.status(200).json(entry.body);
-  } catch {
+  } catch(error) {
+    if([400,404].includes(error.status))return res.status(error.status).json({error:error.code});
     return res.status(503).json({ error: 'The queue is temporarily unavailable. Please try again.' });
   }
 }

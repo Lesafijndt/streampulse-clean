@@ -18,7 +18,10 @@ export default function QueueToolbar({
   shuffleBusy = false,
   onShuffle,
   onFairShuffle,
-  onUnshuffle
+  onUnshuffle,
+  canRecover=false,
+  recoveryOpen=false,
+  onRecovery
 }) {
   return (
     <>
@@ -56,9 +59,10 @@ export default function QueueToolbar({
                     <div className="flex flex-wrap items-center gap-2">
                     {activeTab === 'queue' && canShuffle && <>
                       <button type="button" onClick={onShuffle} disabled={shuffleBusy} aria-label="Shuffle waiting queue" className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Shuffle className="h-4 w-4" />Shuffle</button>
-                      <button type="button" onClick={onFairShuffle} disabled={shuffleBusy} title="Spread waiting requests across viewers. Pinned slots stay fixed." className="gachi-control-btn rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50">Fair shuffle</button>
-                      <button type="button" onClick={onUnshuffle} disabled={shuffleBusy} aria-label="Restore original queue order" title="Restore the order before shuffling. Earlier shuffles restore request priority." className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Undo2 className="h-4 w-4" />Unshuffle</button>
+                      <button type="button" onClick={onFairShuffle} disabled={shuffleBusy} title="Spread waiting requests across viewers. Pinned and promoted slots stay fixed." className="gachi-control-btn rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50">Fair shuffle</button>
+                      <button type="button" onClick={onUnshuffle} disabled={shuffleBusy} aria-label="Restore original queue order" title="Restore the order before shuffling. Promoted and pinned positions stay fixed." className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Undo2 className="h-4 w-4" />Unshuffle</button>
                     </>}
+                    {canRecover && <button type="button" onClick={onRecovery} aria-label="Open queue recovery history" aria-expanded={recoveryOpen} className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold"><Undo2 className="h-4 w-4" />Recovery history</button>}
                     <select
                       value={activeTab === 'queue' ? 'priority' : activeTab === 'watched' && sortBy === 'priority' ? 'played' : sortBy}
                       onChange={(e) => setSortBy(e.target.value)}
