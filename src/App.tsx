@@ -1,3 +1,4 @@
+import { playbackFailureMessage, prepareNextConnections, queueHealthWarnings } from './playbackReliability.js';
 import { consumeChatCommandFeed } from './chatCommandFeed.js';
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import {
@@ -541,6 +542,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   const [playerReload, setPlayerReload] = useState(0);
   const [youtubeAutoplayBlocked, setYouTubeAutoplayBlocked] = useState(false);
   const [playerIssue, setPlayerIssue] = useState(null);
+  const failedPlaybackRef = useRef('');
+  const reportPlayerIssue = issue => { failedPlaybackRef.current = issue.generation; setPlayerIssue(issue); };
   const youtubeRecoveryRef = useRef({ generation: '', attempts: 0 });
   const tiktokRecoveryRef = useRef({ generation: '', attempts: 0 });
   const [chatBotSession, setChatBotSession] = useState({ loading: true, connected: false, canReadChat: false, username: '' });
@@ -1311,7 +1314,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       const id = String(video?.id || '');
       if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsMetadataLookup(video)) return false;
       return shouldRetryDurationLookup(durationLookupOutcomes[getMetadataLookupKey(video)], Date.now(), forceRetry);
-    }).sort((a, b) => Number(!['playing', 'queue'].includes(a.status)) - Number(!['playing', 'queue'].includes(b.status))).slice(0, 160);
+    }).sort((a, b) => (['playing', 'queue'].indexOf(a.status) < 0 ? 2 : ['playing', 'queue'].indexOf(a.status)) - (['playing', 'queue'].indexOf(b.status) < 0 ? 2 : ['playing', 'queue'].indexOf(b.status)) || Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0)).slice(0, 160);
     if (!candidates.length) return undefined;
 
     const previousOutcomes = new Map(candidates.map((video) => [String(video.id), durationLookupOutcomes[getMetadataLookupKey(video)] || null]));
@@ -1978,7 +1981,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   }, [videos]);
 
   const currentPlaybackGeneration = getPlaybackGeneration(currentVideo);
-  useEffect(() => { setPlayerIssue(null); }, [currentPlaybackGeneration]);
+  useEffect(() => { failedPlaybackRef.current = ''; setPlayerIssue(null); }, [currentPlaybackGeneration]);
 
   const getPlaybackIntentForVideo = (videoId, platformOverride = '') => {
     const id = String(videoId || '');
@@ -2233,6 +2236,11 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     [videos]
   );
 
+  useEffect(() => {
+    if (navigator.connection?.saveData) return;
+    return prepareNextConnections(nextQueuedVideo, document);
+  }, [nextQueuedVideo?.id, nextQueuedVideo?.platform]);
+
   const categoryCounts = useMemo(
     () => buildCategoryCounts(videos, activeTab, mediaTypeFilter, getVideoCategory, getVideoMediaType),
     [videos, activeTab, mediaTypeFilter]
@@ -2271,6 +2279,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
 
   const isStaff = twitchAuth.authenticated && (twitchAuth.role === 'streamer' || twitchAuth.role === 'moderator');
   const isModerator = moderatorLogin;
+  const healthWarnings = isModerator ? queueHealthWarnings(webhookHealth, { online: networkOnline, cloudSynced }) : [];
 
 
   // Authenticated Twitch chat via EventSub WebSocket, opened only by the
@@ -3079,7 +3088,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   handleVolumeCommandRef.current = handleVolumeCommand;
   handleMediaEndedRef.current = (videoId) => {
     const playing = currentVideoRef.current || currentVideo;
-    if (!playing || String(playing.id) !== String(videoId)) return;
+    if (!playing || String(playing.id) !== String(videoId) || failedPlaybackRef.current === getPlaybackGeneration(playing)) return;
     if (streamSettings.autoPlayNext) handleSkipNextRef.current?.('completed');
     else recordActivity('playback_completed', playing, { source: 'player-ended' });
   };
@@ -3225,7 +3234,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     youtubePlayerRef.current = proxy;
 
     const initializePlayerMessaging = () => {
-      if (cancelled || youtubeIframeRef.current !== iframe) return;
+      if (cancelled || youtubeIframeRef.current !== iframe || failedPlaybackRef.current === getPlaybackGeneration(video)) return;
       // The raw iframe API emits playerState/time info after the parent announces a listener.
       try {
         playerWindow.postMessage(JSON.stringify({ event: 'listening', id: `yedi-hub-${video.id}`, channel: 'widget' }), 'https://www.youtube.com');
@@ -3334,8 +3343,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
             errorRetryTimers.push(window.setTimeout(() => { if (!cancelled && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) setPlayerReload(value => value + 1); }, 500));
             return;
           }
-          setPlayerIssue({ generation: getPlaybackGeneration(video) });
-          addToast('YouTube could not play this video. It may be private, removed, or embedding-disabled.', 'warning');
+          reportPlayerIssue({ generation: getPlaybackGeneration(video), message: playbackFailureMessage('youtube', payload.info) });
         }
       }
     };
@@ -3349,7 +3357,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     const handshake = window.setInterval(() => { if (!apiReady && !hasStarted) initializePlayerMessaging(); }, 1000);
     const startupTimeout = window.setTimeout(() => {
       window.clearInterval(handshake);
-      if (!cancelled && !apiReady && !hasStarted && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) setPlayerIssue({ generation: getPlaybackGeneration(video) });
+      if (!cancelled && !apiReady && !hasStarted && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) reportPlayerIssue({ generation: getPlaybackGeneration(video) });
     }, 20000);
     return () => {
       cancelled = true;
@@ -3380,7 +3388,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     let startupMuteGuardUntil = 0;
     const retryTimers = [];
     const recoverStartup = () => {
-      if (cancelled || (playbackConfirmed && getPlaybackIntentForVideo(video.id, 'tiktok').seconds > 0.5) || getPlaybackGeneration(currentVideoRef.current) !== generation) return false;
+      if (cancelled || failedPlaybackRef.current === generation || (playbackConfirmed && getPlaybackIntentForVideo(video.id, 'tiktok').seconds > 0.5) || getPlaybackGeneration(currentVideoRef.current) !== generation) return false;
       if (recoveryScheduled) return true;
       if (tiktokRecoveryRef.current.attempts >= 2) return false;
       recoveryScheduled = true;
@@ -3404,7 +3412,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       muted: typeof initialIntent.muted === 'boolean' ? initialIntent.muted : null,
     };
     const sendCommand = (type, targetWindow = getWindow(), value = null) => {
-      if (!cancelled && targetWindow && targetWindow === getWindow()) {
+      if (!cancelled && failedPlaybackRef.current !== generation && targetWindow && targetWindow === getWindow()) {
         postTikTokPlayerCommand(targetWindow, type, value);
       }
     };
@@ -3545,14 +3553,14 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         } else {
           if (['SERVER_ERROR', 'PLAYBACK_ERROR'].includes(String(errorType)) && recoverStartup()) return;
           setTikTokPlayerState({ requestId: video.id, status: 'error' });
-          setPlayerIssue({ generation });
+          reportPlayerIssue({ generation });
           addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
         }
       }
     };
     window.addEventListener('message', handleTikTokMessage);
     retryTimers.push(window.setTimeout(() => {
-      if (!cancelled && !providerReady && !recoverStartup()) { setTikTokPlayerState({ requestId: video.id, status: 'error' }); setPlayerIssue({ generation }); }
+      if (!cancelled && !providerReady && !recoverStartup()) { setTikTokPlayerState({ requestId: video.id, status: 'error' }); reportPlayerIssue({ generation }); }
     }, 12000));
     return () => {
       cancelled = true;
@@ -4173,6 +4181,12 @@ function YediHubAppContent({ onDiagnosticAccess }) {
             </div>
           </div>
         )}
+        {isModerator && healthWarnings.length > 0 && (
+          <aside aria-label="Private queue health" className="mx-3 mb-3 rounded-xl border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100">
+            <strong>Queue health</strong>
+            <ul className="mt-2 space-y-1">{healthWarnings.map(message => <li key={message}>{message}</li>)}</ul>
+          </aside>
+        )}
         {isModerator && webhookHealth.receiptCode === 'firestore_quota_exceeded' && (
           <div className="mx-3 mb-3 rounded-xl border border-rose-400/40 bg-rose-950/40 px-4 py-3 text-xs text-rose-100 sm:mx-5" role="alert">
             Firestore quota is exhausted. New chat requests are buffered and retried; they appear in the dashboard after cloud storage recovers. Buffer retention is seven days.
@@ -4293,8 +4307,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                   {currentVideo.platform === 'youtube' && youtubeAutoplayBlocked && playerIssue?.generation !== currentPlaybackGeneration && <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60">
                     <button type="button" className="rounded-xl bg-purple-600 px-6 py-3 font-bold text-white" onClick={() => { updatePlaybackIntent(currentVideo.id, { paused: false }); youtubePlayerRef.current?.playVideo(); setYouTubeAutoplayBlocked(false); }}>Play video</button>
                   </div>}
-                  {playerIssue?.generation === currentPlaybackGeneration && <PlaybackFailure url={currentVideo.url} onSkip={() => handleSkipNext()}
-                    onRetry={() => { setPlayerIssue(null); if (currentVideo.platform === 'tiktok') { tiktokRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' }); setTikTokFrameReload(value => value + 1); } else { youtubeRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setPlayerReload(value => value + 1); } }} />}
+                  {playerIssue?.generation === currentPlaybackGeneration && <PlaybackFailure message={playerIssue.message || playbackFailureMessage(currentVideo.platform)} url={currentVideo.url} onSkip={() => handleSkipNext()}
+                    onRetry={() => { failedPlaybackRef.current = ''; setPlayerIssue(null); if (currentVideo.platform === 'tiktok') { tiktokRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setTikTokPlayerState({ requestId: currentVideo.id, status: 'loading' }); setTikTokFrameReload(value => value + 1); } else { youtubeRecoveryRef.current = { generation: currentPlaybackGeneration, attempts: 0 }; setPlayerReload(value => value + 1); } }} />}
                   {isVerticalMedia(currentVideo) && (
                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden="true">
                       <div className="absolute inset-0 bg-gradient-to-br from-[#05020a] via-[#1a0b2e] to-[#06040b]" />
@@ -4390,7 +4404,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       muted={localMuted}
                       onAudioChange={(volume, muted) => { setLocalVolume(volume); setLocalMuted(muted); }}
                       onEnded={(id) => handleMediaEndedRef.current?.(id)}
-                      onFailure={() => setPlayerIssue({ generation: currentPlaybackGeneration })}
+                      onFailure={() => reportPlayerIssue({ generation: currentPlaybackGeneration })}
                     />
                   ) : (
                     <div className="relative w-full h-full flex flex-col justify-between p-6 bg-gradient-to-br from-slate-950 via-[#10141f] to-purple-950/40 overflow-hidden">
@@ -4410,7 +4424,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       </div>
                       <div className="relative z-10 my-auto text-center max-w-lg mx-auto space-y-2">
                         <h3 className="text-base sm:text-lg font-bold text-white line-clamp-2">{currentVideo.title}</h3>
-                        <p className="text-xs text-slate-300">This media type cannot be played inline. Use the source link to watch it.</p>
+                        <p className="text-xs text-slate-300">This media type cannot be played inline. Open the source to watch it; age-restricted or private videos may require signing in there.</p>
                       </div>
                     </div>
                   )}
@@ -4510,6 +4524,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               canShuffle={isStaff && Boolean(db?.privateCloud) && videos.filter(video => video.status === 'queue' && !video.pinned).length > 1}
               shuffleBusy={shuffleBusy}
               onShuffle={() => void handleShuffleQueue('shuffle')}
+              onFairShuffle={() => void handleShuffleQueue('fair-shuffle')}
               onUnshuffle={() => void handleShuffleQueue('unshuffle')}
             />
 

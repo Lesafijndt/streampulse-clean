@@ -57,3 +57,16 @@ test('legacy timestamps establish initial pinned slots and normalize ranks', () 
   assert.deepEqual(result.nextVideos.slice().sort((a, b) => a.queueOrder - b.queueOrder).map((item) => item.id), ['late', 'pin', 'early']);
   assert.deepEqual(result.updates.get('pin'), { queueOrder: 2000 });
 });
+
+ test('fair shuffle gives each normalized requester a turn while preserving playback, pins, and undo', () => {
+ const videos = ['a','a','a','b','c','b'].map((owner,i)=>({id:String(i),requestedBy:i===1?'@A':owner,status:'queue',timestamp:1,queueOrder:(i+1)*1000}));
+ videos.push({id:'live',status:'playing',requestedBy:'a'}, {id:'pin',status:'queue',pinned:true,queueOrder:7000});
+ const before=structuredClone(videos), original=videos.filter(v=>v.status==='queue').map(queueRequestKey);
+ const result=buildShuffleQueueTransition(videos,()=>0.999,true);
+ assert.deepEqual(videos,before);
+ const waiting=result.nextVideos.filter(v=>v.status==='queue').sort((a,b)=>a.queueOrder-b.queueOrder);
+ assert.deepEqual(waiting.map(v=>v.id),['0','3','4','1','5','2','pin']);
+ assert.deepEqual(result.nextVideos.find(v=>v.id==='live'),before.find(v=>v.id==='live'));
+ assert.equal(waiting.at(-1).id,'pin');
+ assert.deepEqual(buildUnshuffleQueueTransition(result.nextVideos,original).nextVideos.filter(v=>v.status==='queue').sort((a,b)=>a.queueOrder-b.queueOrder).map(v=>v.id),original.map(key=>key.split(':')[0]));
+ });

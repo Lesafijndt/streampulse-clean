@@ -15,6 +15,10 @@ try{
  if(!document.body.textContent.includes('Current public video')||!document.body.textContent.includes('Next public video'))throw Error('Public queue did not render');
  if(!calls.length||calls.some(c=>c.url!=='/api/twitch/session?action=queue-view'||c.method!=='GET'))throw Error('Unexpected API call '+JSON.stringify(calls));
  if(document.querySelector('iframe')||document.querySelector('a[href*="login"]')||document.querySelector('[aria-label="Shuffle waiting queue"]'))throw Error('Public route exposed dashboard controls');
+ const input=document.querySelector('[aria-label="Requester Twitch username"]');
+ const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'@REQUESTER');input.dispatchEvent(new Event('input',{bubbles:true}));
+ await new Promise(r=>setTimeout(r,50));
+ if(document.querySelector('ol').textContent.includes('Current public video')||!document.querySelector('ol').textContent.includes('Next public video')||!document.body.textContent.includes('1 matching waiting request'))throw Error('Requester search lost global position or matching request');
  root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual /queue App route is read-only and makes no staff OAuth, private store, or preferences request';
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
 </script></body></html>

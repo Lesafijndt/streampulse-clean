@@ -279,3 +279,14 @@ test('forced refresh callers serialize instead of racing newer snapshots into fa
   assert.equal(peak, 1);
   assert.equal(browser.version, 3);
 });
+
+test('fair shuffle uses staff authorization, version conflict protection, and original-order recovery', async () => {
+ const {db,state}=setup(Object.fromEntries(['a','b','c','d'].map((id,i)=>[prefix+'queue_videos/'+id,row(id,{queueOrder:(i+1)*1000,requestedBy:i<3?'viewer1':'viewer2'})])));
+ const call=(version,login='2o3a')=>api(db,{method:'POST',login,body:{operation:'fair-shuffle',expectedVersion:version}});
+ assert.equal((await call(0,'viewer1')).statusCode,403);
+ assert.equal((await call(9)).statusCode,409);
+ assert.equal((await call(0)).statusCode,200);
+ assert.deepEqual(state().documents[prefix+'room_settings/2o3a'].queueShuffleOriginal,['a:100','b:100','c:100','d:100']);
+ assert.equal((await api(db,{method:'POST',body:{operation:'unshuffle',expectedVersion:state().version}})).statusCode,200);
+ assert.equal(state().documents[prefix+'queue_videos/a'].queueOrder,1000);
+});

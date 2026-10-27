@@ -127,3 +127,8 @@ test('YouTube Shorts advance with partial provider updates and progress bursts s
  const html=renderInChrome(baseUrl+'/tests/browser/completion-dashboard.html?provider=youtube&scenario=partial');
  assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3500));
 });
+
+for (const code of [101,150,153]) test('restricted YouTube error '+code+' retains request and offers explicit recovery', () => {
+ const html = renderInChrome(baseUrl + '/tests/browser/failure-actions-dashboard.html?code='+code);
+ assert.ok(/data-test-status="pass"/.test(html),html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1]||html.slice(-3500));
+});

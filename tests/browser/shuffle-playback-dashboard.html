@@ -26,7 +26,7 @@ if(expired)return json({authenticated:false,user:null});
 if(opts.method==='POST'){
  const body=JSON.parse(opts.body);
  if(body.operation==='unshuffle'){docs[base+'queue_videos/b'].queueOrder=2;docs[base+'queue_videos/c'].queueOrder=3;version++;return json({ok:true,version});}
- if(body.operation==='shuffle'){
+ if(['shuffle','fair-shuffle'].includes(body.operation)){
    shuffleCalls++;
    if(body.expectedVersion!==version)throw Error('Shuffle did not use snapshot version');
    if(Object.keys(body).sort().join(',')!=='expectedVersion,operation')throw Error('Shuffle must not send a client batch');
@@ -71,6 +71,7 @@ const frame=()=>[...document.querySelectorAll('iframe[data-provider-src]')].find
 try{
  const {default:App}=await import('../../src/App.tsx');const root=createRoot(document.querySelector('#root'));
  root.render(React.createElement(App));await wait(()=>imported&&frame());await sleep(100);
+ assert(document.querySelector('link[data-next-player][href="https://www.youtube.com"]'),'Next provider connection prepared without a hidden player');
  const first=frame();const before=JSON.stringify(docs[base+'queue_videos/a']);
  const button=document.querySelector('[aria-label="Shuffle waiting queue"]');assert(button&&!button.disabled,'Queue toolbar shuffle is available');assert(button.closest('section').querySelector('select'),'Shuffle is beside queue sorting');
  assert(document.querySelector('header a[href="/queue"]'),'Header exposes public queue link');
@@ -81,6 +82,7 @@ try{
  conflict=true;await wait(()=>!button.disabled);button.click();await wait(()=>document.body.textContent.includes('The queue changed.'));
  await wait(()=>document.body.textContent.includes('Changed by another session'));
  assert(shuffleCalls===2&&frame()===first,'Conflict refresh must not resubmit or recreate playback');
+ conflict=false;const fair=[...document.querySelectorAll('button')].find(b=>b.textContent==='Fair shuffle');await wait(()=>fair&&!fair.disabled);fair.click();await wait(()=>shuffleCalls===3);await sleep(180);assert(frame()===first,'Fair shuffle preserves current player');
  root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: header shuffle uses one versioned server operation; refreshes authoritative ordering; handles 409; preserves current iframe; public link';
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors);}
 </script></body></html>

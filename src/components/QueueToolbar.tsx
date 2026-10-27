@@ -17,6 +17,7 @@ export default function QueueToolbar({
   canShuffle = false,
   shuffleBusy = false,
   onShuffle,
+  onFairShuffle,
   onUnshuffle
 }) {
   return (
@@ -55,6 +56,7 @@ export default function QueueToolbar({
                     <div className="flex flex-wrap items-center gap-2">
                     {activeTab === 'queue' && canShuffle && <>
                       <button type="button" onClick={onShuffle} disabled={shuffleBusy} aria-label="Shuffle waiting queue" className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Shuffle className="h-4 w-4" />Shuffle</button>
+                      <button type="button" onClick={onFairShuffle} disabled={shuffleBusy} title="Spread waiting requests across viewers. Pinned slots stay fixed." className="gachi-control-btn rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50">Fair shuffle</button>
                       <button type="button" onClick={onUnshuffle} disabled={shuffleBusy} aria-label="Restore original queue order" title="Restore the order before shuffling. Earlier shuffles restore request priority." className="gachi-control-btn flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50"><Undo2 className="h-4 w-4" />Unshuffle</button>
                     </>}
                     <select

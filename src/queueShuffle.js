@@ -20,13 +20,26 @@ export function buildUnshuffleQueueTransition(videos, snapshot = []) {
   return { updates, nextVideos: videos.map(video => updates.has(video.id) ? { ...video, ...updates.get(video.id) } : video) };
 }
 
-export function buildShuffleQueueTransition(videos, random = Math.random) {
+export function buildShuffleQueueTransition(videos, random = Math.random, fair = false) {
   const queue = videos.filter((video) => video.status === 'queue').sort((a, b) =>
     orderValue(a) - orderValue(b) || (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0) || String(a.id).localeCompare(String(b.id)));
   const movable = queue.filter((video) => !video.pinned);
   for (let i = movable.length - 1; i > 0; i -= 1) {
     const j = Math.floor(random() * (i + 1));
     [movable[i], movable[j]] = [movable[j], movable[i]];
+  }
+  if (fair) {
+    const buckets = new Map();
+    for (const video of movable) {
+      const login = String(video.requestedBy || '').trim().replace(/^@/, '').toLowerCase();
+      if (!buckets.has(login)) buckets.set(login, []);
+      buckets.get(login).push(video);
+    }
+    const interleaved = [];
+    while (interleaved.length < movable.length) {
+      for (const bucket of buckets.values()) if (bucket.length) interleaved.push(bucket.shift());
+    }
+    movable.splice(0, movable.length, ...interleaved);
   }
   let cursor = 0;
   const updates = new Map();

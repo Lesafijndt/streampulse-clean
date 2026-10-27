@@ -10,6 +10,7 @@ export default function PublicQueue() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [requester, setRequester] = useState(() => new URLSearchParams(location.search).get('requester') || '');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -46,7 +47,8 @@ export default function PublicQueue() {
 
   const query = search.trim().toLowerCase();
   const queue = [...(data?.queue || [])].sort((a, b) => a.position - b.position);
-  const visible = queue.filter((item) => `${item.title} ${item.requestedBy} ${item.platform}`.toLowerCase().includes(query));
+  const owner = requester.trim().replace(/^@/, '').toLowerCase();
+  const visible = queue.filter(item => !owner || item.requestedBy.trim().replace(/^@/, '').toLowerCase() === owner).filter((item) => `${item.title} ${item.requestedBy} ${item.platform}`.toLowerCase().includes(query));
   const details = (item: QueueItem) => (
     <div className="min-w-0">
       <p className="break-words font-semibold text-rose-50">{item.title || 'Untitled request'}</p>
@@ -67,8 +69,10 @@ export default function PublicQueue() {
         <section aria-labelledby="waiting-heading">
           <h2 id="waiting-heading" className="mb-4 text-xl font-bold">Coming up <span className="text-rose-300">({queue.length})</span></h2>
           <label className="mb-4 flex items-center gap-2 rounded-xl border border-rose-900 bg-[#190710] px-4"><Search className="h-4 w-4 text-rose-300" aria-hidden="true" /><span className="sr-only">Search queue</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search titles or requesters" className="w-full bg-transparent py-3 outline-none" type="search" /></label>
+          <label className="mb-4 block text-sm text-rose-200">Find your requests<input aria-label="Requester Twitch username" value={requester} onChange={event => setRequester(event.target.value)} placeholder="Your Twitch username (exact match)" className="mt-2 w-full rounded-xl border border-rose-900 bg-[#190710] p-3" /></label>
+          <p className="mb-3 text-sm text-rose-200/70" aria-live="polite">{visible.length} matching waiting request{visible.length === 1 ? '' : 's'}. Positions are in the full queue.{owner && data?.playing?.requestedBy?.replace(/^@/, '').toLowerCase() === owner ? ' Your request is playing now.' : ''}</p>
           <ol className="space-y-3">{visible.map((item) => <li key={item.id} className="flex gap-4 rounded-xl border border-rose-900/50 bg-[#190710] p-4"><span className="min-w-8 text-lg font-bold text-rose-300" aria-label={`Position ${item.position}`}>{item.position}</span>{details(item)}</li>)}</ol>
-          {data && visible.length === 0 && <p className="py-6 text-center text-rose-200/70">{query ? 'No requests match your search.' : 'The waiting queue is empty.'}</p>}
+          {data && visible.length === 0 && <p className="py-6 text-center text-rose-200/70">{query || owner ? 'No requests match your search.' : 'The waiting queue is empty.'}</p>}
         </section>
       </div>
     </main>

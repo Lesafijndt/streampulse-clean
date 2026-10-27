@@ -63,9 +63,11 @@ const frame=()=>[...document.querySelectorAll('iframe[data-provider-src]')].find
 try{
  const {default:App}=await import('../../src/App.tsx');const root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));await wait(()=>imported&&frame());await sleep(50);
  const first=frame();first.focus();emit(first,'onStateChange',1);emit(first,'infoDelivery',{currentTime:1,duration:3,playerState:1,volume:50,muted:false});emit(first,'onStateChange',2);
- emit(first,'onError',100);await wait(()=>document.querySelector('[role="alert"]'));
+ const errorCode=Number(new URLSearchParams(location.search).get('code')||100);
+ emit(first,'onError',errorCode);await wait(()=>document.querySelector('[role="alert"]'));
  assert(transitionWrites===0&&docs[base+'queue_videos/a'].status==='playing','Failure must retain the request');
- const panel=document.querySelector('[role="alert"]');assert(panel.querySelector('a').href===docs[base+'queue_videos/a'].url,'Open original points to current video');
+ emit(first,'onStateChange',0);await sleep(50);assert(transitionWrites===0,'Provider ended after failure must not auto-skip the unavailable video');
+ const panel=document.querySelector('[role="alert"]');if([101,150].includes(errorCode))assert(panel.textContent.includes('age')&&panel.textContent.includes('sign-in'),'Restricted videos explain age/sign-in without falsely identifying the cause');assert(panel.querySelector('a').href===docs[base+'queue_videos/a'].url,'Open original points to current video');
  [...panel.querySelectorAll('button')].find(b=>b.textContent==='Retry video').click();await wait(()=>frame()!==first);const second=frame();
  assert(new URL(second.dataset.providerSrc).searchParams.get('autoplay')==='0','Manual retry preserves intentional pause');
  emit(first,'onStateChange',0);assert(transitionWrites===0,'Old frame cannot skip during retry');emit(second,'onError',100);await wait(()=>document.querySelector('[role="alert"]'));

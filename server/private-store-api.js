@@ -67,7 +67,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       if (!SAFE_ID.test(body.id || '') || body.confirmation !== 'RESTORE') throw fail('restore_confirmation_required');
       return res.status(200).json({ ok: true, ...await undoQueueRecovery(db, prefix, body.id, identity.login) });
     }
-    if (['shuffle', 'unshuffle'].includes(body?.operation)) {
+    if (['shuffle', 'fair-shuffle', 'unshuffle'].includes(body?.operation)) {
       if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) throw fail('version_required');
       const state = await db.readState({ collections: [prefix + 'queue_videos', prefix + 'room_settings', prefix + 'queue_recovery', prefix + 'queue_actions'] });
       if (state.version !== body.expectedVersion) throw fail('conflict', 409);
@@ -78,12 +78,12 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
       const settingsPath = prefix + 'room_settings/2o3a';
       const saved = state.documents[settingsPath]?.queueShuffleOriginal;
       const snapshot = Array.isArray(saved) && videos.some(video => video.status === 'queue' && saved.includes(queueRequestKey(video))) ? saved : [];
-      const { updates } = body.operation === 'shuffle' ? buildShuffleQueueTransition(videos, dependencies.random || Math.random) : buildUnshuffleQueueTransition(videos, snapshot);
+      const { updates } = body.operation !== 'unshuffle' ? buildShuffleQueueTransition(videos, dependencies.random || Math.random, body.operation === 'fair-shuffle') : buildUnshuffleQueueTransition(videos, snapshot);
       const operations = [...updates].map(([id, data]) => ({ type: 'update', path: prefix + 'queue_videos/' + id, data }));
       const original = videos.filter(video => video.status === 'queue').sort((a, b) => Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0) || a.id.localeCompare(b.id)).map(queueRequestKey);
       operations.push({ type: 'set', path: settingsPath, merge: true, data: { channelRoom: '2o3a',
         queueShuffleOriginal: body.operation === 'unshuffle' ? [] : snapshot.length ? snapshot : original } });
-      operations.push(...buildQueueRecovery(state.documents, operations, prefix, { actor: identity.login, action: body.operation === 'shuffle' ? 'Shuffle queue' : 'Restore queue order' }));
+      operations.push(...buildQueueRecovery(state.documents, operations, prefix, { actor: identity.login, action: body.operation === 'unshuffle' ? 'Restore queue order' : body.operation === 'fair-shuffle' ? 'Fair shuffle queue' : 'Shuffle queue' }));
       const result = await db.commitOperations(operations, { expectedVersion: state.version });
       return res.status(200).json({ ok: true, version: result.version });
     }

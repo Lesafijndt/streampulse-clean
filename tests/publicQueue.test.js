@@ -31,14 +31,14 @@ test('public queue loads without auth, polls only visible pages, retains data af
   };
   const hooks = {
     ...require('react'),
-    useState: (initial) => { const slot = index++; if (!(slot in states)) states[slot] = initial; return [states[slot], (value) => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
+    useState: (initial) => { const slot = index++; if (!(slot in states)) states[slot] = typeof initial === 'function' ? initial() : initial; return [states[slot], (value) => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
     useEffect: (effect) => { effects.push(effect); }
   };
   const source = fs.readFileSync(new URL('../src/components/PublicQueue.tsx', import.meta.url), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
   const localRequire = (name) => name === 'react' ? hooks : name === '../queueLogic.js' ? { formatMediaDuration: (seconds) => `${seconds}s` } : require(name);
-  new Function('require', 'module', 'exports', 'document', 'window', 'fetch', code)(localRequire, module, module.exports, document, window, fetch);
+  new Function('require', 'module', 'exports', 'document', 'window', 'fetch', 'location', code)(localRequire, module, module.exports, document, window, fetch, {search:''});
   const render = () => { index = 0; return module.exports.default(); };
   render();
   const cleanup = effects[0]();
@@ -53,6 +53,11 @@ test('public queue loads without auth, polls only visible pages, retains data af
   const searched = JSON.stringify(render());
   assert.ok(searched.includes('Second title'));
   assert.equal(searched.includes('First title'), false);
+  states[3] = ''; states[4] = '@bOb';
+  const owned = JSON.stringify(render());
+  assert.ok(owned.includes('Second title'));
+  assert.equal(owned.includes('First title'), false);
+  assert.ok(owned.includes('Position 2'));
   document.hidden = true;
   listener();
   interval();

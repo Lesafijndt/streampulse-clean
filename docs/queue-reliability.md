@@ -23,3 +23,16 @@ Temporary startup errors receive bounded retries. A retained failed request offe
 The GitHub `Build on Node 22` job runs unit tests, actual-dashboard browser regressions, and a production build. Vercel's Production Deployment Checks require this job before automatic promotion. Job names must stay aligned with the Vercel check configuration.
 
 `scripts/verify-reliability.mjs` exercises recovery and durable metadata retry in a disposable Postgres namespace. It never sends public chat messages or mutates the production queue.
+
+
+## Playback preparation and recovery
+
+The dashboard preconnects only to allowlisted origins for the next provider (disabled with Save-Data), never mounts a hidden autoplaying player or prefetches expiring media URLs. Existing bounded metadata enrichment prioritizes playing and upcoming requests. This reduces connection overhead, but cannot guarantee provider network performance.
+
+Failed videos stay current until explicit retry or skip. YouTube 100 is reported as removed/private; 101/150 as embed restriction with possible age/sign-in/region limitations, not a proven age diagnosis. All provider failures offer the original link. No age gates are bypassed. A failure blocks subsequent ended notifications from advancing the queue until retry or next request.
+
+Fair shuffle is optional beside regular Shuffle. It interleaves normalized requester buckets, preserves pinned slots and current playback, and uses the same version conflict checks, original-order snapshot and recovery log. A large requester can still have consecutive entries after other buckets run out.
+
+The read-only /queue page supports title search and exact Twitch username filtering while retaining full-queue positions. It never authenticates as staff or writes queue data.
+
+Quiet monitoring uses the existing moderator-only health poll (60 seconds; server receipt probe cached up to five minutes). It flags inactive intake, storage/read failure, buffered/error receipts and unconfirmed accepted writes. Thirty minutes without delivery is explicitly informational: quiet chat is not evidence of failure. This is dashboard monitoring, not an external notification service or paid background monitor. Only verified paim_beach_pete sees these details.
