@@ -1946,7 +1946,9 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   useEffect(() => {
     if (!reorderQueueAfterVoteRef.current) return;
     reorderQueueAfterVoteRef.current = false;
-    const orderedQueue = videos.filter((video) => video.status === 'queue').sort(compareQueuePriority);
+    const queue=videos.filter(video=>video.status==='queue').sort(compareQueueOrder);
+    const movable=queue.filter(video=>!isActivePromotion(video)).sort(compareQueuePriority);
+    let cursor=0;const orderedQueue=queue.map(video=>isActivePromotion(video) ? video : movable[cursor++]);
     if (!orderedQueue.length) return;
     const orderById = new Map(orderedQueue.map((video, index) => [String(video.id), (index + 1) * 1000]));
     setVideos((previous) => previous.map((video) => {
@@ -2431,7 +2433,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
           sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!promote [#] next up (50 points per position crossed). !unpromote [#] refunds the payer before playback. !bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
+          sendTwitchChatReply('!promote [#] [points] (50 points per position of priority; anyone can contribute). !unpromote [#] refunds your contributions before playback. !bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && maySkipCurrentRequest(incoming, currentVideoRef.current)) {
@@ -4525,7 +4527,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
           <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
-            <p className="text-[11px] text-amber-100/80">!promote [queue position] moves any waiting video to next up: 50 points per position crossed. !unpromote [queue position] refunds the payer before playback.</p>
+            <p className="text-[11px] text-amber-100/80">!promote [queue position] [points] adds priority to any video: 50 points per position. Contributions combine. !unpromote [queue position] refunds your contributions before playback.</p>
             <QueueToolbar
               activeTab={activeTab}
               setActiveTab={setActiveTab}
