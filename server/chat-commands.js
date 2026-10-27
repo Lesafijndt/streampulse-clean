@@ -1,3 +1,5 @@
+import { processPromotion } from './queue-promotion.js';
+import { promotionLabel, isActivePromotion } from '../src/promotion.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseChatNotification, maySkipCurrentRequest } from '../src/twitchChatEvents.js';
 import { buildNextTrackTransition, getDurationEstimate } from '../src/queueLogic.js';
@@ -23,11 +25,13 @@ export function parseServerCommand(event) {
   if (['!remove', '!unrequest'].includes(text)) return { ...incoming, type: 'remove', permitted: true };
   if (['!queue', '!help', '!commands'].includes(text)) return { ...incoming, type: text === '!queue' ? 'queue' : 'help', permitted: true };
   if (['!when', '!position', '!myqueue', '!queueposition'].includes(text)) return { ...incoming, type: 'position', permitted: true };
+  const promotion = text.match(/^!(promote|unpromote)(?:\s+#?([1-9]\d{0,3}))?$/);
+  if (promotion) return {...incoming,type:promotion[1],position:promotion[2] ? Number(promotion[2]) : undefined,permitted:true};
   const vote = text.match(/^!(?:bigcock|vote)(?:\s+(\d{1,4}))?$/);
   return vote ? { ...incoming, type: 'vote', position: Math.max(1, Number(vote[1] || 1)), permitted: true } : null;
 }
 const order = (a, b) => Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0) || String(a.id).localeCompare(String(b.id));
-const title = video => String(video?.title || 'Untitled').replace(/\s+/g, ' ').slice(0, 35);
+const title = video => String(video?.title || 'Untitled').replace(/\s+/g, ' ').slice(0, 35) + (promotionLabel(video) ? ' [' + promotionLabel(video) + ']' : '');
 export async function persistChatCommand(db, { event, messageId, expiresAt }, dependencies = {}) {
   const command = parseServerCommand(event);
   if (!command) return { status: 'ignored_command', queued: 0 };
@@ -37,7 +41,9 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
   const room = db.doc(prefix + 'room_settings/2o3a');
   const collection = db.collection(prefix + 'queue_videos');
   const now = Date.now();
-  const result = await db.runTransaction(async tx => {
+  const result = ['promote','unpromote'].includes(command.type)
+    ? await processPromotion(db,prefix,command,id,expiresAt,dependencies)
+    : await db.runTransaction(async tx => {
     const saved = await tx.get(receipt);
     if (saved.exists) return { ...saved.data(), duplicate: true };
     if (Number.isFinite(expiresAt) && now > expiresAt) return { status: 'command_expired', queued: 0 };
@@ -87,7 +93,7 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
       else {
         const votes = voters.length + 1;
         const reordered = queue.map(row => row.id === target.id ? { ...row, upvotes: votes } : row)
-          .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(b.upvotes || 0) - Number(a.upvotes || 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0));
+          .sort((a, b) => (isActivePromotion(a) && isActivePromotion(b) ? order(a,b) : 0) || Number(isActivePromotion(b)) - Number(isActivePromotion(a)) || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(b.upvotes || 0) - Number(a.upvotes || 0) || Number(a.timestamp || 0) - Number(b.timestamp || 0));
         reordered.forEach((row, index) => tx.update(db.doc(prefix + 'queue_videos/' + row.id), {
           queueOrder: (index + 1) * 1000, ...(row.id === target.id ? { voters: [...voters, command.login], upvotes: votes } : {}) }));
         activity('vote_cast', target);
@@ -98,11 +104,11 @@ export async function persistChatCommand(db, { event, messageId, expiresAt }, de
     } else if (command.type === 'position') {
       let seconds = playing ? getDurationEstimate(playing).seconds : 0;
       const entries = [];
-      videos.filter(row => row.status === 'playing' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Playing now: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim()));
-      queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
-      videos.filter(row => row.status === 'watch_later' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Watch later: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim()));
+      videos.filter(row => row.status === 'playing' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Playing now: ' + (String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + (promotionLabel(row) ? ' ['+promotionLabel(row)+']' : ''))));
+      queue.forEach((row, index) => { if (row.requestedBy?.toLowerCase() === command.login) entries.push('#' + (index + 1) + ' ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + (promotionLabel(row) ? ' ['+promotionLabel(row)+']' : '') + ' (~' + Math.ceil(seconds / 60) + 'm)');seconds += getDurationEstimate(row).seconds; });
+      videos.filter(row => row.status === 'watch_later' && row.requestedBy?.toLowerCase() === command.login).sort(order).forEach(row => entries.push('Watch later: ' + String(row.title || 'Untitled').replace(/\s+/g, ' ').trim() + (promotionLabel(row) ? ' ['+promotionLabel(row)+']' : '')));
       reply = `@${command.login} ${entries.join('; ') || 'No upcoming requests.'}`;
-    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !bigcock [#] / !vote [#]. !skip your own playing request. Mods: !skip any video, !volume 0-100/up/down, !mute, !unmute.';
+    } else if (command.type === 'help') reply = '!assr <URL/title> or paste a URL (silent). !queue, !when, !remove, !promote [#] (50 points/position crossed; next up), !unpromote [#] (refund before playback), !bigcock [#] / !vote [#]. !skip your own playing request. Mods: !skip any video, !volume 0-100/up/down, !mute, !unmute.';
     const outcome = { status: 'command_processed', command: command.type, sender: command.login, receivedAt: now, queued: 0, changed, reply, replyChunks: reply ? chunkCommandReply(reply, command.type === 'position' ? `@${command.login} ` : '') : [] };
     tx.create(receipt, outcome);return outcome;
   });

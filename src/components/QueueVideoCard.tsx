@@ -1,3 +1,4 @@
+import { promotionLabel } from '../promotion.js';
 import React from 'react';
 import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2, GripVertical, SkipForward } from 'lucide-react';
 import { CATEGORY_META, getDisplayMediaNote, getVideoCategory, getVideoMediaType, isTwitchClipUrl } from '../mediaUtils.js';
@@ -149,6 +150,7 @@ export default function QueueVideoCard({
                               </span>
                             )}
 
+                            {promotionLabel(video) && <span className="max-w-full rounded border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200">{promotionLabel(video)}</span>}
                             {video.pinned && (
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 Pinned Priority

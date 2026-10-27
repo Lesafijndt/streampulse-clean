@@ -1,3 +1,4 @@
+import {createPointsClient} from './streamelements-points.js';
 import {getVideoCategory, getVideoMediaType} from '../src/mediaUtils.js';
 import {learnQueueCategory, savePlaybackReport} from './queue-learning.js';
 import { requestAppOrigin } from './app-origin.js';
@@ -21,6 +22,16 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
   try {
     const db = dependencies.db || await getPostgresStore(namespace);
     if (req.method === 'GET') {
+      if (req.query?.view === 'points') {
+        if (identity.login !== 'paim_beach_pete') throw fail('moderator_required',403);
+        if (req.query.verify === '1') {
+          try {await (dependencies.points || createPointsClient()).verify();return res.status(200).json({ok:true,channel:'2o3a'});}
+          catch(error) {return res.status(200).json({ok:false,code:['streamelements_not_configured','streamelements_wrong_channel','streamelements_authorization_required'].includes(error.code) ? error.code : 'streamelements_unavailable'});}
+        }
+        const records=await db.collection(prefix+'point_purchases').orderBy('createdAt','desc').limit(50).get();
+        const purchases=records.docs.map(row=>{const p=row.data();return {id:row.id,login:p.login,title:p.title,points:p.points,state:p.state,code:p.code || '',at:p.updatedAt || p.createdAt};}).sort((a,b)=>b.at-a.at).slice(0,50);
+        return res.status(200).json({configured:Boolean(process.env.STREAMELEMENTS_JWT),purchases});
+      }
       if (req.query?.view === 'playback-reports') {
         if (identity.login !== 'paim_beach_pete') throw fail('moderator_required',403);
         const saved = await db.doc(prefix+'system_diagnostics/playback-reports').get();
@@ -167,7 +178,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
         if ((await tx.get(marker)).exists) return;
         const refs = incoming.map(row => db.doc(prefix + 'queue_videos/' + row.id));
         const existing = await Promise.all(refs.map(ref => tx.get(ref)));
-        incoming.forEach((row, i) => { if (!existing[i].exists) tx.create(refs[i], row); });
+        incoming.forEach((row, i) => { if (!existing[i].exists) {const clean={...row};for(const key of Object.keys(clean))if(key==='promotion' || key.startsWith('promotion.'))delete clean[key];tx.create(refs[i],clean);} });
         tx.set(marker, { importedBy: identity.login, importedAt: Date.now(), rows: incoming.length });
       });
       return res.status(200).json({ ok: true, version: await db.getVersion() });
@@ -219,6 +230,14 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
           const data = current.data();
           if (op.path.includes('/queue_videos/') && (data.status !== expected.status || Number(data.timestamp || 0) !== Number(expected.timestamp || 0))) throw fail('conflict', 409);
           if (op.path.includes('/room_settings/') && Boolean(data.streamSettings?.queueOpen) !== Boolean(expected.queueOpen)) throw fail('conflict', 409);
+        }
+      }
+      for (let index=0;index<operations.length;index++) {
+        const op=operations[index];
+        if (op.path.includes('/queue_videos/') && op.type!=='delete') {
+          for (const key of Object.keys(op.data)) if (key==='promotion' || key.startsWith('promotion.')) delete op.data[key];
+          const authoritative=snapshots[index].data()?.promotion;
+          if (authoritative) op.data.promotion=authoritative;
         }
       }
       for (let index=0;index<operations.length;index++) {

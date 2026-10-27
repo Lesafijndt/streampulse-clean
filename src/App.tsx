@@ -1,3 +1,5 @@
+import PointsDiagnostics from './components/PointsDiagnostics';
+import { promotionLabel, isActivePromotion } from './promotion.js';
 import PlaybackIssueReporter from './components/PlaybackIssueReporter';
 import { playbackFailureMessage, prepareNextConnections, queueHealthWarnings } from './playbackReliability.js';
 import { consumeChatCommandFeed } from './chatCommandFeed.js';
@@ -177,6 +179,8 @@ function normalizeTwitchLogin(value) {
 }
 
 function compareQueuePriority(a, b) {
+  if (isActivePromotion(a) && isActivePromotion(b)) return Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0);
+  if (isActivePromotion(a) !== isActivePromotion(b)) return isActivePromotion(a) ? -1 : 1;
   if (Boolean(a?.pinned) !== Boolean(b?.pinned)) return a?.pinned ? -1 : 1;
   const voteDifference = (Number(b?.upvotes) || 0) - (Number(a?.upvotes) || 0);
   if (voteDifference !== 0) return voteDifference;
@@ -2427,7 +2431,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
           sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
+          sendTwitchChatReply('!promote [#] next up (50 points per position crossed). !unpromote [#] refunds the payer before playback. !bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && maySkipCurrentRequest(incoming, currentVideoRef.current)) {
@@ -3758,7 +3762,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     const myQueued = queued.map((video, index) => ({ video, position: index + 1 })).filter((item) => owned(item.video));
     const messages = [];
 
-    if (playing && owned(playing)) messages.push('one request is playing now');
+    if (playing && owned(playing)) messages.push('one request is playing now' + (promotionLabel(playing) ? ' ['+promotionLabel(playing)+']' : ''));
 
     let secondsAhead = 0;
     let hasFallbackBeforeQueue = false;
@@ -3785,7 +3789,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     });
 
     myQueued.forEach(({ video, position }) => {
-      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))})`);
+      messages.push(`#${position} "${String(video.title || video.platform || 'video').slice(0, 38)}" (ETA ${formatQueueWait(etaById.get(video.id))})${promotionLabel(video) ? ' ['+promotionLabel(video)+']' : ''}`);
     });
 
     if (!messages.length) {
@@ -3818,10 +3822,10 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     const playing = videos.find((video) => video.status === 'playing') || null;
     const queued = videos.filter((video) => video.status === 'queue').sort(compareQueueOrder);
     const top = queued.slice(0, 3).map((video, index) =>
-      '#' + (index + 1) + ' ' + String(video.title || 'Untitled').slice(0, 26)
+      '#' + (index + 1) + ' ' + String(video.title || 'Untitled').slice(0, 26) + (promotionLabel(video) ? ' ['+promotionLabel(video)+']' : '')
     );
     const myCount = queued.filter((video) => normalizeTwitchLogin(video.requestedBy) === requester).length;
-    const playingText = playing ? 'Now: "' + String(playing.title || 'Untitled').slice(0, 32) + '"' : 'Nothing playing';
+    const playingText = playing ? 'Now: "' + String(playing.title || 'Untitled').slice(0, 32) + '"' + (promotionLabel(playing) ? ' ['+promotionLabel(playing)+']' : '') : 'Nothing playing';
     sendTwitchChatReply('@' + requester + ' ' + playingText + ' | ' + queued.length + ' waiting (' + myCount + ' yours). Next: ' + (top.length ? top.join(', ') : 'empty') + '.');
   };
   handleQueueSummaryRef.current = handleQueueSummary;
@@ -4241,6 +4245,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         {statisticsAccess && <WorkspacePanel id="stats" title="Statistics">
         <aside className="gachi-side-rail rounded-2xl border border-rose-500/30 p-3 sm:p-4 space-y-4">
           <img src="/images/cowboys-pasture.png" alt="Adult cowboys in a pasture at sunset" loading="lazy" className="w-full rounded-xl object-contain opacity-85" />
+          {isModerator && <PointsDiagnostics />}
           <Suspense fallback={<div className="text-slate-400 text-xs">Loading statistics…</div>}><StatsBoard
             queueStats={queueStats}
             activityEvents={activityEvents.filter(event => event.at > statisticsResetAt)}
@@ -4450,6 +4455,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       </h2>
                     </div>
 
+                    {promotionLabel(currentVideo) && <p className="text-xs font-bold text-amber-200">{promotionLabel(currentVideo)}</p>}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
                       <span>
                         Requester: <strong className="text-purple-300 font-semibold">@{currentVideo.requestedBy}</strong>
@@ -4519,6 +4525,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
           <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
+            <p className="text-[11px] text-amber-100/80">!promote [queue position] moves any waiting video to next up: 50 points per position crossed. !unpromote [queue position] refunds the payer before playback.</p>
             <QueueToolbar
               activeTab={activeTab}
               setActiveTab={setActiveTab}

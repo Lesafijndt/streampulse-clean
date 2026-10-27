@@ -8,12 +8,13 @@ window.fetch=(input,opts={})=>{
  if(!url.pathname.startsWith('/api/'))return nativeFetch(input,opts);
  calls.push({url:url.pathname+url.search,method:opts.method||'GET'});
  if(url.searchParams.get('action')!=='queue-view')throw Error('Public route attempted private API '+url);
- return Promise.resolve(new Response(JSON.stringify({playing:{id:'a',title:'Current public video',platform:'youtube',durationSec:25,requestedBy:'viewer'},queue:[{position:1,id:'b',title:'Next public video',platform:'tiktok',durationSec:10,requestedBy:'requester'}],updatedAt:Date.now()}),{headers:{'Content-Type':'application/json'}}));
+ return Promise.resolve(new Response(JSON.stringify({playing:{id:'a',title:'Current public video',platform:'youtube',durationSec:25,requestedBy:'viewer'},queue:[{position:1,id:'b',title:'Next public video',promotionLabel:'Promoted - 450 points spent',platform:'tiktok',durationSec:10,requestedBy:'requester'}],updatedAt:Date.now()}),{headers:{'Content-Type':'application/json'}}));
 };
 try{
  const {default:App}=await import('/src/App.tsx');const root=createRoot(document.querySelector('#root'));root.render(React.createElement(App));
  for(let i=0;i<100&&!document.body.textContent.includes('Next public video');i++)await new Promise(r=>setTimeout(r,20));
  if(!document.body.textContent.includes('Current public video')||!document.body.textContent.includes('Next public video'))throw Error('Public queue did not render');
+ if(!document.body.textContent.includes('450 points spent'))throw Error('Public promotion amount missing');
  if(!calls.length||calls.some(c=>c.url!=='/api/twitch/session?action=queue-view'||c.method!=='GET'))throw Error('Unexpected API call '+JSON.stringify(calls));
  if(document.querySelector('iframe')||document.querySelector('a[href*="login"]')||document.querySelector('[aria-label="Shuffle waiting queue"]'))throw Error('Public route exposed dashboard controls');
  const input=document.querySelector('[aria-label="Requester Twitch username"]');

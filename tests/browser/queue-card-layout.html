@@ -5,7 +5,7 @@ import QueueVideoCard from '../../src/components/QueueVideoCard.tsx';
 import '../../src/index.css';
 const noop=()=>{};
 const props={index:0,activeTab:'queue',currentVideo:null,queueRankById:new Map(),isStaff:true,draggedQueueId:'',setDraggedQueueId:noop,dragOverQueueId:'',setDragOverQueueId:noop,handleDropReorder:noop,handlePlayNow:noop,handleCategoryChange:noop,handleUpvote:noop,twitchUsername:'2o3a',votedIds:{},normalizeTwitchLogin:value=>String(value||'').toLowerCase(),syncDeleteVideo:noop,handleMoveOrder:noop,handleMoveNext:noop,handleTogglePin:noop,handleMoveToWatchLater:noop,handleRequeue:noop};
-const video={id:'layout',status:'queue',url:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',platform:'youtube',title:'A long video title and a full set of queue controls',requestedBy:'a_viewer_with_a_long_username',timestamp:Date.now(),durationSec:90,upvotes:12345,thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="90"%3E%3Crect width="160" height="90" fill="%23502846"/%3E%3C/svg%3E'};
+const video={id:'layout',status:'queue',url:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',platform:'youtube',title:'A long video title and a full set of queue controls',requestedBy:'a_viewer_with_a_long_username',timestamp:Date.now(),durationSec:90,upvotes:12345,promotion:{id:'purchase',points:123450,state:'active',requestTimestamp:0},thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="90"%3E%3Crect width="160" height="90" fill="%23502846"/%3E%3C/svg%3E'};
 const variants=[{width:220},{width:320},{width:480},{width:260,history:true}];
 createRoot(document.querySelector('#root')).render(React.createElement('main',{style:{display:'flex',alignItems:'flex-start',gap:16,padding:16,flexWrap:'wrap'}},variants.map((item,i)=>React.createElement('section',{key:i,style:{width:item.width,maxWidth:'100%'}},React.createElement('p',null,`${item.width}px ${item.history?'history':'queue'}`),React.createElement(QueueVideoCard,{...props,activeTab:item.history?'watched':'queue',video:{...video,id:String(i),status:item.history?'watched':'queue'}})))));
 await new Promise(resolve=>setTimeout(resolve,100));
@@ -13,6 +13,7 @@ try {
  const assert=(value,message)=>{if(!value)throw Error(message)};
  const overlap=(a,b)=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>.5&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>.5;
  for(const card of document.querySelectorAll('.gachi-queue-item')) {
+  assert(card.textContent.includes('123,450 points spent'),'Promotion spending label missing');
   const bounds=card.getBoundingClientRect();const actions=card.querySelector('.gachi-queue-actions');const buttons=[...actions.querySelectorAll('button')];
   if(bounds.width<280)assert(getComputedStyle(card.querySelector('.gachi-queue-summary')).display==='grid','Narrow metadata must stack');
   assert(card.scrollWidth<=card.clientWidth+1,'Card overflows at '+bounds.width);

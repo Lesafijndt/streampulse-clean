@@ -44,7 +44,7 @@ test('anonymous public view projects only playing and ordered waiting rows, cach
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body.queue.map(item => item.id), ['first', 'second']);
   assert.equal(res.body.playing.id, 'live');
-  assert.deepEqual(Object.keys(res.body.queue[0]).sort(), ['durationSec', 'id', 'platform', 'position', 'requestedBy', 'title', 'url']);
+  assert.deepEqual(Object.keys(res.body.queue[0]).sort(), ['durationSec', 'id', 'platform', 'position', 'promotionLabel', 'requestedBy', 'title', 'url']);
   assert.deepEqual(res.body.queue.map(item => item.position), [1, 2]);
   assert.equal(JSON.stringify(res.body).includes('private token'), false);
   assert.equal(res.headers['Cache-Control'], 'public, max-age=0, s-maxage=10');

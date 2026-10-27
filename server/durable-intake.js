@@ -54,7 +54,7 @@ export async function consumeRequest(payload, dependencies = {}) {
     const db = dependencies.db || await getVerifiedFirestore();
     // A quota/network failure MUST throw. Returning would acknowledge and lose it.
     if (parseServerCommand(payload.event)) {
-      const result = await persistChatCommand(db, { ...payload, expiresAt: Number(payload.receivedAt || 0) + 120000 }, { sendReply: dependencies.sendReply });
+      const result = await persistChatCommand(db, { ...payload, expiresAt: Number(payload.receivedAt || 0) + 120000 }, { sendReply: dependencies.sendReply, points: dependencies.points });
       console.info('twitch_chat_command', { status: result.status, command: result.command, duplicate: result.duplicate === true, replyDelivery: result.replyDelivery || 'none' });
       return result;
     }

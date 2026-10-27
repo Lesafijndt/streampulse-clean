@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ListVideo, RefreshCw, Search } from 'lucide-react';
 import { formatMediaDuration } from '../queueLogic.js';
 
-type QueueItem = { position: number; id: string; title: string; url: string; platform: string; durationSec: number | null; requestedBy: string };
+type QueueItem = { promotionLabel?: string; position: number; id: string; title: string; url: string; platform: string; durationSec: number | null; requestedBy: string };
 type QueueView = { queue: QueueItem[]; playing: QueueItem | null; updatedAt: string | number | null };
 
 export default function PublicQueue() {
@@ -52,6 +52,7 @@ export default function PublicQueue() {
   const details = (item: QueueItem) => (
     <div className="min-w-0">
       <p className="break-words font-semibold text-rose-50">{item.title || 'Untitled request'}</p>
+      {item.promotionLabel && <p className="mt-1 text-xs font-bold text-amber-200">{item.promotionLabel}</p>}
       <p className="mt-1 text-sm text-rose-200/70">{formatMediaDuration(item.durationSec) || 'Duration unknown'} · {item.platform || 'Media'} · Requested by {item.requestedBy || 'Viewer'}</p>
     </div>
   );
@@ -69,6 +70,7 @@ export default function PublicQueue() {
         {error && <p role="alert" className="rounded-xl border border-rose-800 bg-rose-950/50 p-4">{error}{data && ' Showing the last loaded queue.'}</p>}
         <section aria-labelledby="now-playing" className="rounded-2xl border border-rose-900/70 bg-[#210914] p-5"><h2 id="now-playing" className="mb-3 text-sm font-bold uppercase tracking-widest text-rose-300">Now playing</h2>{data?.playing ? details(data.playing) : <p className="text-rose-200/70">{!data && loading ? 'Loading queue…' : 'Nothing playing right now.'}</p>}</section>
         <section aria-labelledby="waiting-heading">
+          <p className="mb-3 text-sm text-amber-100/80">Move any waiting video to next up: !promote [queue position] in Twitch chat. 50 points per position crossed (for example, #10 to #1 costs 450). Cancel before playback with !unpromote [queue position] for a full refund to the payer.</p>
           <h2 id="waiting-heading" className="mb-4 text-xl font-bold">Coming up <span className="text-rose-300">({queue.length})</span></h2>
           <label className="mb-4 flex items-center gap-2 rounded-xl border border-rose-900 bg-[#190710] px-4"><Search className="h-4 w-4 text-rose-300" aria-hidden="true" /><span className="sr-only">Search queue</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search titles or requesters" className="w-full bg-transparent py-3 outline-none" type="search" /></label>
           <label className="mb-4 block text-sm text-rose-200">Find your requests<input aria-label="Requester Twitch username" value={requester} onChange={event => setRequester(event.target.value)} placeholder="Your Twitch username (exact match)" className="mt-2 w-full rounded-xl border border-rose-900 bg-[#190710] p-3" /></label>

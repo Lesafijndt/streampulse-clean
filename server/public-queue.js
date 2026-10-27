@@ -1,3 +1,4 @@
+import { promotionLabel } from '../src/promotion.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { getPostgresStore } from './postgres-store.js';
 
@@ -14,7 +15,7 @@ export function projectPublicQueue(documents, namespace, updatedAt = Date.now())
     return [{ ...row, id: path.slice(prefix.length) }];
   });
   const project = (row, position) => ({
-    position, id: row.id, title: text(row.title, 1000),
+    promotionLabel: promotionLabel(row), position, id: row.id, title: text(row.title, 1000),
     url: /^https?:\/\//i.test(text(row.url, 4096)) ? text(row.url, 4096) : '',
     platform: text(row.platform, 40),
     durationSec: Number.isFinite(Number(row.durationSec)) && Number(row.durationSec) > 0 ? Number(row.durationSec) : null,

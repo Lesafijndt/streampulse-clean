@@ -1,3 +1,4 @@
+import { isActivePromotion } from './promotion.js';
 import { MAX_MEDIA_DURATION_SECONDS } from './durationLookup.js';
 
 export function formatMediaDuration(totalSeconds) {
@@ -95,6 +96,8 @@ export function selectNextVideoCandidate(videos, outgoing, compareQueueOrder) {
     video.status === 'queue' && String(video.id) !== String(outgoing?.id)
   );
   const returnTargetId = String(outgoing?.nextTrackOverrideId || '');
+  const promotedNext = queuedItems.slice().sort(compareQueueOrder)[0];
+  if (isActivePromotion(promotedNext)) return promotedNext;
   return (returnTargetId && queuedItems.find((video) => String(video.id) === returnTargetId)) ||
     queuedItems.slice().sort(compareQueueOrder)[0] ||
     null;
