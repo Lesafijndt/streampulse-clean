@@ -3,6 +3,13 @@ import { Gamepad2, Laugh, Music, Radio, Scissors, Sparkles } from 'lucide-react'
 // Pure media-domain helpers live here so queue identity, platform parsing, and
 // category classification can be tested without mounting the dashboard.
 export const CATEGORY_META = {
+  Forsen: {
+    label: 'Forsen',
+    icon: Radio,
+    badgeBg: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+    colorHex: '#60a5fa',
+    keywords: ['forsen', 'forsenlol', 'forsenspectate', 'forsen clips', 'hans eli sebastian fors', 'sebastian fors']
+  },
   Music: {
     label: 'Music',
     icon: Music,
@@ -25,7 +32,9 @@ export const CATEGORY_META = {
       'gameplay', 'walkthrough', 'speedrun', 'playthrough', 'fragmovie', 'montage',
       'clutch', 'valorant', 'cs2', 'counter-strike', 'fortnite', 'league of legends',
       'overwatch', 'apex legends', 'gta', 'minecraft', 'elden ring', 'boss fight',
-      'esports', 'smash bros', 'roblox', 'highlight', 'ranked', 'ace', 'headshot'
+      'esports', 'smash bros', 'roblox', 'ranked', 'headshot', 'team fortress 2',
+      'dota 2', 'dota', 'fighting game', 'street fighter', 'tekken', 'mortal kombat', 'what is this game about',
+      'let s play', 'blind playthrough', 'gaming', '\u043f\u0440\u043e\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', '\u0433\u0435\u0439\u043c\u043f\u043b\u0435\u0439'
     ]
   },
   Memes: {
@@ -38,7 +47,9 @@ export const CATEGORY_META = {
       'joke', 'parody', 'fails', 'vines', 'trolling', 'comedy', 'prank',
       'skit', 'lol', 'kekw', 'cursed', 'brainrot', 'memes', 'shitposts',
       'shitposting', 'troll', 'trollface', 'rickroll', 'rickrolled', 'yes king',
-      'laughing', 'funniest', 'memes compilation', '???', '????', '??????', '???????'
+      'laughing', 'funniest', 'memes compilation', 'trolled', 'prank call', 'prank calls',
+      'biggest dick', 'boys being boys', 'gangster party line', 'sfm', 'gachimuchi',
+      'gachi remix', 'right version', '\u043c\u0435\u043c', '\u043c\u0435\u043c\u044b', '\u043f\u0440\u0438\u043a\u043e\u043b', '\u043f\u0440\u0438\u043a\u043e\u043b\u044b'
     ]
   },
   Clips: {
@@ -56,7 +67,8 @@ export const CATEGORY_META = {
     keywords: [
       'podcast', 'interview', 'reaction', 'reacts', 'reacting', 'documentary',
       'debate', 'discussion', 'drama', 'vlog', 'commentary', 'unboxing', 'review',
-      'asmr', 'cooking', 'travel', 'live stream'
+      'asmr', 'cooking', 'travel', 'live stream', 'repair', 'restoration', 'can i fix',
+      'how to fix', 'explained', 'news', 'tutorial', 'limmy s show', 'in walmart', '\u0438\u043d\u0442\u0435\u0440\u0432\u044c\u044e', '\u043f\u043e\u0434\u043a\u0430\u0441\u0442'
     ]
   },
   General: {
@@ -78,28 +90,42 @@ export function isTwitchClipUrl(url = '') {
   } catch { return false; }
 }
 
-export function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all') {
-  const text = String(title || '') + ' ' + String(note || '');
-  // IDs, domains, creator usernames and arbitrary URL parameters are not content keywords.
-  const normalized = text.replace(/https?:\/\/\S+/gi, '').normalize('NFKC').toLowerCase()
-    .replace(/[^\p{L}\p{N}#]+/gu, ' ').replace(/\s+/g, ' ').trim();
+// Normalize Unicode text consistently; hashtags can use compact multiword names.
+function contentMatcher(title, note = '') {
+  const text = (String(title || '') + ' ' + String(note || '')).replace(/https?:\/\/\S+/gi, '').replace(/@[\p{L}\p{N}_.]+/gu, '').normalize('NFKC').toLowerCase();
+  const normalized = text.replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
   const padded = ' ' + normalized + ' ';
-  const has = phrase => padded.includes(' ' + phrase.toLowerCase().replace(/[^\p{L}\p{N}#]+/gu, ' ').trim() + ' ');
-  if (['#meme','#memes','#funny','#shitpost','#shitposts'].some(has)) return 'Memes';
-  if (['#music','#song'].some(has)) return 'Music';
-  if (['#game','#gaming'].some(has)) return 'Gaming';
-  if (['#irl','#podcast'].some(has)) return 'IRL';
+  const tags = [...text.matchAll(/#([\p{L}\p{N}_]+)/gu)].map(match => match[1].replace(/_/g, ''));
+  return phrase => {
+    const words = String(phrase).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    return Boolean(words) && (padded.includes(' ' + words + ' ') || tags.includes(words.replace(/ /g, '')));
+  };
+}
+
+export function detectVideoCategory(url = '', title = '', note = '', streamMode = 'all') {
+  const has = contentMatcher(title, note);
+  const forsenContent = contentMatcher(String(title).replace(/@(?=forsen\b)/gi, ''), String(note).replace(/@(?=forsen\b)/gi, ''));
+  let forsenChannel = false;
+  try {
+    const source = new URL(String(url));
+    forsenChannel = ['twitch.tv', 'www.twitch.tv', 'm.twitch.tv'].includes(source.hostname.toLowerCase()) && /^\/forsen(?:\/|$)/i.test(source.pathname);
+  } catch { /* A title can still identify Forsen without a parseable URL. */ }
+  if (forsenChannel || CATEGORY_META.Forsen.keywords.some(forsenContent)) return 'Forsen';
+  // Platform identity is reliable; content tags never turn non-Twitch URLs into clips.
   if (isTwitchClipUrl(url)) return 'Clips';
-  const memeWords = CATEGORY_META.Memes.keywords;
-  if (memeWords.some(has)) return 'Memes';
-  let host = ''; try { host = new URL(String(url)).hostname.toLowerCase(); } catch { /* optional URL */ }
-  if (host === 'music.youtube.com' || host === 'spotify.com' || host.endsWith('.spotify.com') || host === 'soundcloud.com' || host.endsWith('.soundcloud.com')) return 'Music';
-  let best = streamMode === 'music_only' ? 'Music' : 'General', highest = 0;
-  for (const key of ['Music', 'Gaming', 'IRL']) {
-    const score = CATEGORY_META[key].keywords.reduce((sum, word) => sum + (has(word) ? (['official music video','official audio','lyric video','gameplay','speedrun'].includes(word) ? 3 : 1) : 0), 0);
+  if (has('limmy s show')) return 'IRL';
+  if (CATEGORY_META.Memes.keywords.some(has)) return 'Memes';
+  const music = detectMusicType(url, title, note) === 'Music';
+  if (music) return 'Music';
+  if (has('evo') && ['commentating', 'tournament', 'finals', 'fighting'].some(has)) return 'Gaming';
+  let best = 'General', highest = 0;
+  for (const key of ['Gaming', 'IRL']) {
+    const score = CATEGORY_META[key].keywords.reduce((sum, word) => sum + (has(word) ? 1 : 0), 0);
     if (score > highest) { best = key; highest = score; }
   }
-  return best;
+  // Talk/reaction/tutorial context wins over incidental music vocabulary.
+  if (highest) return best;
+  return 'General';
 }
 
 // Binary media classifier. Strong music signals win; everything else is labelled Non-Music.
@@ -109,13 +135,11 @@ export function detectMusicType(url = '', title = '', note = '', category = '') 
   const host = (parsed?.hostname || '').toLowerCase().replace(/^www\./, '');
   const rawTitle = String(title || '').trim();
   const rawText = [rawTitle, String(note || '')].join(' ').toLowerCase();
-  const normalizedText = rawText.replace(/[_]+/g, ' ').replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const paddedText = ' ' + normalizedText + ' ';
-  const hasPhrase = (phrase) => paddedText.includes(' ' + phrase.toLowerCase().replace(/[^a-z0-9#]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ');
+  const hasPhrase = contentMatcher(rawTitle, note);
 
   // Music-first platforms are strong evidence; a TikTok URL alone is not.
   if (host === 'music.youtube.com' || host === 'open.spotify.com' || host.endsWith('.spotify.com') ||
-      host.endsWith('.soundcloud.com') || host === 'music.apple.com' || host === 'bandcamp.com' ||
+      (host === 'soundcloud.com' || host.endsWith('.soundcloud.com')) || host === 'music.apple.com' || host === 'bandcamp.com' ||
       host.endsWith('.bandcamp.com')) return 'Music';
   if (String(category || '').trim().toLowerCase() === 'music') return 'Music';
   if (/(?:^|[\s#])(?:#music|#song|#songrequest|#nowplaying)(?:\b|$)/i.test(rawText)) return 'Music';
@@ -127,7 +151,7 @@ export function detectMusicType(url = '', title = '', note = '', category = '') 
     ['instrumental', 4], ['nightcore', 4], ['vocaloid', 4], ['karaoke', 4],
     ['bass boosted', 4], ['music mix', 4], ['dj set', 4], ['live session', 3],
     ['official mv', 4], ['audio only', 3], ['extended mix', 4], ['radio edit', 4],
-    ['remix', 3], ['cover song', 3], ['piano cover', 3], ['guitar cover', 3],
+    ['right version', 4], ['gachi remix', 5], ['remix', 3], ['cover song', 3], ['piano cover', 3], ['guitar cover', 3],
     ['acoustic version', 3], ['theme song', 4], ['opening theme', 4], ['ending theme', 4],
     ['lofi', 3], ['lo fi', 3], ['synthwave', 3], ['hip hop', 3], ['rap', 2],
     ['edm', 3], ['techno', 3], ['house music', 3], ['metal song', 3], ['jazz', 2],
@@ -143,6 +167,8 @@ export function detectMusicType(url = '', title = '', note = '', category = '') 
     ['shitpost', 5], ['comedy', 4], ['prank', 4], ['fails', 3],
     ['highlights', 2], ['twitch clip', 5], ['stream highlight', 5],
     ['news', 3], ['explained', 3], ['short clip', 3], ['funny clip', 4],
+    ['repair', 5], ['can i fix', 5], ['episode', 4], ['commentating', 4], ['game about', 4],
+    ['first date', 4], ['trolled', 4], ['skit', 5], ['sfm', 5], ['limmy s show', 5],
     ['streamer', 2], ['speech', 3], ['debate', 3]
   ];
   const musicScore = musicSignals.reduce((score, [phrase, weight]) => score + (hasPhrase(phrase) ? weight : 0), 0);
@@ -152,14 +178,17 @@ export function detectMusicType(url = '', title = '', note = '', category = '') 
   // Only use this fallback for YouTube titles and otherwise-generic categories, after strong
   // non-music words have been ruled out (so things like "Artist - Interview" stay Non-Music).
   const isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
-  const titleParts = rawTitle.split(/\s[-–—|]\s/);
-  const looksLikeArtistTrackTitle = isYouTube &&
-    (String(category || '').trim() === '' || String(category || '').trim() === 'General') &&
-    titleParts.length === 2 &&
-    titleParts[0].trim().length >= 2 &&
-    titleParts[1].trim().length >= 2 &&
-    rawTitle.length <= 110;
+  const titleParts = rawTitle.split(/\s[-\u2013\u2014|]\s/);
+  // A dash is formatting, not evidence of a song. Only use this fallback for
+  // unambiguous established performer names; unknown uploads need music signals.
+  const knownArtists = ['pink floyd', 'linkin park', 'daft punk', 'michael jackson',
+    'rick astley', 'the weeknd', 'arctic monkeys', 'red hot chili peppers',
+    'dire straits', 'black sabbath', 'iron maiden', 'depeche mode', 'nine inch nails',
+    'lana del rey', 'taylor swift', 'billie eilish', 'lady gaga', 'the beatles'];
+  const looksLikeArtistTrackTitle = isYouTube && titleParts.length === 2 &&
+    knownArtists.includes(titleParts[0].trim().toLowerCase()) && titleParts[1].trim().length >= 2;
 
+  if (['podcast', 'interview', 'reaction', 'reacts', 'reacting', 'review', 'tutorial', 'documentary', 'can i fix', 'commentating', 'limmy s show'].some(hasPhrase)) return 'Non-Music';
   if (musicScore >= 3 && musicScore > nonMusicScore) return 'Music';
   if (looksLikeArtistTrackTitle && nonMusicScore === 0) return 'Music';
   return 'Non-Music';
@@ -178,10 +207,7 @@ export function getVideoCategory(video = {}) {
   const category = CATEGORY_META[video.category] ? video.category : 'General';
   // Preserve staff choices except impossible legacy non-Twitch "Twitch Clips" labels.
   if (video.categoryManuallySet === true && (category !== 'Clips' || isTwitchClipUrl(video.url))) return category;
-  const detected = detectVideoCategory(video.url || '', video.title || '', video.note || '');
-  if (detected === 'Memes' || detected === 'Clips') return detected;
-  if (getVideoMediaType({ ...video, categoryManuallySet: false }) === 'Music') return 'Music';
-  return detected === 'Music' ? 'General' : detected;
+  return detectVideoCategory(video.url || '', video.title || '', video.note || '');
 }
 
 /**

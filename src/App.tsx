@@ -4663,6 +4663,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                   >
                     <option value="Auto">✨ Auto-Detect via Engine</option>
                     <option value="Music">🎵 Music / Beats</option>
+                    <option value="Forsen">Forsen</option>
                     <option value="Gaming">🎮 Blind Playthroughs</option>
                     <option value="Memes">😂 Shitposts</option>
                     <option value="Clips">🎬 Twitch Clips</option>

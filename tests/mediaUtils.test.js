@@ -67,3 +67,59 @@ test('memes use content words, reclassify enriched automatic titles, and preserv
  assert.equal(detectVideoCategory(url,'A telescope in space'),'General');
  assert.equal(detectVideoCategory(url,'Album official audio'),'Music');
 });
+
+test('streamer category examples follow content preferences rather than generic comedy or dash formatting', () => {
+ const url='https://youtu.be/abcdefghijk';
+ const cases=[
+ ['Boys Being Boys #12','Memes'],
+ ['xQc Gets Trolled By Car Chase Streamer','Memes'],
+ ['Man With The Biggest Dick In The World','Memes'],
+ ['Guy Smells Bloody Fingers In Walmart!','IRL'],
+ ["Limmy's Show: Dee Dee: Yoker",'IRL'],
+ ["Limmy's Show: A funny sketch",'IRL'],
+ ["Limmy's Favourite Prank Call",'Memes'],
+ ["malfoid - Malfoy & Potter's First Date EP07",'General'],
+ ['EVO 2011 - Best Commentating Ever w/ Kayo Police','Gaming'],
+ ['EVO 2026 tournament finals','Gaming'],
+ ['I Bought 2 Broken Nintendo Switches for $80 Each - Can I Fix Them?','IRL'],
+ ['average forsen throw experience #LeagueOfLegends #highlight #Shorts','Forsen'],
+ ['Pink Floyd - Time (No Intro/No Clocks)','Music'],
+ ['Pink Floyd \u2013 Time','Music'],
+ ['Unknown Creator - An unknown title','General'],
+ ['Artist - Official Audio','Music'],
+ ['Minecraft OST - Official Audio','Music'],
+ ['Creator reacts to an official music video','IRL'],
+ ['Repair review - soundtrack','IRL'],
+ ["Here's to you feat Billy Herrington Right Version",'Memes'],
+ ['An ace reporter spots a single telescope','General'],
+ ['#\u043c\u0435\u043c\u044b','Memes'],['#\u0433\u0435\u0439\u043c\u043f\u043b\u0435\u0439','Gaming']
+ ];
+ for(const [title,expected] of cases){
+  assert.equal(getVideoCategory({url,title,category:'Music'}),expected,title);
+  assert.equal(getVideoCategory({url,title,category:'General',categoryManuallySet:true}),'General','manual: '+title);
+ }
+});
+
+test('URLs and creator handles do not classify content, compound hashtags and Unicode tags do', () => {
+ const url='https://youtu.be/abcdefghijk';
+ assert.equal(detectVideoCategory(url,'A landscape @funny'),'General');
+ assert.equal(detectVideoCategory(url,'#League_of_Legends'),'Gaming');
+ assert.equal(detectVideoCategory(url,'#leagueoflegendsfan'),'General');
+ assert.equal(detectVideoCategory('https://clips.twitch.tv/RealClip','#music #memes'),'Clips');
+ assert.equal(getVideoMediaType({url,title:'EVO 2011 - Best Commentating Ever'}),'Non-Music');
+ assert.equal(getVideoMediaType({url,title:'Artist - Official Audio'}),'Music');
+ assert.equal(getVideoMediaType({url,title:'Reacting to official audio'}),'Non-Music');
+ assert.equal(getVideoMediaType({url,title:'Gachi remix Right Version'}),'Music');
+});
+
+test('Forsen has priority across platforms, aliases and content genres without substring or URL-ID guesses', () => {
+ const url='https://youtu.be/abcdefghijk';
+ for(const title of ['Forsen reacts to a meme','Forsen Minecraft gameplay','Forsen - Official Audio',"Forsen's funniest moments",'#ForsenClips','@forsen dancing','Hans Eli Sebastian Fors interview','Sebastian Fors','forsenSpectate compilation'])assert.equal(getVideoCategory({url,title,category:'Music'}),'Forsen',title);
+ assert.equal(detectVideoCategory('https://www.twitch.tv/forsen/clip/SomeSlug','A clip'),'Forsen');
+ assert.equal(detectVideoCategory('https://clips.twitch.tv/SomeSlug','Forsen playing'),'Forsen');
+ assert.equal(detectVideoCategory('https://www.tiktok.com/@creator/video/1234567890123','#forsen funny'),'Forsen');
+ assert.equal(detectVideoCategory('https://youtu.be/forsen12345','A landscape'),'General');
+ assert.equal(detectVideoCategory(url,'Forsaken gameplay'),'Gaming');
+ assert.equal(detectVideoCategory('https://twitch.tv.attacker.example/forsen/clip/a','A landscape'),'General');
+ assert.equal(getVideoCategory({url,title:'Forsen reacts',category:'IRL',categoryManuallySet:true}),'IRL');
+});
