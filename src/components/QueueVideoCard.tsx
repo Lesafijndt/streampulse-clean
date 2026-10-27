@@ -6,6 +6,7 @@ import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.j
 
 export default function QueueVideoCard({
   video,
+  categoryCorrections = [],
   index,
   activeTab,
   currentVideo,
@@ -37,7 +38,7 @@ export default function QueueVideoCard({
                   const queuePositionLabel = activeTab === 'queue' && video.status === 'queue' && queueRank === 1
                     ? 'UP NEXT'
                     : '';
-                  const resolvedCategory = getVideoCategory(video); const catObj = CATEGORY_META[resolvedCategory] || CATEGORY_META.General;
+                  const resolvedCategory = getVideoCategory(video, categoryCorrections); const catObj = CATEGORY_META[resolvedCategory] || CATEGORY_META.General;
 
                   return (
                     <div
@@ -136,8 +137,8 @@ export default function QueueVideoCard({
                               </span>
                             )}
 
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ getVideoMediaType(video) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
-                              {getVideoMediaType(video)}
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase border ${ getVideoMediaType(video, categoryCorrections) === 'Music' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-amber-500/15 text-amber-200 border-amber-500/40'}`}>
+                              {getVideoMediaType(video, categoryCorrections)}
                             </span>
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-800 text-slate-300 uppercase">
                               {video.platform}

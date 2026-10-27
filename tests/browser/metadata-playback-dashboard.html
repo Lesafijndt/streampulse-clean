@@ -10,7 +10,7 @@ const cleared=new URLSearchParams(location.search).get('cleared')==='1';
 const resetTest=new URLSearchParams(location.search).get('reset')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:id==='a'?provider:'youtube',videoId:id==='a'?(provider==='tiktok'?'1234567890123456789':'dQw4w9WgXcQ'):'abcdefghijk',
 url:id==='a'?(provider==='youtube'?'https://www.youtube.com/shorts/dQw4w9WgXcQ':'https://www.tiktok.com/@viewer/video/1234567890123456789'):'https://www.youtube.com/watch?v=abcdefghijk',title:id==='a'?'YouTube video':'Imported queued video',
-timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
+classificationMetadata:{version:1},timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
 durationSec:3,duration:'0:03',durationSource:'player',voters:[],upvotes:0,thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E'});
 localStorage.clear();sessionStorage.clear();
 localStorage.setItem(`${prefix}:active-room`,'2o3a');
@@ -51,7 +51,7 @@ if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='prefe
 if(url.pathname==='/api/twitch/session')return json({authenticated:true,storageBackend:'postgres',role:login==='2o3a'?'streamer':'moderator',user:{id:'123',login,display_name:login}});
 if(url.pathname==='/api/twitch/bot-session')return json({active:true,connected:false,code:'webhook_existing',receiptCode:'ok'});
 if(url.pathname==='/api/activity-log'){anonymousReads++;return json({events:[],hasMore:false});}
-if(url.pathname==='/api/media-metadata')return json({title:'A resolved Shorts title',thumbnailUrl:'https://example.com/preview.jpg',durationSec:3,durationProvider:'youtube'});
+if(url.pathname==='/api/media-metadata')return json({title:'A resolved Shorts title',thumbnailUrl:'https://example.com/preview.jpg',durationSec:3,durationProvider:'youtube',classificationMetadata:{version:1,authorName:'Forsen',sourceCategory:'Gaming',description:'A clip',tags:['forsen']}});
 return json({ok:true});
 };
 const wait=async test=>{for(let i=0;i<150;i++){if(test())return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out waiting for dashboard');};
@@ -73,7 +73,8 @@ try{
  assert(metadataWrites===1,'Successful metadata must not loop');
  assert(metadataBody.generation===['a',now,now].join(':'),'Metadata request carries original generation');
  assert(metadataBody.url===video('a','playing').url,'Metadata request carries original URL');
- assert(Object.keys(metadataBody.patch).every(k=>['title','thumbnail'].includes(k)),'Existing player duration is preserved');
+ assert(Object.keys(metadataBody.patch).every(k=>['title','thumbnail','classificationMetadata'].includes(k)),'Existing player duration is preserved');
+ assert(metadataBody.patch.classificationMetadata.authorName==='Forsen'&&document.body.textContent.includes('Forsen'),'Source channel metadata persists and drives category');
  assert(docs[base+'queue_videos/a'].status==='playing'&&docs[base+'queue_videos/b'].status==='queue'&&transitionWrites===0,'Metadata cannot change playback or queue');
  root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual App resolves placeholder title despite existing player duration; guarded enrich-metadata POST; refreshed title; unchanged playback';
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors)+' metadata='+JSON.stringify(metadataBody);}

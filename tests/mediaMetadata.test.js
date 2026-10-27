@@ -8,7 +8,7 @@ test('TikTok metadata selects the requested item instead of recommended videos',
     wrong: { desc: 'Recommended video', video: { duration: 99 } },
     wanted: { desc: 'Actual caption', video: { duration: 37, cover: 'https://example.com/image.jpg' } }
   } }) + '</script>';
-  assert.deepEqual(parsePageMetadata(html, 'wanted'), { title: 'Actual caption', durationSec: 37, thumbnailUrl: 'https://example.com/image.jpg' });
+  assert.deepEqual(parsePageMetadata(html, 'wanted'), { title: 'Actual caption', durationSec: 37, thumbnailUrl: 'https://example.com/image.jpg', classificationMetadata:{version:1,authorName:'',channelId:'',description:'Actual caption',sourceCategory:'',tags:[]} });
   assert.equal(parsePageMetadata('<meta property="og:title" content="TikTok - Make Your Day">').title, '');
   assert.equal(parsePageMetadata('<meta property="og:title" content="A &amp; B">').title, 'A & B');
   const missing = '<script id="SIGI_STATE">' + JSON.stringify({ ItemModule: {

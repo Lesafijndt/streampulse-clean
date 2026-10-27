@@ -21,3 +21,11 @@ test('metadata cache reuses canonical media IDs across share URLs',async()=>{
  const second=await lookupCachedQueueMetadata(db,'https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=share',{namespace,lookup,now:2000});
  assert.equal(second.metadata.durationSec,123);assert.equal(calls,1);
 });
+
+test('content-cache upgrade preserves an existing known duration when the provider is unavailable',async()=>{
+ const namespace='content-cache-upgrade',db=store(namespace),url='https://youtu.be/dQw4w9WgXcQ';let calls=0;
+ await db.doc(metadataCachePath(url,namespace)).set({complete:true,expiresAt:10000,metadata:{title:'Old title',durationSec:123,durationProvider:'old-player'}});
+ const lookup=async()=>{calls++;return null};
+ const first=await lookupCachedQueueMetadata(db,url,{namespace,lookup,now:1000});assert.equal(first.metadata.durationSec,123);assert.equal(first.schemaVersion,1);
+ await lookupCachedQueueMetadata(db,url,{namespace,lookup,now:2000});assert.equal(calls,1);
+});

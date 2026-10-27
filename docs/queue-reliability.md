@@ -36,3 +36,14 @@ Fair shuffle is optional beside regular Shuffle. It interleaves normalized reque
 The read-only /queue page supports title search and exact Twitch username filtering while retaining full-queue positions. It never authenticates as staff or writes queue data.
 
 Quiet monitoring uses the existing moderator-only health poll (60 seconds; server receipt probe cached up to five minutes). It flags inactive intake, storage/read failure, buffered/error receipts and unconfirmed accepted writes. Thirty minutes without delivery is explicitly informational: quiet chat is not evidence of failure. This is dashboard monitoring, not an external notification service or paid background monitor. Only verified paim_beach_pete sees these details.
+
+
+## Remembered categories and source hints
+
+Changing a queue/history card category now saves the manual selection and a reusable example atomically in the room settings. Both staff accounts can correct categories. The last 200 examples are retained. Matching uses canonical media identity, non-generic exact titles, and explicit numbered episode/part families with at least three words. It never learns an entire channel from a single correction. Manual selection wins, followed by a remembered example, title rules, then available source hints. New Twitch requests use the same remembered rules even with the dashboard closed.
+
+Metadata collection reuses existing bounded public page/oEmbed fetches and the seven-day cache. YouTube player metadata and the selected TikTok item can contribute creator/channel identity, tags, provider category and a short description. A source author can identify Forsen; ambiguous titles can use genre tags or provider categories. Descriptions are weak hints limited to their opening sentence, after stronger title signals. Unsupported or hidden metadata remains unknown. The active/waiting queue gets a one-time versioned content backfill; manual categories skip that extra lookup. No model API or paid metadata service is used.
+
+## Private playback reports
+
+Only verified paim_beach_pete can open, save or read reports. The Report playback issue control is beside the player controls and offers issue types plus recent reports. Reports retain the current request identity/title, platform, chosen issue, provider error code when available, timestamp, playback position, pause, mute and volume. OAuth credentials, signed media URLs, iframe contents and browser storage are not collected. The server derives media identity from the stored queue row and validates the playing generation. Reports are capped at 100 with one report per generation per minute. Saving a report never writes the playing or waiting queue rows. Existing session/store routes are reused, without another Vercel function or paid service.

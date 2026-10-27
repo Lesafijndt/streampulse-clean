@@ -1,3 +1,4 @@
+import { learnedCategory, sanitizeClassificationMetadata } from './categoryMemory.js';
 import { Gamepad2, Laugh, Music, Radio, Scissors, Sparkles } from 'lucide-react';
 
 // Pure media-domain helpers live here so queue identity, platform parsing, and
@@ -196,18 +197,36 @@ export function detectMusicType(url = '', title = '', note = '', category = '') 
 
 // A staff-selected category is authoritative. Otherwise, strong music detection resolves
 // both the category label and the Music/Non-Music badge so every part of the UI agrees.
-export function getVideoMediaType(video = {}) {
+export function getVideoMediaType(video = {}, rules = []) {
   if (video.categoryManuallySet === true) {
     return String(video.category || '').trim() === 'Music' ? 'Music' : 'Non-Music';
   }
+  const learned = learnedCategory(video, rules);
+  if (Object.hasOwn(CATEGORY_META, learned)) return learned === 'Music' ? 'Music' : 'Non-Music';
+  if (getVideoCategory(video, rules) === 'Music') return 'Music';
   return detectMusicType(video.url || '', video.title || '', video.note || '', '');
 }
 
-export function getVideoCategory(video = {}) {
+export function getVideoCategory(video = {}, rules = []) {
   const category = CATEGORY_META[video.category] ? video.category : 'General';
   // Preserve staff choices except impossible legacy non-Twitch "Twitch Clips" labels.
   if (video.categoryManuallySet === true && (category !== 'Clips' || isTwitchClipUrl(video.url))) return category;
-  return detectVideoCategory(video.url || '', video.title || '', video.note || '');
+  const learned = learnedCategory(video, rules);
+  if (Object.hasOwn(CATEGORY_META, learned) && (learned !== 'Clips' || isTwitchClipUrl(video.url))) return learned;
+  const detected = detectVideoCategory(video.url || '', video.title || '', video.note || '');
+  const metadata = sanitizeClassificationMetadata(video.classificationMetadata);
+  if (!metadata) return detected;
+  const sourceText = [metadata.authorName, metadata.tags.join(' ')].join(' ');
+  if (detectVideoCategory('', sourceText) === 'Forsen') return 'Forsen';
+  if (detected !== 'General') return detected;
+  const hinted = detectVideoCategory('', metadata.tags.map(tag => '#'+tag.replace(/ /g,'')).join(' '));
+  if (hinted !== 'General') return hinted;
+  const sourceCategories = {Music:'Music',Gaming:'Gaming',Comedy:'Memes',Education:'IRL',News:'IRL'};
+  if (Object.hasOwn(sourceCategories, metadata.sourceCategory)) return sourceCategories[metadata.sourceCategory];
+  if (/ - Topic$/.test(metadata.authorName)) return 'Music';
+  // Descriptions are weak evidence: only the opening sentence is considered.
+  const description = metadata.description.split(/[.!?\n]/)[0].slice(0, 180);
+  return detectVideoCategory('', description);
 }
 
 /**

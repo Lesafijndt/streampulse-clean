@@ -1,3 +1,4 @@
+import { sanitizeClassificationMetadata } from '../src/categoryMemory.js';
 import { isValidMediaDuration } from '../src/durationLookup.js';
 
 const ALLOWED_MEDIA_HOSTS = [
@@ -172,7 +173,9 @@ export function parsePageMetadata(html, videoId = '') {
       const item = main && (!videoId || String(main.id) === videoId) ? main :
         videoId ? body.ItemModule?.[videoId] : Object.values(body.ItemModule || {})[0];
       if (item) return { title: typeof item.desc === 'string' ? item.desc.trim() : '', durationSec: isValidMediaDuration(item.video?.duration) ? Math.round(Number(item.video.duration)) : null,
-        thumbnailUrl: typeof item.video?.cover === 'string' ? item.video.cover : '' };
+        thumbnailUrl: typeof item.video?.cover === 'string' ? item.video.cover : '',
+        classificationMetadata: sanitizeClassificationMetadata({authorName:item.author?.nickname || item.author?.uniqueId, channelId:item.author?.uniqueId,
+          description:item.desc, tags:item.textExtra?.map(tag=>tag.hashtagName).filter(Boolean)}) };
     } catch { /* Public pages can contain unrelated or malformed script blocks. */ }
   }
   let title = '', thumbnailUrl = '';
@@ -183,7 +186,13 @@ export function parsePageMetadata(html, videoId = '') {
     if (key === 'og:image') thumbnailUrl = decode(readAttribute(tag, 'content'));
   }
   if (/^(?:TikTok(?: - Make Your Day)?|Make Your Day|YouTube)$/i.test(title)) title = '';
-  return { title, thumbnailUrl, durationSec: videoId && hasTikTokItemData ? null : parseDurationFromHtml(text) };
+  const player = extractJsonObjectAfterMarker(text, 'ytInitialPlayerResponse');
+  const details = player?.videoDetails;
+  const classificationMetadata = details && (!videoId || !details.videoId || details.videoId === videoId) ? sanitizeClassificationMetadata({
+    authorName:details.author, channelId:details.channelId, description:details.shortDescription, tags:details.keywords,
+    sourceCategory:player.microformat?.playerMicroformatRenderer?.category
+  }) : null;
+  return { ...(classificationMetadata ? {classificationMetadata} : {}), title, thumbnailUrl, durationSec: videoId && hasTikTokItemData ? null : parseDurationFromHtml(text) };
 }
 const pageMetadataCache = new Map();
 async function fetchPageMetadataUncached(source) {
@@ -214,7 +223,7 @@ async function fetchPageMetadataUncached(source) {
       if (!response.ok) return null;
       const contentType = String(response.headers.get('content-type') || '').toLowerCase();
       if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) return null;
-      return parsePageMetadata(await response.text(), getTikTokVideoId(source));
+      return parsePageMetadata(await response.text(), initialFamily === 'youtube' ? getYouTubeVideoId(source, source.hostname) : getTikTokVideoId(source));
     }
     return null;
   } catch { return null; }
@@ -396,6 +405,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     title: (typeof data.title === 'string' && data.title.trim() ? data.title : page?.title || '').slice(0, 400),
     authorName: typeof data.author_name === 'string' ? data.author_name.slice(0, 100) : '',
+    classificationMetadata: sanitizeClassificationMetadata({...page?.classificationMetadata, authorName:data.author_name || page?.classificationMetadata?.authorName}),
     thumbnailUrl: typeof data.thumbnail_url === 'string' && data.thumbnail_url ? data.thumbnail_url : page?.thumbnailUrl || '',
     durationSec,
     duration: durationSec ? formatDuration(durationSec) : '',

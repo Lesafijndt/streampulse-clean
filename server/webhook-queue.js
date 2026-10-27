@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseMediaUrl, getMediaIdentityKey, getStableMediaDocumentId,
-  detectVideoCategory, detectMusicType } from '../src/mediaUtils.js';
+  detectVideoCategory, detectMusicType, getVideoCategory, getVideoMediaType } from '../src/mediaUtils.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { buildMediaMetadataPatch } from '../src/mediaMetadata.js';
 
@@ -156,6 +156,10 @@ export async function persistChatEvent(db, { event, messageId, subscriptionId },
     const reads = await Promise.all([tx.get(receiptRef),tx.get(roomRef), ...itemRefs.map(ref=>tx.get(ref))]);
     if (reads[0].exists) return { status: 'duplicate_delivery', queued: 0 };
     const roomOpen = reads[1].data()?.streamSettings?.queueOpen !== false;
+    for (const item of pending.items) {
+      item.category = getVideoCategory(item, reads[1].data()?.categoryCorrections || []);
+      item.mediaType = getVideoMediaType(item, reads[1].data()?.categoryCorrections || []);
+    }
     let queued = 0;
     let duplicates = 0;
     if (roomOpen) {

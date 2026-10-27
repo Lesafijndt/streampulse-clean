@@ -1,3 +1,4 @@
+import { sanitizeClassificationMetadata } from '../src/categoryMemory.js';
 import { createHash } from 'node:crypto';
 import { getQueueNamespace } from './firebase-guard.js';
 import { lookupQueueMetadata } from './queue-metadata.js';
@@ -10,19 +11,20 @@ export function metadataCachePath(url, namespace = getQueueNamespace()) {
   return `artifacts/${namespace}/public/data/media_metadata/` + createHash('sha256').update(identity).digest('hex');
 }
 export function sanitizeCachedMetadata(value = {}) {
-  return { title: typeof value.title === 'string' ? value.title.slice(0, 400) : '',
+  return { ...(sanitizeClassificationMetadata(value.classificationMetadata) ? {classificationMetadata: sanitizeClassificationMetadata(value.classificationMetadata)} : {}), title: typeof value.title === 'string' ? value.title.slice(0, 400) : '',
     thumbnailUrl: typeof value.thumbnailUrl === 'string' && /^https:\/\//.test(value.thumbnailUrl) ? value.thumbnailUrl.slice(0, 4096) : '',
     durationSec: isValidMediaDuration(value.durationSec) ? Math.round(Number(value.durationSec)) : null,
     durationProvider: String(value.durationProvider || '').slice(0, 80) };
 }
 export async function lookupCachedQueueMetadata(db, url, { lookup = lookupQueueMetadata, now = Date.now(), namespace } = {}) {
   const ref = db.doc(metadataCachePath(url, namespace)), saved = (await ref.get()).data();
-  if (saved && (saved.complete && saved.expiresAt > now || !saved.complete && saved.nextAt > now)) return saved;
+  if (saved && saved.schemaVersion === 1 && (saved.complete && saved.expiresAt > now || !saved.complete && saved.nextAt > now)) return saved;
   const metadata = sanitizeCachedMetadata(await lookup(url) || {}), attempts = Number(saved?.expiresAt > now ? saved.attempts || 0 : 0) + 1;
   metadata.title ||= saved?.metadata?.title || '';
   metadata.thumbnailUrl ||= saved?.metadata?.thumbnailUrl || '';
+  if (!metadata.durationSec && isValidMediaDuration(saved?.metadata?.durationSec)) {metadata.durationSec = saved.metadata.durationSec; metadata.durationProvider ||= saved.metadata.durationProvider || '';}
   const complete = isValidMediaDuration(metadata.durationSec);
-  const entry = { metadata, complete, attempts, nextAt: now + METADATA_RETRY_DELAYS[Math.min(attempts - 1, METADATA_RETRY_DELAYS.length - 1)] * 1000,
+  const entry = { schemaVersion: 1, metadata, complete, attempts, nextAt: now + METADATA_RETRY_DELAYS[Math.min(attempts - 1, METADATA_RETRY_DELAYS.length - 1)] * 1000,
     expiresAt: now + 7 * 86400000, updatedAt: now };
   await ref.set(entry);
   if (!lastPruned.has(db) || now - lastPruned.get(db) >= 3600000) {

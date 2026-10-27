@@ -1,5 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; frame-src 'self' about:"></head>
 <body><div id="root"></div><pre id="result">Running</pre><script type="module">
+import {rememberCategory} from '../../src/categoryMemory.js';
 import React from 'react'; import {createRoot} from 'react-dom/client'; import '../../src/index.css';
 const prefix='streampulse-gachi-arena:v2', namespace='streampulse-live-deck';
 const base=`artifacts/${namespace}/public/data/`;
@@ -16,16 +17,19 @@ localStorage.clear();sessionStorage.clear();
 localStorage.setItem(`${prefix}:active-room`,'2o3a');
 localStorage.setItem(`${prefix}:room:2o3a:videos`,JSON.stringify([video('a','playing'),{...video('b','queue'),platform:'tiktok',url:'https://www.tiktok.com/@viewer/video/1234567890123456789',videoId:'1234567890123456789',title:'Yes King Creature And Winter',category:'Clips'}, {...video('c','queue'),videoId:'12345678901',url:'https://www.youtube.com/watch?v=12345678901',queueOrder:3,title:'Forsen reacts to a meme'}]));
 let shuffleCalls=0; let conflict=false; let transitionWrites=0; let version=0, imported=cleared, expired=false, commits=0, anonymousReads=0;
-let recoveryReads=0,restores=0;const docs={}; const nativeFetch=window.fetch.bind(window);
+let recoveryReads=0,restores=0,reportsRead=0,reportsSaved=0,learned=0;const docs={}; const nativeFetch=window.fetch.bind(window);
 const json=(value,status=200)=>Promise.resolve(new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}}));
 window.fetch=(input,opts={})=>{
 const url=new URL(typeof input==='string'?input:input.url,location.href);
 if(!url.pathname.startsWith('/api/'))return nativeFetch(input,opts);
 if(url.pathname==='/api/twitch/session'&&url.searchParams.get('action')==='store'){
+if(url.searchParams.get('view')==='playback-reports'){reportsRead++;return json({reports:[]});}
 if(url.searchParams.get('view')==='recovery'){recoveryReads++;return json({snapshots:[{id:'recovery-one',at:now,actor:'paim_beach_pete',action:'Reorder queue',affected:2}],actions:[]});}
 if(expired)return json({authenticated:false,user:null});
 if(opts.method==='POST'){
  const body=JSON.parse(opts.body);
+ if(body.operation==='report-playback'){reportsSaved++;assert(login==='paim_beach_pete','Only moderator reports');assert(!body.url&&!body.token,'No secret or frame URLs sent');return json({ok:true,report:{at:Date.now(),title:'Preserved playing video',platform:'youtube',issue:body.issue}});}
+ if(body.operation==='learn-category'){learned++;const row=docs[base+'queue_videos/'+body.id];assert(body.generation===[row.id,row.timestamp,row.playedAt||0].join(':'),'Correction generation verified');row.category=body.category;row.categoryManuallySet=true;const settings=docs[base+'room_settings/2o3a']||{};settings.categoryCorrections=rememberCategory(settings.categoryCorrections,row,body.category);docs[base+'room_settings/2o3a']=settings;version++;return json({ok:true,categoryCorrections:settings.categoryCorrections});}
  if(body.operation==='undo-snapshot'){restores++;return json({ok:true,restored:2,skipped:0});}
  if(body.operation==='unshuffle'){docs[base+'queue_videos/b'].queueOrder=2;docs[base+'queue_videos/c'].queueOrder=3;version++;return json({ok:true,version});}
  if(body.operation==='shuffle'){
@@ -80,6 +84,18 @@ try{
  assert(document.querySelectorAll('.gachi-queue-item').length===1&&document.querySelector('.gachi-queue-item').textContent.includes('Forsen reacts'),'Forsen filter shows related request only');
  [...document.querySelectorAll('button')].find(button=>button.querySelector('span')?.textContent==='All Categories').click();await sleep(30);
  const first=frame(),live=JSON.stringify(docs[base+'queue_videos/a']);
+ const target=[...document.querySelectorAll('select[title="Click to fix or change category"]')].find(select=>select.value==='Forsen');target.value='IRL';target.dispatchEvent(new Event('change',{bubbles:true}));
+ await wait(()=>learned===1&&[...document.querySelectorAll('select[title="Click to fix or change category"]')].some(select=>select.value==='IRL'));
+ assert(docs[base+'queue_videos/c'].categoryManuallySet&&frame()===first,'Correction is saved without replacing playing frame');
+ if(login==='paim_beach_pete'){
+  [...document.querySelectorAll('button')].find(button=>button.textContent==='Report playback issue').click();await wait(()=>reportsRead===1);
+  const issue=document.querySelector('[aria-label="Playback issue type"]');issue.value='stutter';issue.dispatchEvent(new Event('change',{bubbles:true}));await sleep(30);
+  [...document.querySelectorAll('button')].find(button=>button.textContent==='Save playback report').click();await wait(()=>reportsSaved===1&&document.body.textContent.includes('Playback issue saved.'));
+  assert(frame()===first&&JSON.stringify(docs[base+'queue_videos/a'])===live,'Reporting never modifies playback');
+  const panel=document.querySelector('[aria-label="Private playback reports"]'), bounds=panel.getBoundingClientRect(), player=panel.closest('[data-player-fullscreen]').getBoundingClientRect();
+  assert(bounds.left>=player.left&&bounds.right<=player.right&&bounds.bottom<=player.bottom,'Report panel stays inside player card');
+  [...document.querySelectorAll('button')].find(button=>button.textContent==='Report playback issue').click();
+ }else{assert(!document.body.textContent.includes('Report playback issue')&&reportsRead===0&&reportsSaved===0,'Streamer has no technical report UI or requests');}
  if(login==='2o3a'){
  const next=[...document.querySelectorAll('button[title="Move to next"]')].at(-1);assert(next,'Move next is visible to the streamer');next.click();await wait(()=>docs[base+'queue_videos/c'].queueOrder<docs[base+'queue_videos/b'].queueOrder);
  assert(frame()===first&&JSON.stringify(docs[base+'queue_videos/a'])===live,'Move next must not interrupt playing video');
@@ -92,5 +108,5 @@ try{
  assert(frame()===first&&JSON.stringify(docs[base+'queue_videos/a'])===live,'Moderator recovery refresh preserves playing iframe');
  }
  root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS '+login+': move next, edge scroll, private recovery and playing-frame preservation';
-}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors);}
+}catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack+' errors='+JSON.stringify(errors)+' learning='+learned+' reportRead='+reportsRead+' saved='+reportsSaved+' text='+document.querySelector('#root').textContent.slice(-1800);}
 </script></body></html>

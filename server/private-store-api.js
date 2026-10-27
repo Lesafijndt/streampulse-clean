@@ -1,3 +1,5 @@
+import {getVideoCategory, getVideoMediaType} from '../src/mediaUtils.js';
+import {learnQueueCategory, savePlaybackReport} from './queue-learning.js';
 import { requestAppOrigin } from './app-origin.js';
 import { getQueueNamespace } from './firebase-guard.js';
 import { getPostgresStore } from './postgres-store.js';
@@ -19,6 +21,11 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
   try {
     const db = dependencies.db || await getPostgresStore(namespace);
     if (req.method === 'GET') {
+      if (req.query?.view === 'playback-reports') {
+        if (identity.login !== 'paim_beach_pete') throw fail('moderator_required',403);
+        const saved = await db.doc(prefix+'system_diagnostics/playback-reports').get();
+        return res.status(200).json({reports:saved.data()?.reports || []});
+      }
       if (req.query?.view === 'recovery') {
         if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
         const state = await db.readState({ collections: [prefix + 'queue_recovery', prefix + 'queue_actions'] });
@@ -62,6 +69,11 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     const origin = requestAppOrigin(req);
     if (req.headers.origin !== origin) throw fail('origin_denied', 403);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (['learn-category','report-playback'].includes(body?.operation)) {
+      if (!SAFE_ID.test(body.id || '') || typeof body.generation !== 'string' || body.generation.length > 600) throw fail('invalid_request');
+      if (body.operation === 'learn-category') return res.status(200).json({ok:true,categoryCorrections:await learnQueueCategory(db,prefix,identity,body)});
+      return res.status(200).json({ok:true,report:await savePlaybackReport(db,prefix,identity,body)});
+    }
     if (body?.operation === 'undo-snapshot') {
       if (identity.login !== 'paim_beach_pete') throw fail('moderator_required', 403);
       if (!SAFE_ID.test(body.id || '') || body.confirmation !== 'RESTORE') throw fail('restore_confirmation_required');
@@ -94,13 +106,13 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
         const row = (await tx.get(ref)).data();
         if (!row || row.channelRoom !== '2o3a' || row.url !== body.url || getPlaybackGeneration(row) !== body.generation) return false;
         const patch = buildMediaMetadataPatch(row, row, { title: body.patch.title, thumbnailUrl: body.patch.thumbnail,
-          durationSec: body.patch.durationSec, durationProvider: body.patch.durationProvider });
+          durationSec: body.patch.durationSec, durationProvider: body.patch.durationProvider, classificationMetadata: body.patch.classificationMetadata });
         if (!Object.keys(patch).length) return false;
         const cacheRef = patch.durationSec ? db.doc(metadataCachePath(row.url, namespace)) : null;
         const cached = cacheRef ? (await tx.get(cacheRef)).data() : null;
         tx.update(ref, patch);
-        if (cacheRef) tx.set(cacheRef, { metadata: sanitizeCachedMetadata({ title: patch.title || cached?.metadata?.title, thumbnailUrl: patch.thumbnail || cached?.metadata?.thumbnailUrl, durationSec: patch.durationSec, durationProvider: patch.durationProvider }),
-          complete: true, attempts: 0, nextAt: 0, updatedAt: Date.now(), expiresAt: Date.now() + 7 * 86400000 });
+        if (cacheRef) tx.set(cacheRef, { metadata: sanitizeCachedMetadata({ ...cached?.metadata, classificationMetadata: patch.classificationMetadata || cached?.metadata?.classificationMetadata, title: patch.title || cached?.metadata?.title, thumbnailUrl: patch.thumbnail || cached?.metadata?.thumbnailUrl, durationSec: patch.durationSec, durationProvider: patch.durationProvider }),
+          schemaVersion: 1, complete: true, attempts: 0, nextAt: 0, updatedAt: Date.now(), expiresAt: Date.now() + 7 * 86400000 });
         return true;
       });
       return res.status(200).json({ ok: true, applied });
@@ -195,6 +207,7 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
     if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) throw fail('version_required');
     if (!body.expectations || typeof body.expectations !== 'object') throw fail('preconditions_required');
     await db.runTransaction(async tx => {
+      const settings = (await tx.get(db.doc(prefix+'room_settings/2o3a'))).data();
       const refs = operations.map(op => db.doc(op.path));
       const snapshots = await Promise.all(refs.map(ref => tx.get(ref)));
       for (let index = 0; index < operations.length; index++) {
@@ -206,6 +219,12 @@ export async function handlePrivateStore(req, res, identity, dependencies = {}) 
           const data = current.data();
           if (op.path.includes('/queue_videos/') && (data.status !== expected.status || Number(data.timestamp || 0) !== Number(expected.timestamp || 0))) throw fail('conflict', 409);
           if (op.path.includes('/room_settings/') && Boolean(data.streamSettings?.queueOpen) !== Boolean(expected.queueOpen)) throw fail('conflict', 409);
+        }
+      }
+      for (let index=0;index<operations.length;index++) {
+        const op=operations[index];
+        if (!snapshots[index].exists && op.path.includes('/queue_videos/') && op.data?.url) {
+          op.data={...op.data,category:getVideoCategory(op.data,settings?.categoryCorrections || []),mediaType:getVideoMediaType(op.data,settings?.categoryCorrections || [])};
         }
       }
       await recordQueueRecovery(tx, db, prefix, operations, Object.fromEntries(refs.map((ref,index) => [ref.path, snapshots[index].data()])), { actor: identity.login });

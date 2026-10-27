@@ -1,3 +1,4 @@
+import PlaybackIssueReporter from './components/PlaybackIssueReporter';
 import { playbackFailureMessage, prepareNextConnections, queueHealthWarnings } from './playbackReliability.js';
 import { consumeChatCommandFeed } from './chatCommandFeed.js';
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
@@ -120,7 +121,7 @@ import { createPlaybackCompletionTracker, getPlaybackGeneration, buildTikTokPlay
 import { parseChatNotification, requestLikeChatMessage, maySkipCurrentRequest } from './twitchChatEvents.js';
 import { sanitizePersonalPreferences } from './personalPreferences.js';
 import { MAX_MEDIA_DURATION_SECONDS, createDurationLookupOutcome, isValidMediaDuration, shouldRetryDurationLookup, videoNeedsDurationLookup } from './durationLookup.js';
-import { buildMediaMetadataPatch, getMetadataLookupKey, videoNeedsMetadataLookup, videoNeedsTitleLookup } from './mediaMetadata.js';
+import { buildMediaMetadataPatch, getMetadataLookupKey, videoNeedsMetadataLookup, videoNeedsClassificationLookup, videoNeedsTitleLookup } from './mediaMetadata.js';
 import { formatAbsoluteTimestamp, formatRelativeTimestamp } from './timeUtils.js';
 
 
@@ -334,7 +335,11 @@ function isStaffRole(role) {
 // Production starts with an empty queue; no fabricated sample requests are inserted.
 const INITIAL_DEMO_VIDEOS = [];
 
+const resolveVideoCategory = getVideoCategory, resolveVideoMediaType = getVideoMediaType;
 function YediHubAppContent({ onDiagnosticAccess }) {
+  const [categoryCorrections, setCategoryCorrections] = useState([]);
+  const getVideoCategory = video => resolveVideoCategory(video, categoryCorrections);
+  const getVideoMediaType = video => resolveVideoMediaType(video, categoryCorrections);
   // ==========================================
   // FIREBASE CLOUD REAL-TIME INFRASTRUCTURE
   // ==========================================
@@ -1052,6 +1057,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
+        const corrections = Array.isArray(cloudConfig.categoryCorrections) ? cloudConfig.categoryCorrections : [];
+        setCategoryCorrections(previous => JSON.stringify(previous) === JSON.stringify(corrections) ? previous : corrections);
         latestChatCommandFeedRef.current = cloudConfig.chatCommandFeed || [];
         setChatReplyIssue(cloudConfig.chatReplyDiagnostic?.code && cloudConfig.chatReplyDiagnostic.code !== 'ok' ? cloudConfig.chatReplyDiagnostic.code : '');
         consumeChatCommandFeedRef.current?.(latestChatCommandFeedRef.current);
@@ -1301,7 +1308,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   // becoming permanently stuck; in-flight IDs are locked before state updates to prevent races.
   const durationScanKey = videos.map((video) =>
     String(video.id) + ':' + String(video.platform || '') + ':' + String(video.url || '') + ':' +
-    String(video.title || '') + ':' + getPlaybackGeneration(video) + ':' + String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '')
+    String(video.title || '') + ':' + getPlaybackGeneration(video) + ':' + String(video.durationSource || '') + ':' + String(video.durationSec || '') + ':' + String(video.duration || '') + ':' + String(video.classificationMetadata?.version || '')
   ).join('|');
   useEffect(() => {
     // Do not mark a cached row enriched before authentication and the first
@@ -1312,7 +1319,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     durationRefreshProcessedRef.current = durationRefreshCount;
     const candidates = videosRef.current.filter((video) => {
       const id = String(video?.id || '');
-      if (!id || durationEnrichmentInFlightRef.current.has(id) || !videoNeedsMetadataLookup(video)) return false;
+      if (!id || durationEnrichmentInFlightRef.current.has(id) || !(videoNeedsMetadataLookup(video) || videoNeedsClassificationLookup(video))) return false;
       return shouldRetryDurationLookup(durationLookupOutcomes[getMetadataLookupKey(video)], Date.now(), forceRetry);
     }).sort((a, b) => (['playing', 'queue'].indexOf(a.status) < 0 ? 2 : ['playing', 'queue'].indexOf(a.status)) - (['playing', 'queue'].indexOf(b.status) < 0 ? 2 : ['playing', 'queue'].indexOf(b.status)) || Number(a.queueOrder ?? a.timestamp ?? 0) - Number(b.queueOrder ?? b.timestamp ?? 0)).slice(0, 160);
     if (!candidates.length) return undefined;
@@ -1365,7 +1372,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
             if (Object.keys(patch).length) {
               if (patch.durationSec) cacheVideoDuration(current, patch.durationSec, 'metadata');
             }
-            const complete = !videoNeedsMetadataLookup({ ...current, ...patch });
+            const complete = !videoNeedsMetadataLookup({ ...current, ...patch }) && !videoNeedsClassificationLookup({ ...current, ...patch });
             setDurationLookupOutcomes((prev) => ({
               ...prev,
               [lookupKey]: createDurationLookupOutcome({
@@ -1410,7 +1417,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
   // Retry failed duration lookups even when the dashboard stays open. Persisted retry times
   // let a reload resume a bounded backoff schedule rather than leaving failed entries stuck.
   useEffect(() => {
-    const retryTimes = videos.filter((video) => videoNeedsMetadataLookup(video) &&
+    const retryTimes = videos.filter((video) => (videoNeedsMetadataLookup(video) || videoNeedsClassificationLookup(video)) &&
         !durationEnrichmentInFlightRef.current.has(String(video.id)))
       .map((video) => durationLookupOutcomes[getMetadataLookupKey(video)])
       .filter((outcome) => ['unavailable', 'error'].includes(outcome?.status))
@@ -2213,7 +2220,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     ...getQueueMediaCounts(videos, getVideoMediaType),
     watch_later: videos.filter((video) => video.status === 'watch_later').length,
     watched: videos.filter((video) => video.status === 'watched').length,
-  }), [videos]);
+  }), [videos, categoryCorrections]);
 
   const queueStats = useMemo(
     () => buildQueueStatistics(videos, statsNow),
@@ -2243,7 +2250,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
 
   const categoryCounts = useMemo(
     () => buildCategoryCounts(videos, activeTab, mediaTypeFilter, getVideoCategory, getVideoMediaType),
-    [videos, activeTab, mediaTypeFilter]
+    [videos, activeTab, mediaTypeFilter, categoryCorrections]
   );
   const syncIndicatorLabel = cloudSynced
     ? 'Cloud synced'
@@ -2273,7 +2280,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     () => filterVideosForView(videos, {
       activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy
     }, { getVideoCategory, getVideoMediaType, compareQueueOrder }),
-    [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy]
+    [videos, activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy, categoryCorrections]
   );
 
 
@@ -3343,7 +3350,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
             errorRetryTimers.push(window.setTimeout(() => { if (!cancelled && getPlaybackGeneration(currentVideoRef.current) === getPlaybackGeneration(video)) setPlayerReload(value => value + 1); }, 500));
             return;
           }
-          reportPlayerIssue({ generation: getPlaybackGeneration(video), message: playbackFailureMessage('youtube', payload.info) });
+          reportPlayerIssue({ generation: getPlaybackGeneration(video), message: playbackFailureMessage('youtube', payload.info), code: String(payload.info) });
         }
       }
     };
@@ -3553,7 +3560,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
         } else {
           if (['SERVER_ERROR', 'PLAYBACK_ERROR'].includes(String(errorType)) && recoverStartup()) return;
           setTikTokPlayerState({ requestId: video.id, status: 'error' });
-          reportPlayerIssue({ generation });
+          reportPlayerIssue({ generation, code: String(errorType) });
           addToast('TikTok could not play this post (' + errorType + '). Try a public full video URL.', 'warning');
         }
       }
@@ -3616,9 +3623,18 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     addToast(nextPinned ? 'Pinned priority to the top of the queue.' : 'Unpinned video and moved it to the end.', 'info');
   };
 
-  const handleCategoryChange = (videoId, newCategory) => {
-    syncUpdateVideo(videoId, { category: newCategory, categoryManuallySet: true, mediaType: newCategory === 'Music' ? 'Music' : 'Non-Music' });
-    addToast(`Category updated to "${newCategory}"`, 'success');
+  const handleCategoryChange = async (videoId, newCategory) => {
+    const video = videosRef.current.find(item => item.id === videoId);
+    if (!video || !db?.privateCloud) return;
+    try {
+      const response = await fetch('/api/twitch/session?action=store', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({operation:'learn-category',id:videoId,generation:getPlaybackGeneration(video),category:newCategory}),signal:AbortSignal.timeout(12000)});
+      const body = await response.json().catch(()=>({}));
+      if (!response.ok || !body.ok) throw Error('Category could not be saved. Refresh the queue and try again.');
+      setCategoryCorrections(body.categoryCorrections || []);
+      await getDocs(collection(db,'artifacts',appId,'public','data','queue_videos'));
+      addToast('Category saved and remembered for matching videos and numbered episodes.', 'success');
+    } catch(error) { addToast(error.message || 'Category could not be saved.', 'warning'); }
   };
 
   const handleUpvote = async (videoId, voterUsername = twitchAuth.username) => {
@@ -4282,6 +4298,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {isModerator && currentVideo && <PlaybackIssueReporter video={currentVideo} intent={getPlaybackIntentForVideo(currentVideo.id)} volume={localVolume} muted={localMuted} providerCode={playerIssue?.generation === currentPlaybackGeneration ? playerIssue.code : ''} />}
                 <button type="button" onClick={togglePlayerFullscreen} aria-label={playerFullscreen || fullscreenFallback ? 'Exit player fullscreen' : 'Enter player fullscreen'} aria-pressed={playerFullscreen || fullscreenFallback} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Fullscreen player (persists across tracks)">
                   {playerFullscreen || fullscreenFallback ? <Shrink className="inline w-3.5 h-3.5 mr-1" /> : <Expand className="inline w-3.5 h-3.5 mr-1" />}<span className="text-xs">{playerFullscreen || fullscreenFallback ? 'Exit fullscreen' : 'Fullscreen'}</span>
                 </button>
@@ -4545,6 +4562,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                   <QueueVideoCard
                     key={video.id}
                     video={video}
+                    categoryCorrections={categoryCorrections}
                     index={idx}
                     activeTab={activeTab}
                     currentVideo={currentVideo}

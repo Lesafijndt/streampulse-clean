@@ -10,7 +10,7 @@ const cleared=new URLSearchParams(location.search).get('cleared')==='1';
 const resetTest=new URLSearchParams(location.search).get('reset')==='1';
 const video=(id,status)=>({id,channelRoom:'2o3a',status,platform:id==='a'?provider:'youtube',videoId:id==='a'?(provider==='tiktok'?'1234567890123456789':'dQw4w9WgXcQ'):'abcdefghijk',
 url:id==='a'?(provider==='youtube'?'https://www.youtube.com/shorts/dQw4w9WgXcQ':'https://www.tiktok.com/@viewer/video/1234567890123456789'):'https://www.youtube.com/watch?v=abcdefghijk',title:id==='a'?'Playing video':'Waiting video',
-timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
+classificationMetadata:{version:1},timestamp:now,queueOrder:id==='a'?1:2,playedAt:id==='a'?now:0,requestedBy:'ordinary_viewer',category:'General',mediaType:'Non-Music',
 durationSec:3,duration:'0:03',durationSource:'player',voters:[],upvotes:0,thumbnail:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E'});
 localStorage.clear();sessionStorage.clear();
 localStorage.setItem(`${prefix}:active-room`,'2o3a');
