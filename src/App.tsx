@@ -3994,12 +3994,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                 <span className="yedi-hub-wordmark font-extrabold text-base tracking-tight bg-clip-text text-transparent">
                   WHALE CUM
                 </span>
-                <span className="gachi-mode-badge px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  ♂ GACHI MODE ♂
-                </span>
-                <span className="gachi-deadpan-badge px-2 py-0.5 rounded-md text-[9px] font-black tracking-wide">
-                  ♂ fitta javla fih
-                </span>
               </div>
 
               <div className="flex items-center gap-2 mt-0.5">
@@ -4232,9 +4226,9 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       {/* ==========================================
           MAIN WORKSPACE: PLAYER + QUEUE
           ========================================== */}
-      <section className="gachi-masthead gachi-supper-masthead relative w-full overflow-hidden" aria-label="WHALE CUM Gachi Arena">
+      <section className="gachi-masthead gachi-supper-masthead relative w-full overflow-hidden" aria-label="WHALE CUM - The Leather Club">
         <div className="gachi-supper-caption">
-          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-100">PRIVATE GACHI ARENA</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-100">THE LEATHER CLUB</p>
           <h1 className="gachi-masthead-title mt-2 text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-black uppercase">WHALE CUM <span>♂</span></h1>
         </div>
         <img src="/images/ranch-party-v2.jpg" width="2172" height="724" alt="Adult cowboys dancing and socializing at a sunset ranch party" decoding="async" fetchPriority="low" className="gachi-supper-panorama" />
@@ -4607,7 +4601,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Enter the Gachi Arena</h3>
+                  <h3 className="text-base font-bold text-white">Enter the Leather Club</h3>
                   <p className="text-xs text-slate-400">Broadcaster Room: {channelRoom ? `twitch.tv/${channelRoom}` : 'Enter your Twitch channel in the header first'}</p>
                 </div>
               </div>
