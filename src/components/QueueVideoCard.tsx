@@ -1,5 +1,4 @@
-import PromotionDetails from './PromotionDetails';
-import { promotionLabel } from '../promotion.js';
+import { promotionBadgeLabel } from '../promotion.js';
 import React from 'react';
 import { ArrowDown, ArrowUp, Bookmark, Pin, Play, RotateCcw, ThumbsUp, Trash2, GripVertical, SkipForward } from 'lucide-react';
 import { CATEGORY_META, getDisplayMediaNote, getVideoCategory, getVideoMediaType, isTwitchClipUrl } from '../mediaUtils.js';
@@ -9,7 +8,6 @@ import { formatAbsoluteTimestamp, formatRelativeTimestamp } from '../timeUtils.j
 export default function QueueVideoCard({
   video,
   categoryCorrections = [],
-  promotionQuote = null,
   index,
   activeTab,
   currentVideo,
@@ -183,7 +181,7 @@ export default function QueueVideoCard({
                               </>
                             )}
                           </div>
-                          {(promotionQuote || promotionLabel(video)) && <PromotionDetails video={video} quote={promotionQuote} staff={isStaff} />}
+                          {promotionBadgeLabel(video) && <p className="text-[10px] font-bold text-amber-200">{promotionBadgeLabel(video)}</p>}
                         </div>
                       </div>
 

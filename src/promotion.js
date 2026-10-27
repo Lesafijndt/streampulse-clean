@@ -1,5 +1,10 @@
 export function isActivePromotion(video) { return Number.isSafeInteger(video?.promotion?.points) && video.promotion.points>0 && video.promotion.state === 'active' && Number(video.promotion.requestTimestamp) === Number(video.timestamp || 0); }
 export const PROMOTION_RATE = 50;
+export function promotionBadgeLabel(video) {
+  const p=video?.promotion;
+  if(!p || p.state!=='active' || !Number.isSafeInteger(p.points) || p.points<=0 || video.status==='queue' && !isActivePromotion(video))return '';
+  return 'Promoted · '+p.points.toLocaleString('en-US')+' points';
+}
 export function promotionLabel(video) {
   const p = video?.promotion;
   if (p?.version === 2) {

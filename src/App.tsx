@@ -1,7 +1,5 @@
-import PromotionDetails from './components/PromotionDetails';
-import {promotionQuotes} from './promotionPriority.js';
 import PointsDiagnostics from './components/PointsDiagnostics';
-import { promotionLabel, isActivePromotion } from './promotion.js';
+import { promotionLabel, promotionBadgeLabel, isActivePromotion } from './promotion.js';
 import PlaybackIssueReporter from './components/PlaybackIssueReporter';
 import { playbackFailureMessage, prepareNextConnections, queueHealthWarnings } from './playbackReliability.js';
 import { consumeChatCommandFeed } from './chatCommandFeed.js';
@@ -343,7 +341,6 @@ const INITIAL_DEMO_VIDEOS = [];
 
 const resolveVideoCategory = getVideoCategory, resolveVideoMediaType = getVideoMediaType;
 function YediHubAppContent({ onDiagnosticAccess }) {
-  const [promotionPriority,setPromotionPriority]=useState({});
   const [categoryCorrections, setCategoryCorrections] = useState([]);
   const getVideoCategory = video => resolveVideoCategory(video, categoryCorrections);
   const getVideoMediaType = video => resolveVideoMediaType(video, categoryCorrections);
@@ -1064,8 +1061,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       if (!active) return;
       if (snapshot.exists()) {
         const cloudConfig = snapshot.data() || {};
-        const priority=cloudConfig.promotionPriority || {};
-        setPromotionPriority(previous=>JSON.stringify(previous)===JSON.stringify(priority)?previous:priority);
         const corrections = Array.isArray(cloudConfig.categoryCorrections) ? cloudConfig.categoryCorrections : [];
         setCategoryCorrections(previous => JSON.stringify(previous) === JSON.stringify(corrections) ? previous : corrections);
         latestChatCommandFeedRef.current = cloudConfig.chatCommandFeed || [];
@@ -2287,7 +2282,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
     return new Map(orderedQueue.map((video, index): [string, number] => [String(video.id), index + 1]));
   }, [videos]);
 
-  const promotionQuoteById=useMemo(()=>promotionQuotes(videos.filter(video=>video.status==='queue').sort(compareQueueOrder),promotionPriority),[videos,promotionPriority]);
   const filteredVideos = useMemo(
     () => filterVideosForView(videos, {
       activeTab, selectedCategory, mediaTypeFilter, searchQuery, sortBy
@@ -4463,7 +4457,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                       </h2>
                     </div>
 
-                    {promotionLabel(currentVideo) && <PromotionDetails video={currentVideo} staff={isStaff} />}
+                    {promotionBadgeLabel(currentVideo) && <p className="text-xs font-bold text-amber-200">{promotionBadgeLabel(currentVideo)}</p>}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
                       <span>
                         Requester: <strong className="text-purple-300 font-semibold">@{currentVideo.requestedBy}</strong>
@@ -4533,7 +4527,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
           <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
-            <p className="text-[11px] text-amber-100/80">!promote [queue position] [points] adds priority to any video: 50 points per position. Contributions combine. !unpromote [queue position] refunds your contributions before playback.</p>
             <QueueToolbar
               activeTab={activeTab}
               setActiveTab={setActiveTab}
@@ -4569,7 +4562,6 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                   <QueueVideoCard
                     key={video.id}
                     video={video}
-                    promotionQuote={promotionQuoteById.get(video.id)}
                     categoryCorrections={categoryCorrections}
                     index={idx}
                     activeTab={activeTab}

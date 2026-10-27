@@ -84,11 +84,12 @@ try{
  const forsenFilter=[...document.querySelectorAll('button')].find(button=>button.querySelector('span')?.textContent==='Forsen');assert(forsenFilter,'Forsen filter exists');forsenFilter.click();await sleep(30);
  assert(document.querySelectorAll('.gachi-queue-item').length===1&&document.querySelector('.gachi-queue-item').textContent.includes('Forsen reacts'),'Forsen filter shows related request only');
  [...document.querySelectorAll('button')].find(button=>button.querySelector('span')?.textContent==='All Categories').click();await sleep(30);
+ assert(!document.querySelector('.promotion-details')&&!document.body.textContent.includes('Estimated next up'),'Dashboard omits promotion details and estimates');
  const first=frame(),live=JSON.stringify(docs[base+'queue_videos/a']);
  const target=[...document.querySelectorAll('select[title="Click to fix or change category"]')].find(select=>select.value==='Forsen');target.value='IRL';target.dispatchEvent(new Event('change',{bubbles:true}));
  await wait(()=>learned===1&&[...document.querySelectorAll('select[title="Click to fix or change category"]')].some(select=>select.value==='IRL'));
  assert(docs[base+'queue_videos/c'].categoryManuallySet&&frame()===first,'Correction is saved without replacing playing frame');
- assert(document.body.textContent.includes('450 points spent'),'Player displays promotion spending');
+ assert(document.body.textContent.includes('Promoted \u00b7 450 points'),'Player displays compact promotion badge');
  if(login==='paim_beach_pete'){
   const pointsButton=[...document.querySelectorAll('button')].find(button=>button.textContent==='StreamElements points diagnostics');assert(pointsButton,'Moderator points diagnostics');pointsButton.click();await wait(()=>pointsReads===1);
   [...document.querySelectorAll('button')].find(button=>button.textContent==='Check connection (read-only)').click();await wait(()=>pointsReads===2&&document.body.textContent.includes('JWT verified for 2o3a'));
