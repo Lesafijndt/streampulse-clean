@@ -343,7 +343,6 @@ const INITIAL_DEMO_VIDEOS = [];
 
 const resolveVideoCategory = getVideoCategory, resolveVideoMediaType = getVideoMediaType;
 function YediHubAppContent({ onDiagnosticAccess }) {
-  const [showRecoveryHistory,setShowRecoveryHistory]=useState(false);
   const [promotionPriority,setPromotionPriority]=useState({});
   const [categoryCorrections, setCategoryCorrections] = useState([]);
   const getVideoCategory = video => resolveVideoCategory(video, categoryCorrections);
@@ -2440,7 +2439,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           handleVoteCommandRef.current?.(voterLogin || usernameKey, lowerText);
         } else if (lowerText === '!help') {
           sendTwitchChatReply('!assr <URL/title> request · !remove remove your latest waiting request · !when your spot/ETA · !queue queue status.');
-          sendTwitchChatReply('!qpromote [#] [points] (50 points per position of priority; anyone can contribute). !qunpromote [#] refunds your contributions before playback. !bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
+          sendTwitchChatReply('!promote [#] [points] (50 points per position of priority; anyone can contribute). !unpromote [#] refunds your contributions before playback. !bigcock [#] upvote (not your own; one vote/video). !skip your own playing request. Mods: !skip any video, !volume up/down/0-100, !mute, !unmute.');
         } else if (['!position', '!when', '!myqueue', '!queueposition'].includes(lowerText)) {
           handleQueuePositionRef.current?.(voterLogin || usernameKey);
         } else if (lowerText === '!skip' && maySkipCurrentRequest(incoming, currentVideoRef.current)) {
@@ -4068,10 +4067,10 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                     <span className="shrink-0 rounded-md border border-purple-400/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-black uppercase text-purple-200">{twitchAuth.role}{twitchAuth.authenticated ? ' · verified' : ''}</span>
                   </div>
                 </div>
-                {isModerator && (
+                {isStaff && (
                   <button type="button" onClick={() => { setTopMenuOpen(false); setShowSettingsModal(true); }} className="mt-2 flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-xs font-bold text-slate-100 transition hover:border-purple-500/20 hover:bg-purple-500/10">
                     <Settings className="h-4 w-4 text-cyan-300" />
-                    <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">Queue access and playback preferences</span></span>
+                    <span className="flex-1">Settings <span className="mt-0.5 block text-[10px] font-medium text-slate-500">{isModerator ? 'Queue access and playback preferences' : 'Queue recovery and undo'}</span></span>
                   </button>
                 )}
                 {isStaff && db?.privateCloud && <div className="my-2 border-y border-rose-500/20 p-2">
@@ -4534,12 +4533,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               QUEUE MANAGEMENT: TABS, FILTERS & CARDS
               ========================================== */}
           <section className="gachi-panel gachi-queue-panel bg-[#10141f] border border-slate-800/90 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xl">
-            <p className="text-[11px] text-amber-100/80">!qpromote [queue position] [points] adds priority to any video: 50 points per position. Contributions combine. !qunpromote [queue position] refunds your contributions before playback.</p>
-            {showRecoveryHistory && isStaff && <RecoveryHistory label="Queue recovery history" onRestored={()=>getDocs(collection(db,'artifacts',appId,'public','data','queue_videos'))} />}
+            <p className="text-[11px] text-amber-100/80">!promote [queue position] [points] adds priority to any video: 50 points per position. Contributions combine. !unpromote [queue position] refunds your contributions before playback.</p>
             <QueueToolbar
-              canRecover={isStaff && Boolean(db?.privateCloud)}
-              recoveryOpen={showRecoveryHistory}
-              onRecovery={()=>setShowRecoveryHistory(value=>!value)}
               activeTab={activeTab}
               setActiveTab={setActiveTab}
               counts={counts}
@@ -4788,13 +4783,13 @@ function YediHubAppContent({ onDiagnosticAccess }) {
           <div className="flex justify-end gap-3"><button autoFocus disabled={resetBusy} onClick={() => setResetScope('')} className="rounded-lg bg-slate-800 px-4 py-2 text-white">Cancel</button><button disabled={resetBusy} onClick={handleReset} className="rounded-lg bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-50">{resetBusy ? 'Resetting…' : 'Confirm reset'}</button></div>
         </div>
       </div>}
-      {isModerator && showSettingsModal && (
+      {isStaff && showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto p-3 sm:p-4">
           <div className="bg-[#121622] border border-slate-800 rounded-2xl max-h-[92vh] overflow-y-auto max-w-2xl w-full p-5 sm:p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Streamer Safety & Queue Rules</h3>
+                <h3 className="text-base font-bold text-white">{isModerator ? 'Streamer Safety & Queue Rules' : 'Queue recovery'}</h3>
               </div>
               <button
                 onClick={() => setShowSettingsModal(false)}
@@ -4804,8 +4799,8 @@ function YediHubAppContent({ onDiagnosticAccess }) {
               </button>
             </div>
 
-            <RecoveryHistory onRestored={() => getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'))} />
-            <div className="space-y-3.5 text-xs">
+            <RecoveryHistory label={isModerator ? "Moderator recovery history" : "Queue recovery history"} onRestored={() => getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'queue_videos'))} />
+            {isModerator && <div className="space-y-3.5 text-xs">
               <div className="p-3 rounded-xl bg-[#0d1017] border border-emerald-500/20 space-y-1">
                 <div className="font-bold text-amber-300">Unfiltered media requests</div>
                 <p className="text-[11px] text-slate-400">All platforms and categories are accepted while the queue is open. Categories are labels only; subscriber-only, platform, and stream-mode filters are disabled.</p>
@@ -4875,7 +4870,7 @@ function YediHubAppContent({ onDiagnosticAccess }) {
                 {backupBusy && <p className="text-[11px] text-amber-200" role="status">Restoring backup…</p>}
                 {backupMessage && <p className="text-[11px] leading-5 text-slate-200 break-words" role="status">{backupMessage}</p>}
               </section>
-            </div>
+            </div>}
 
             <div className="flex justify-end">
               <button

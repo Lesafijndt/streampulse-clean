@@ -69,6 +69,6 @@ export function promotionQuotes(queue, saved = {}) {
     const places=Math.max(1,Math.ceil(score-other.score)+(tiedPaid && Number.isInteger(score-other.score) ? 1 : 0));
     const points=places*PROMOTION_RATE;
     if(!Number.isSafeInteger(points) || points+units(row)*PROMOTION_RATE>2147483647){quotes.set(row.id,null);return;}
-    quotes.set(row.id,{points,position:index+1,command:'!qpromote '+(index+1)+' '+points});
+    quotes.set(row.id,{points,position:index+1,command:'!promote '+(index+1)+' '+points});
   });return quotes;
 }

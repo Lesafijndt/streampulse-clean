@@ -13,7 +13,7 @@ test('stats board removes platform/category rankings and shows 10 requesters', a
 test('moderator-only technical interface is not rendered for streamer', async () => {
   const s = await read('src/App.tsx');
   assert.match(s, /\{isModerator && connectionDetailsExpanded && \(/);
-  assert.match(s, /\{isModerator && showSettingsModal && \(/);
+  assert.match(s, /\{isStaff && showSettingsModal && \(/);
   assert.match(s, /\{statisticsAccess && <WorkspacePanel id="stats"/);
   assert.match(s, /\{isModerator && <div className="rounded-xl px-3 py-2">/);
   assert.match(s, /\{isModerator && <div className="mt-1 rounded-xl px-3 py-2">/);

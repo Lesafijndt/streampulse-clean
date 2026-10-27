@@ -55,7 +55,7 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
     const queue=rows.filter(row=>row.status==='queue').sort(order);
     const pending=purchases.docs.map(row=>({...row.data(),id:row.id})).find(row=>row.login===command.login && unfinished.has(row.state));
     if (pending) return reject('Your previous points transaction is still pending. Please wait; do not repeat it.');
-    if (!Number.isInteger(command.position) || command.position<1 || (command.type==='promote' && (!Number.isSafeInteger(command.points) || command.points<50 || command.points>2147483647 || command.points%PROMOTION_RATE!==0))) return reject('Use !qpromote <queue position> <points>, in multiples of 50. Cancel your contribution with !qunpromote <queue position>.');
+    if (!Number.isInteger(command.position) || command.position<1 || (command.type==='promote' && (!Number.isSafeInteger(command.points) || command.points<50 || command.points>2147483647 || command.points%PROMOTION_RATE!==0))) return reject('Use !promote <queue position> <points>, in multiples of 50. Cancel your contribution with !unpromote <queue position>.');
     const target=queue[command.position-1];
     if (!target) return reject('There is no waiting video at that position.');
     const funding=await contributions(tx,target);
@@ -167,7 +167,7 @@ export async function processPromotion(db, prefix, command, id, expiresAt, depen
   }
   if (purchase.state==='fulfilled') {
     const final=(await purchaseRef.get()).data();
-    return finish('Promoted '+purchase.title+' for '+purchase.points+' points. New position: #'+final.position+'. Cancel before playback: !qunpromote '+final.position+'.');
+    return finish('Promoted '+purchase.title+' for '+purchase.points+' points. New position: #'+final.position+'. Cancel before playback: !unpromote '+final.position+'.');
   }
   if (purchase.state==='refunded') return finish('Promotion cancelled; '+purchase.points+' points refunded.');
   if (['charge_unknown','refund_unknown'].includes(purchase.state)) return finish('Your points transaction needs review. Please do not repeat it.');

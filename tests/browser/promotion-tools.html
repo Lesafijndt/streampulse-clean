@@ -14,9 +14,9 @@ const wait=async condition=>{for(let i=0;i<200;i++){if(condition())return;await 
 const assert=(value,message)=>{if(!value)throw Error(message)};
 try{
  const root=createRoot(document.querySelector('#root'));
- root.render(React.createElement('main',null,React.createElement(PromotionDetails,{video:{id:'video',title:'Promoted video',timestamp:123,promotion:{version:2,state:'active',points:750,contributorCount:2,requestTimestamp:123}},quote:{points:150,position:4,command:'!qpromote 4 150'}}),React.createElement(PaymentRecoveryForm,{purchase:{id:'payment',state:'charge_unknown',at:100,login:'alice',points:150},onResolved:async()=>{resolved++}})));
+ root.render(React.createElement('main',null,React.createElement(PromotionDetails,{video:{id:'video',title:'Promoted video',timestamp:123,promotion:{version:2,state:'active',points:750,contributorCount:2,requestTimestamp:123}},quote:{points:150,position:4,command:'!promote 4 150'}}),React.createElement(PaymentRecoveryForm,{purchase:{id:'payment',state:'charge_unknown',at:100,login:'alice',points:150},onResolved:async()=>{resolved++}})));
  await wait(()=>document.querySelector('summary'));assert(calls.length===0,'Contributor requests must be on demand');
- document.querySelector('[aria-label="Copy promotion command for Promoted video"]').click();await wait(()=>copied==='!qpromote 4 150');
+ document.querySelector('[aria-label="Copy promotion command for Promoted video"]').click();await wait(()=>copied==='!promote 4 150');
  document.querySelector('.promotion-details details').open=true;await wait(()=>document.body.textContent.includes('@alice: 450 active points'));
  assert(document.body.textContent.includes('150 refunded')&&document.body.textContent.includes('50 refund pending'),'Per-payer refund details missing');
  assert(calls[0].url.searchParams.get('action')==='queue-view'&&calls[0].url.searchParams.get('timestamp')==='123','Public details must use the public scoped endpoint');

@@ -34,7 +34,7 @@ export default function PromotionDetails({video,quote,staff=false}:{video:Promot
         {quote?.points>0 && <p>Estimate for the current queue. Positions and the cost to reach next up can change before your command arrives.</p>}
         {loading && <p>Loading contributions…</p>}
         {data && <><p>{data.totalContributors} contributor{data.totalContributors===1?'':'s'}</p><ul className="space-y-1">{data.contributors.map(payer=><li className="break-words" key={payer.login}>@{payer.login}: {payer.activePoints.toLocaleString('en-US')} active points{payer.refundedPoints>0?' · '+payer.refundedPoints.toLocaleString('en-US')+' refunded':''}{payer.pendingRefundPoints>0?' · '+payer.pendingRefundPoints.toLocaleString('en-US')+' refund pending':''}</li>)}</ul>{data.nextOffset!==null && <button type="button" disabled={loading} onClick={()=>setOffset(data.nextOffset ?? 0)} className="rounded border border-amber-300/30 px-2 py-1">More contributors</button>}</>}
-        <p>Promoted positions are protected from shuffles. Only a payer can withdraw their contributions before playback: <code>!qunpromote [current queue position]</code>.</p>
+        <p>Promoted positions are protected from shuffles. Only a payer can withdraw their contributions before playback: <code>!unpromote [current queue position]</code>.</p>
       </div>
     </details>
     <p aria-live="polite">{message}</p>

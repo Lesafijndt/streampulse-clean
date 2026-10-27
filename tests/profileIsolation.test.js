@@ -15,6 +15,6 @@ test('shared room storage only contains shared queue availability, not personal 
   const s = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(s, /streamSettings: \{ queueOpen: streamSettings\.queueOpen \}/);
   assert.doesNotMatch(s, /writeStoredValue\(roomStorageKey\(channelRoom, 'settings'\), streamSettings\)/);
-  assert.match(s, /isModerator && showSettingsModal/);
+  assert.match(s, /isStaff && showSettingsModal/);
   assert.match(s, /if \(prefs\.streamSettings\)/);
 });
