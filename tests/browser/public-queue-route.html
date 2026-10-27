@@ -1,5 +1,6 @@
 <!doctype html><html><body><div id="root"></div><pre id="result">Running</pre><script type="module">
 import React from 'react';import {createRoot} from 'react-dom/client';import '../../src/index.css';
+const keepVisual=new URLSearchParams(location.search).has('visual');
 history.replaceState(null,'','/queue');
 const nativeFetch=fetch.bind(window);const calls=[];
 window.fetch=(input,opts={})=>{
@@ -19,6 +20,6 @@ try{
  const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'@REQUESTER');input.dispatchEvent(new Event('input',{bubbles:true}));
  await new Promise(r=>setTimeout(r,50));
  if(document.querySelector('ol').textContent.includes('Current public video')||!document.querySelector('ol').textContent.includes('Next public video')||!document.body.textContent.includes('1 matching waiting request'))throw Error('Requester search lost global position or matching request');
- root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual /queue App route is read-only and makes no staff OAuth, private store, or preferences request';
+ if(!keepVisual)root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS: actual /queue App route is read-only and makes no staff OAuth, private store, or preferences request';
 }catch(error){document.body.dataset.testStatus='fail';document.querySelector('#result').textContent=error.stack;}
 </script></body></html>
