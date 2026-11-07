@@ -72,7 +72,7 @@ try{
  window.dispatchEvent(new MessageEvent('message',{source:first.contentWindow,origin:'https://evil.example',data:{event:'onStateChange',info:0,type:'onStateChange',value:0,'x-tiktok-player':true}}));
  window.dispatchEvent(new MessageEvent('message',{source:window,origin:'https://www.youtube.com',data:{event:'onStateChange',info:0}}));
  assert(transitionWrites===0,'Untrusted messages must not transition');
- emit(first,'onStateChange',1);if(scenario!=='partial')time(1);await sleep(20);
+ emit(first,'onStateChange',1);if(scenario!=='partial'&&!scenario.startsWith('late-duration'))time(1);await sleep(20);
  if(scenario==='stopped'){
    const before=calls(first,provider==='tiktok'?'play':'playVideo').length;
    emit(first,'onStateChange',0);
@@ -82,7 +82,13 @@ try{
    assert(calls(first,provider==='tiktok'?'play':'playVideo').length===before,'Startup retries and late Ready must not replay a completed clip');
    root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS '+provider+': completed clip is not replayed by startup retries';
  }else{
- if(scenario==='partial'){
+ if(scenario.startsWith('late-duration')){
+   emit(first,'infoDelivery',{currentTime:2.75,playerState:1});
+   emit(first,'infoDelivery',{currentTime:3,playerState:1});
+   emit(first,'infoDelivery',{currentTime:3});await sleep(50);
+   assert(transitionWrites===0,'Metadata estimates alone must not complete a Short');
+   emit(first,'initialDelivery',scenario==='late-duration-repeat'?{duration:3,currentTime:3}:{duration:3});
+ }else if(scenario==='partial'){
    emit(first,'initialDelivery',{duration:3,playerState:1,currentTime:1});await sleep(50);
    const beforeRender=renderCommits,beforeWrites=playbackWrites;
    for(let group=0;group<10;group++){

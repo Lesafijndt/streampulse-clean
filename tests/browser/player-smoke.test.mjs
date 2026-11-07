@@ -71,7 +71,7 @@ for (const provider of ['tiktok', 'youtube']) test(provider + ' actual dashboard
   assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));
 });
 
-for (const provider of ['tiktok', 'youtube']) for (const scenario of ['ended', 'boundary', 'paused', 'stopped']) {
+for (const provider of ['tiktok', 'youtube']) for (const scenario of ['ended', 'boundary', 'paused', 'stopped', ...(provider==='youtube'?['late-duration','late-duration-repeat']:[])]) {
   test(provider + ' dashboard completion ' + scenario + ' persists one transition and autoplays next', () => {
     const html = renderInChrome(baseUrl + '/tests/browser/completion-dashboard.html?provider=' + provider + '&scenario=' + scenario);
     assert.ok(/data-test-status="pass"/.test(html), html.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1] || html.slice(-3500));

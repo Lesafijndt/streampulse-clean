@@ -172,3 +172,40 @@ test('completion retains provider duration across partial time reports and never
  assert.equal(paused.observe({state:2,currentTime:3,paused:true}),false);
  assert.equal(createPlaybackCompletionTracker().observe({state:1,currentTime:300}),false);
 });
+
+test('completion joins final advancing time with a later provider duration', () => {
+  for (const finalUpdate of [{ duration: 3 }, { duration: 3, currentTime: 3 }]) {
+    const tracker = createPlaybackCompletionTracker();
+    assert.equal(tracker.observe({ state: 1, currentTime: 2.75 }), false);
+    assert.equal(tracker.observe({ currentTime: 3 }), false);
+    assert.equal(tracker.observe({ currentTime: 3 }), false, 'repeated final sample retains progress evidence');
+    assert.equal(tracker.observe(finalUpdate), true, 'late duration must recheck the actual final position');
+    assert.equal(tracker.observe({ state: 0 }), false, 'later ENDED must not complete twice');
+  }
+});
+
+test('late duration cannot complete a single sample, paused seek, buffering seek, or rewind', () => {
+  const sequences = [
+    [{ state: 1, currentTime: 3 }],
+    [{ state: 1, currentTime: 2 }, { currentTime: 3 }, { state: 2 }, { state: 1, currentTime: 3 }],
+    [{ state: 1, currentTime: 2 }, { state: 2, currentTime: 2 }, { currentTime: 3 }, { state: 1, currentTime: 3 }],
+    [{ state: 1, currentTime: 2 }, { state: 3 }, { currentTime: 3 }, { state: 1, currentTime: 3 }],
+    [{ state: 1, currentTime: 2 }, { currentTime: 3 }, { paused: true }, { state: 1, currentTime: 3 }],
+    [{ state: 1, currentTime: 2 }, { currentTime: 3 }, { currentTime: 0 }],
+    [{ state: 1, currentTime: 2 }, { currentTime: 3 }, { currentTime: 2.99 }],
+  ];
+  for (const sequence of sequences) {
+    const tracker = createPlaybackCompletionTracker();
+    for (const observation of sequence) assert.equal(tracker.observe(observation), false);
+    assert.equal(tracker.observe({ duration: 3 }), false, JSON.stringify(sequence));
+    assert.equal(tracker.observe({ currentTime: 3 }), false, 'stationary end or first sample after rewind is not completion');
+  }
+});
+
+test('missing or malformed times never create forward playback evidence', () => {
+  for (const currentTime of [null, '', ' ', false, true, [], {}, NaN, Infinity, -1]) {
+    const tracker = createPlaybackCompletionTracker();
+    assert.equal(tracker.observe({ state: 1, currentTime, duration: 3 }), false);
+    assert.equal(tracker.observe({ currentTime: 3 }), false, String(currentTime));
+  }
+});

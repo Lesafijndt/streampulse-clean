@@ -98,6 +98,8 @@ export function createPlaybackCompletionTracker() {
   let completed = false;
   let playing = false;
   let previousTime = null;
+  let latestTime = null;
+  let advanced = false;
   let providerDuration = null;
   return {
     get completed() { return completed; },
@@ -107,16 +109,32 @@ export function createPlaybackCompletionTracker() {
       // listener attached too late to see PLAYING. A saved pause must not mask it.
       if (state === 0) { completed = true; return true; }
       if (Number.isFinite(state)) playing = state === 1;
-      const time = Number(currentTime);
-      const reportedLength = Number(duration);
+      const time = typeof currentTime === 'number' ? currentTime : NaN;
+      const reportedLength = typeof duration === 'number' ? duration : NaN;
       if (Number.isFinite(reportedLength) && reportedLength > 0) providerDuration = reportedLength;
       const length = providerDuration;
+      // Player messages are partial: final time may arrive before duration.
+      // Retain forward progress across stationary or duration-only updates, but
+      // discard it on pause, buffering, or rewind so a seek cannot finish a clip.
+      if (!playing || paused) {
+        previousTime = null;
+        latestTime = null;
+        advanced = false;
+      } else if (Number.isFinite(time) && time >= 0) {
+        latestTime = time;
+        if (previousTime !== null && time < previousTime) {
+          previousTime = null;
+          advanced = false;
+        } else {
+          if (previousTime !== null && time > previousTime) advanced = true;
+          previousTime = time;
+        }
+      }
       // Some embeds report the final media time without an ended notification.
       // Require actual forward progress at the boundary; never use elapsed wall
       // time, metadata duration, a paused seek, or a near-end rewind as completion.
-      const atEnd = playing && !paused && Number.isFinite(time) && Number.isFinite(length) &&
-        length > 0 && previousTime !== null && time > previousTime && time >= length;
-      if (Number.isFinite(time) && time >= 0) previousTime = time;
+      const atEnd = playing && !paused && advanced && latestTime !== null && Number.isFinite(length) &&
+        length > 0 && latestTime >= length;
       if (atEnd) completed = true;
       return atEnd;
     },
