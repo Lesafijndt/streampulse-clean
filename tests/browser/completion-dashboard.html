@@ -83,11 +83,27 @@ try{
    root.unmount();document.body.dataset.testStatus='pass';document.querySelector('#result').textContent='PASS '+provider+': completed clip is not replayed by startup retries';
  }else{
  if(scenario.startsWith('late-duration')){
-   emit(first,'infoDelivery',{currentTime:2.75,playerState:1});
-   emit(first,'infoDelivery',{currentTime:3,playerState:1});
-   emit(first,'infoDelivery',{currentTime:3});await sleep(50);
+   const timingEvent=provider==='tiktok'?'onCurrentTime':'infoDelivery';
+   emit(first,timingEvent,{currentTime:2.75,playerState:1});
+   emit(first,timingEvent,{currentTime:3,playerState:1});
+   emit(first,timingEvent,{currentTime:3});await sleep(50);
    assert(transitionWrites===0,'Metadata estimates alone must not complete a Short');
-   emit(first,'initialDelivery',scenario==='late-duration-repeat'?{duration:3,currentTime:3}:{duration:3});
+   emit(first,provider==='tiktok'?'onCurrentTime':'initialDelivery',scenario==='late-duration-repeat'?{duration:3,currentTime:3}:{duration:3});
+ }else if(scenario==='partial-position'){
+   time(2);first.focus();emit(first,'onStateChange',2);
+   for(const value of [{duration:3},{duration:3,currentTime:null},{duration:3,currentTime:''},{duration:3,currentTime:false},{duration:3,currentTime:-1},{duration:3,currentTime:Infinity}])emit(first,'onCurrentTime',value);
+   window.dispatchEvent(new PageTransitionEvent('pagehide'));await sleep(50);
+   assert(Object.values(sessionStorage).some(value=>{try{return JSON.parse(value).seconds===2}catch{return false}}),'Partial or invalid timing must preserve the saved position at 2 seconds');
+   assert(transitionWrites===0,'Partial timing must respect native pause');
+   emit(first,'onStateChange',1);time(2);emit(first,'onCurrentTime',{currentTime:3});
+ }else if(scenario==='invalid-state'){
+   for(const value of [null,undefined,'',false,true,[],{},'0',4,Infinity])emit(first,'onStateChange',value);
+   await sleep(50);assert(transitionWrites===0,'Only a valid numeric ENDED state may complete playback');
+   time(2);time(3);
+ }else if(scenario==='buffering'){
+   emit(first,'onStateChange',3);time(3);emit(first,'onCurrentTime',{duration:3});await sleep(50);
+   assert(transitionWrites===0,'Buffering at the boundary must not complete playback');
+   emit(first,'onStateChange',1);time(2);time(3);
  }else if(scenario==='partial'){
    emit(first,'initialDelivery',{duration:3,playerState:1,currentTime:1});await sleep(50);
    const beforeRender=renderCommits,beforeWrites=playbackWrites;

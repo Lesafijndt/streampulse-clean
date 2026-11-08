@@ -3515,21 +3515,29 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       } else if (data.type === 'onVolumeChange' && playbackConfirmed && Number.isFinite(Number(data.value))) {
         setLocalVolume(Math.max(0, Math.min(100, Number(data.value))));
       } else if (data.type === 'onCurrentTime' && data.value) {
-        const duration = Number(data.value.duration) || 0;
-        const currentTime = Number(data.value.currentTime) || 0;
-        if (currentVideoRef.current?.id === video.id) recordPlaybackPosition(video.id, currentTime);
-        if (duration > 0) {
+        // Preserve each provider field independently. Missing/invalid time is not
+        // a rewind to zero: it must not erase position or final progress evidence.
+        const duration = Number.isFinite(data.value.duration) && data.value.duration > 0 ? data.value.duration : undefined;
+        const currentTime = Number.isFinite(data.value.currentTime) && data.value.currentTime >= 0 ? data.value.currentTime : undefined;
+        if (currentTime !== undefined && currentVideoRef.current?.id === video.id) recordPlaybackPosition(video.id, currentTime);
+        if (duration !== undefined) {
           if (currentVideoRef.current?.id === video.id) {
             playbackDurationRef.current = { videoId: String(video.id), seconds: duration };
             reportPlayerDuration(video.id, duration);
           }
-          updatePlaybackProgress(Math.min(100, Math.max(0, (currentTime / duration) * 100)));
+        }
+        const knownTime = playbackPositionRef.current.videoId === String(video.id) ? playbackPositionRef.current.seconds : undefined;
+        const knownDuration = playbackDurationRef.current.videoId === String(video.id) ? playbackDurationRef.current.seconds : undefined;
+        if (knownTime !== undefined && knownDuration > 0) {
+          updatePlaybackProgress(Math.min(100, Math.max(0, (knownTime / knownDuration) * 100)));
         }
         if (completion.observe({ currentTime, duration, paused: getPlaybackIntentForVideo(video.id, 'tiktok').paused })) {
           handleMediaEndedRef.current?.(video.id);
         }
       } else if (data.type === 'onStateChange') {
-        const state = Number(data.value);
+        // TikTok states are numbers; null/false/empty strings are not ENDED (0).
+        const state = data.value;
+        if (!Number.isInteger(state) || state < -1 || state > 3) return;
         const videoId = String(video.id);
         const intent = getPlaybackIntentForVideo(videoId, 'tiktok');
         const restoreGuard = playbackRestoreGuardRef.current;
