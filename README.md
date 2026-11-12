@@ -1,6 +1,6 @@
-# WHALE CUM — Private Twitch Request Deck
+# StreamPulse — Private Twitch Request Deck
 
-WHALE CUM is a private Vite + React dashboard for running a community media queue on Twitch channel `2o3a`. It combines a live player, a shared queue, Twitch chat requests and voting, activity analytics, local recovery snapshots, and optional Firebase cloud synchronization. The UI uses a dark crimson, wine, and purple gachi-wrestling theme.
+StreamPulse is a private Vite + React dashboard for running a community media queue on Twitch channel `2o3a`. It combines a live player, a shared queue, Twitch chat requests and voting, activity analytics, local recovery snapshots, and optional Firebase cloud synchronization. The UI uses a dark crimson, wine, and purple gachi-wrestling theme.
 
 ## What it does
 
