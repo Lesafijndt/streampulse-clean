@@ -48,8 +48,10 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
   const replayRef = useRef<(() => void) | null>(null);
   const persist = () => { try { sessionStorage.setItem(key, JSON.stringify(intent.current)); } catch { /* Storage disabled. */ } };
   const choosePaused = (value: boolean) => { intent.current.paused = value; setPaused(value); persist(); };
-  const finish = () => {
-    if (completed.current || intent.current.paused || !started.current) return;
+  const finish = (providerEnded = false) => {
+    // A provider ENDED event is authoritative even if its final PAUSE arrived
+    // first. Position polling still respects explicit pause; both require start.
+    if (completed.current || !started.current || (!providerEnded && intent.current.paused)) return;
     completed.current = true;
     setSegmentCompleted(true);
     callbacks.current.onEnded(video.id);
@@ -130,7 +132,7 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
             intent.current.seconds = Math.max(0, player.getCurrentTime() - start);choosePaused(true);
           }
         });
-        player.addEventListener(Twitch.Player.ENDED, () => { if (!disposed && ready && hasTwitchClipEnded(player.getCurrentTime(), start, duration)) finish(); });
+        player.addEventListener(Twitch.Player.ENDED, () => { if (!disposed && ready && hasTwitchClipEnded(player.getCurrentTime(), start, duration)) finish(true); });
         timer = window.setInterval(() => {
           if (disposed || !ready || completed.current) return;
           const time = player.getCurrentTime();
@@ -178,7 +180,7 @@ export default function TwitchClipPlayer({ video, storageKey, volume, muted, onA
       onPause={() => { if (started.current && !completed.current && !native.current?.ended && !native.current?.error && document.visibilityState !== 'hidden') choosePaused(true); }}
       onTimeUpdate={() => { if (native.current && started.current) { intent.current.seconds = native.current.currentTime;persist(); } }}
       onVolumeChange={() => { if (native.current && started.current) callbacks.current.onAudioChange(Math.round(native.current.volume * 100), native.current.muted); }}
-      onEnded={finish}
+      onEnded={() => finish()}
       onError={() => { if (!attempt) setAttempt(1);else { setMode('error'); callbacks.current.onFailure?.(); } }} />}
     {mode === 'error' && <p className="m-auto p-4 text-sm text-slate-300">This clip could not start. <button type="button" onClick={() => setAttempt(value => value + 1)} className="ml-2 underline">Retry clip</button></p>}
     <div className="relative flex shrink-0 flex-wrap items-center gap-3 bg-slate-950 p-2 text-xs text-slate-200">

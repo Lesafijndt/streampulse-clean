@@ -29,13 +29,15 @@ try {
  flushSync(()=>root.render(React.createElement(Harness,{id:'first'})));await sleep(100);
  const first=instances[0];assert(first?.playCalls===1&&first.time===100,'READY must seek and autoplay source segment');
  first.pause();await sleep(1600);assert(ended===0,'Paused segment must not advance after duration wall time');
+ first.time=101;await sleep(300);assert(ended===0,'Paused seek to the segment boundary must not advance');first.seek(100);
  first.play();await sleep(50);assert(!first.paused,'Twitch player controls must resume after a deliberate pause');first.pause();
  first.volume=.27;first.muted=true;await sleep(300);assert(audio.volume===27&&audio.muted,'Player audio changes must update saved preferences');
  flushSync(()=>root.render(React.createElement(Harness,{id:'second'})));await sleep(100);
  const second=instances[1];assert(second.volume===.27&&second.muted,'Next clip must retain volume and mute preferences');
  first.time=101;first.emit(Player.ENDED);await sleep(300);assert(ended===0,'Old player callbacks must not advance new clip');
  second.emit(Player.PLAYBACK_BLOCKED);await sleep(20);const play=[...document.querySelectorAll('button')].find(b=>b.textContent==='Play clip');assert(play,'Blocked autoplay must offer Play clip');play.click();await sleep(20);assert(second.playCalls===2,'Play clip must resume through official SDK');
- second.time=101;await sleep(300);second.emit(Player.ENDED);await sleep(300);assert(ended===1,'Actual segment boundary must advance exactly once');
+ second.time=100.999;second.pause();second.emit(Player.ENDED);await sleep(300);assert(ended===0,'VOD ended before the requested segment boundary must not advance');
+ second.time=101;second.emit(Player.ENDED);await sleep(300);assert(ended===1,'Authoritative ENDED at the segment boundary must override its preceding PAUSE exactly once');
  const replay=[...document.querySelectorAll('button')].find(b=>b.textContent==='Replay clip');assert(replay,'Completed clip must expose Replay');replay.click();await sleep(20);assert(second.time===100&&!second.paused,'Replay must seek to clip start before playing');await sleep(300);assert(ended===1,'Replay start must not complete immediately');second.time=101;await sleep(300);assert(ended===2,'Replayed segment can complete once');
  flushSync(()=>root.unmount());second.emit(Player.ENDED);await sleep(300);assert(ended===2,'Unmounted player cannot advance');
  fallback=true;let failures=0;const fallbackRoot=createRoot(document.getElementById('root'));const props={video:{id:'fallback',videoId:'missing',title:'Unavailable source'},volume:65,muted:false,onAudioChange:()=>{},onEnded:()=>ended++,onFailure:()=>failures++};flushSync(()=>fallbackRoot.render(React.createElement(TwitchClipPlayer,props)));await sleep(100);assert(failures===1,'Unavailable playback reports failure without advancing');assert(!document.querySelector('iframe'),'Unavailable clip must not autoplay an uncontrolled fallback');assert(document.body.textContent.includes('Retry clip'),'Unavailable playback retains a retry action');assert(ended===2,'Unavailable playback must not skip itself');flushSync(()=>fallbackRoot.unmount());

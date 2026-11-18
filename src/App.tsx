@@ -3290,13 +3290,18 @@ function YediHubAppContent({ onDiagnosticAccess }) {
       const info = ['infoDelivery', 'initialDelivery'].includes(payload.event) && payload.info && typeof payload.info === 'object'
         ? payload.info
         : null;
-      const stateFromEvent = payload.event === 'onStateChange' ? Number(payload.info) : Number(info?.playerState);
+      // Provider states are integers, not coercible values. null/false/'' must
+      // not become ENDED, and unknown states must not erase forward progress.
+      const reportedState = payload.event === 'onStateChange' ? payload.info : info?.playerState;
+      const stateFromEvent = Number.isInteger(reportedState) && [-1, 0, 1, 2, 3, 5].includes(reportedState)
+        ? reportedState : undefined;
       if (payload.event === 'onReady' || info && Number(info.duration) > 0) apiReady = true;
       if (payload.event === 'onReady') initializePlayerMessaging();
       if (payload.event === 'onAutoplayBlocked' && !getPlaybackIntentForVideo(video.id).paused) setYouTubeAutoplayBlocked(true);
       if (info) {
         if (Number(info.volume) === localVolumeRef.current) volumeAcknowledged = true;
-        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info };
+        youtubePlaybackInfoRef.current = { ...youtubePlaybackInfoRef.current, ...info,
+          playerState: youtubePlaybackInfoRef.current.playerState };
         if (volumeAcknowledged && hasStarted && Number.isFinite(Number(info.volume)) && Number(info.volume) >= 0 &&
             Number(info.volume) <= 100 && Math.abs(Number(info.volume) - localVolumeRef.current) > 1) {
           setLocalVolume(Number(info.volume));

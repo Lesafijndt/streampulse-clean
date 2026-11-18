@@ -97,11 +97,22 @@ try{
    assert(transitionWrites===0,'Partial timing must respect native pause');
    emit(first,'onStateChange',1);time(2);emit(first,'onCurrentTime',{currentTime:3});
  }else if(scenario==='invalid-state'){
-   for(const value of [null,undefined,'',false,true,[],{},'0',4,Infinity])emit(first,'onStateChange',value);
+   for(const value of [null,undefined,'',false,true,[],{},'0',4,Infinity]){
+     emit(first,'onStateChange',value);
+     if(provider==='youtube')emit(first,'infoDelivery',{playerState:value});
+   }
    await sleep(50);assert(transitionWrites===0,'Only a valid numeric ENDED state may complete playback');
    time(2);time(3);
+ }else if(scenario==='invalid-progress'){
+   time(2);
+   emit(first,'infoDelivery',{playerState:4});
+   emit(first,'infoDelivery',{currentTime:3});
+ }else if(scenario==='near-end'){
+   time(2.95);time(2.999);await sleep(1200);
+   assert(transitionWrites===0,'A sub-duration sample alone cannot prove completion');
+   emit(first,'onStateChange',0);
  }else if(scenario==='buffering'){
-   emit(first,'onStateChange',3);time(3);emit(first,'onCurrentTime',{duration:3});await sleep(50);
+   emit(first,'onStateChange',3);time(3,3);emit(first,provider==='tiktok'?'onCurrentTime':'infoDelivery',{duration:3});await sleep(50);
    assert(transitionWrites===0,'Buffering at the boundary must not complete playback');
    emit(first,'onStateChange',1);time(2);time(3);
  }else if(scenario==='partial'){
